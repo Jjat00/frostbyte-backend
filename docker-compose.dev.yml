@@ -1,0 +1,35 @@
+services:
+  db:
+    image: ankane/pgvector
+    container_name: pg-local-frostbyte-vector
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: frostbyte
+      POSTGRES_PASSWORD: frostbyte
+      POSTGRES_DB: frostbyte
+    ports:
+      - "5433:5432"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: frostbyte-api
+    restart: unless-stopped
+    depends_on:
+      - db
+    environment:
+      - DATABASE_URL=postgresql://frostbyte:frostbyte@db:5433/frostbyte
+      - DEBUG=True
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+    command: >
+      sh -c "python manage.py migrate &&
+             python manage.py runserver 0.0.0.0:8000"
+
+volumes:
+  db-data:
