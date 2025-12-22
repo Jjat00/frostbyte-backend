@@ -11,6 +11,7 @@ class ProductVariantSerializer(serializers.ModelSerializer):
             "id",
             "name",
             "sku",
+            "price",
             "is_default",
             "is_active",
         ]
@@ -20,7 +21,8 @@ class ProductSerializer(serializers.ModelSerializer):
     """Serializer para productos con sus variantes"""
 
     variants = ProductVariantSerializer(many=True, read_only=True)
-    category_name = serializers.CharField(source="category.name", read_only=True)
+    category_name = serializers.CharField(
+        source="category.name", read_only=True)
 
     class Meta:
         model = Product
@@ -41,9 +43,13 @@ class ProductSerializer(serializers.ModelSerializer):
 
 
 class ProductListSerializer(serializers.ModelSerializer):
-    """Serializer simplificado para listado de productos"""
+    """Serializer para listado de productos con variantes"""
 
-    category_name = serializers.CharField(source="category.name", read_only=True)
+    category_name = serializers.CharField(
+        source="category.name", read_only=True)
+    category_slug = serializers.CharField(
+        source="category.slug", read_only=True)
+    variants = ProductVariantSerializer(many=True, read_only=True)
     variants_count = serializers.SerializerMethodField()
 
     class Meta:
@@ -58,6 +64,8 @@ class ProductListSerializer(serializers.ModelSerializer):
             "is_coming_soon",
             "category",
             "category_name",
+            "category_slug",
+            "variants",
             "variants_count",
         ]
 
@@ -102,4 +110,3 @@ class CategoryDetailSerializer(serializers.ModelSerializer):
             "is_active",
             "products",
         ]
-
