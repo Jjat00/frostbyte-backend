@@ -1,0 +1,322 @@
+---
+alwaysApply: true
+---
+
+# Frostbyte Backend - Instrucciones de Desarrollo
+
+## 📋 Descripción del Proyecto
+
+**Frostbyte** es un sistema de gestión para un negocio de bebidas heladas con estética cyberpunk. El backend está desarrollado con Django y Django REST Framework para proporcionar una API RESTful que gestiona productos, materia prima, costos, precios y pedidos.
+
+### Tipos de Productos que Maneja Frostbyte
+
+| Categoría        | Ejemplos                                          | Características                                                               |
+| ---------------- | ------------------------------------------------- | ----------------------------------------------------------------------------- |
+| Granizados       | Mango Biche, Maracuyá, Lulo, Fresa                | Tamaños: Pequeño ($8.000) / Grande ($10.000). Opción de "envenenar" con licor |
+| Frappés          | Café, Oreo, Fresa, Brownie                        | Algunos con base opcional (Chocolisto/Milo)                                   |
+| Sodas Micheladas | -                                                 | Bebidas con soda y preparado de michelada                                     |
+| Micheladas       | Poker, Budweiser, Corona                          | Con cerveza y mezcla de salsas                                                |
+| Cervezas         | Diversas marcas                                   | Venta directa                                                                 |
+| Mocktails        | -                                                 | Cócteles sin alcohol                                                          |
+| Shots            | Ginebra, Vodka, Whisky, Tequila, Ron, Aguardiente | Para agregar a otras bebidas                                                  |
+| Vinos            | -                                                 | Venta por copa o botella                                                      |
+| Cuates           | -                                                 | Combo de bebidas                                                              |
+| Desguayabator    | -                                                 | Bebida especial anti-resaca                                                   |
+
+---
+
+## 🛠️ Stack Tecnológico
+
+- **Framework**: Django 6.0
+- **API**: Django REST Framework 3.16+
+- **Base de datos**: SQLite (desarrollo) / PostgreSQL (producción)
+- **Python**: 3.12+
+- **Gestor de dependencias**: uv
+- **CORS**: django-cors-headers
+
+---
+
+## 📁 Estructura del Proyecto
+
+```
+frostbyte-backend/
+├── config/                 # Configuración principal de Django
+│   ├── settings.py
+│   ├── urls.py
+│   ├── wsgi.py
+│   └── asgi.py
+├── apps/                   # Aplicaciones Django
+│   ├── products/           # Gestión de productos y categorías
+│   ├── inventory/          # Materia prima e inventario
+│   ├── pricing/            # Precios, costos y ganancias
+│   └── orders/             # Pedidos de clientes
+├── manage.py
+├── pyproject.toml
+└── uv.lock
+```
+
+---
+
+## 📊 Modelos de Datos
+
+### App: `products`
+
+```python
+# Categoría de productos
+class Category(models.Model):
+    name = models.CharField(max_length=100)  # ej: "Granizados", "Frappés"
+    slug = models.SlugField(unique=True)
+    description = models.TextField(blank=True)
+    display_order = models.PositiveIntegerField(default=0)
+    is_active = models.BooleanField(default=True)
+
+# Producto
+class Product(models.Model):
+    category = models.ForeignKey(Category, on_delete=models.CASCADE)
+    name = models.CharField(max_length=200)  # ej: "Mango Biche"
+    slug = models.SlugField(unique=True)
+    description = models.TextField()
+    image_url = models.URLField(blank=True)
+    is_active = models.BooleanField(default=True)
+    is_coming_soon = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+# Variantes de producto (tamaños, bases, etc.)
+class ProductVariant(models.Model):
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='variants')
+    name = models.CharField(max_length=100)  # ej: "Pequeño", "Grande", "Base Milo"
+    sku = models.CharField(max_length=50, unique=True)
+    is_default = models.BooleanField(default=False)
+```
+
+### App: `inventory`
+
+```python
+# Unidades de medida
+class UnitOfMeasure(models.Model):
+    name = models.CharField(max_length=50)  # ej: "gramos", "ml", "unidad"
+    abbreviation = models.CharField(max_length=10)  # ej: "g", "ml", "u"
+
+# Materia prima
+class RawMaterial(models.Model):
+    name = models.CharField(max_length=200)  # ej: "Pulpa de Mango"
+    unit = models.ForeignKey(UnitOfMeasure, on_delete=models.PROTECT)
+    current_stock = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    minimum_stock = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    cost_per_unit = models.DecimalField(max_digits=10, decimal_places=2)  # Costo por unidad
+    supplier = models.CharField(max_length=200, blank=True)
+    is_active = models.BooleanField(default=True)
+
+# Receta: materia prima necesaria para cada variante de producto
+class Recipe(models.Model):
+    product_variant = models.ForeignKey(ProductVariant, on_delete=models.CASCADE, related_name='recipe')
+    raw_material = models.ForeignKey(RawMaterial, on_delete=models.CASCADE)
+    quantity = models.DecimalField(max_digits=10, decimal_places=2)  # Cantidad necesaria
+```
+
+### App: `pricing`
+
+```python
+# Precios de venta y costos
+class ProductPrice(models.Model):
+    product_variant = models.OneToOneField(ProductVariant, on_delete=models.CASCADE, related_name='price')
+    sale_price = models.DecimalField(max_digits=10, decimal_places=2)  # Precio de venta
+    # El costo real se calcula automáticamente desde la receta
+
+    @property
+    def real_cost(self):
+        """Calcula el costo real basado en la receta"""
+        total = Decimal('0')
+        for item in self.product_variant.recipe.all():
+            total += item.quantity * item.raw_material.cost_per_unit
+        return total
+
+    @property
+    def profit(self):
+        """Ganancia = Precio de venta - Costo real"""
+        return self.sale_price - self.real_cost
+
+    @property
+    def profit_margin(self):
+        """Margen de ganancia en porcentaje"""
+        if self.sale_price > 0:
+            return (self.profit / self.sale_price) * 100
+        return Decimal('0')
+```
+
+### App: `orders`
+
+```python
+# Pedido
+class Order(models.Model):
+    class Status(models.TextChoices):
+        PENDING = 'pending', 'Pendiente'
+        PREPARING = 'preparing', 'Preparando'
+        READY = 'ready', 'Listo'
+        DELIVERED = 'delivered', 'Entregado'
+        CANCELLED = 'cancelled', 'Cancelado'
+
+    order_number = models.CharField(max_length=20, unique=True)
+    customer_name = models.CharField(max_length=200, blank=True)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+    notes = models.TextField(blank=True)
+    total = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+# Items del pedido
+class OrderItem(models.Model):
+    order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name='items')
+    product_variant = models.ForeignKey(ProductVariant, on_delete=models.PROTECT)
+    quantity = models.PositiveIntegerField(default=1)
+    unit_price = models.DecimalField(max_digits=10, decimal_places=2)
+    subtotal = models.DecimalField(max_digits=10, decimal_places=2)
+
+    # Addons (ej: "envenenar" con shot de licor)
+    addons = models.ManyToManyField(ProductVariant, related_name='order_addons', blank=True)
+    addons_total = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+```
+
+---
+
+## 🔌 API Endpoints
+
+### Products
+
+| Método | Endpoint                            | Descripción                       |
+| ------ | ----------------------------------- | --------------------------------- |
+| GET    | `/api/v1/categories/`               | Listar todas las categorías       |
+| GET    | `/api/v1/categories/{slug}/`        | Detalle de categoría              |
+| GET    | `/api/v1/products/`                 | Listar todos los productos        |
+| GET    | `/api/v1/products/?category={slug}` | Filtrar productos por categoría   |
+| GET    | `/api/v1/products/{slug}/`          | Detalle de producto con variantes |
+
+### Inventory
+
+| Método | Endpoint                          | Descripción                            |
+| ------ | --------------------------------- | -------------------------------------- |
+| GET    | `/api/v1/raw-materials/`          | Listar materia prima                   |
+| POST   | `/api/v1/raw-materials/`          | Crear materia prima                    |
+| GET    | `/api/v1/products/{slug}/recipe/` | Ver receta/ingredientes de un producto |
+| GET    | `/api/v1/inventory/low-stock/`    | Productos con stock bajo               |
+
+### Pricing
+
+| Método | Endpoint                           | Descripción                     |
+| ------ | ---------------------------------- | ------------------------------- |
+| GET    | `/api/v1/products/{slug}/pricing/` | Ver precios, costos y ganancias |
+| PUT    | `/api/v1/pricing/{variant_id}/`    | Actualizar precio de venta      |
+| GET    | `/api/v1/reports/profitability/`   | Reporte de rentabilidad         |
+
+### Orders
+
+| Método | Endpoint                      | Descripción                  |
+| ------ | ----------------------------- | ---------------------------- |
+| GET    | `/api/v1/orders/`             | Listar pedidos               |
+| POST   | `/api/v1/orders/`             | Crear nuevo pedido           |
+| GET    | `/api/v1/orders/{id}/`        | Detalle de pedido            |
+| PATCH  | `/api/v1/orders/{id}/status/` | Actualizar estado del pedido |
+| GET    | `/api/v1/orders/today/`       | Pedidos del día              |
+
+---
+
+## 🎯 Convenciones de Código
+
+### Estructura de Serializers
+
+```python
+# Usar serializers anidados para relaciones
+class ProductSerializer(serializers.ModelSerializer):
+    category = CategorySerializer(read_only=True)
+    variants = ProductVariantSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Product
+        fields = ['id', 'name', 'slug', 'description', 'category', 'variants', ...]
+```
+
+### ViewSets
+
+```python
+# Preferir ViewSets con acciones personalizadas
+class ProductViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = Product.objects.filter(is_active=True)
+    serializer_class = ProductSerializer
+    lookup_field = 'slug'
+
+    @action(detail=True, methods=['get'])
+    def recipe(self, request, slug=None):
+        """GET /api/v1/products/{slug}/recipe/"""
+        product = self.get_object()
+        # ...
+```
+
+### Nomenclatura
+
+- **Modelos**: PascalCase singular (`Product`, `RawMaterial`)
+- **Campos**: snake_case (`sale_price`, `created_at`)
+- **URLs**: kebab-case (`/raw-materials/`, `/low-stock/`)
+- **Serializers**: `{Model}Serializer`
+- **ViewSets**: `{Model}ViewSet`
+
+---
+
+## 💰 Moneda y Precios
+
+- Todos los precios están en **Pesos Colombianos (COP)**
+- Usar `DecimalField` con `max_digits=10, decimal_places=2`
+- Formatear en respuestas API: `"$10.000"` o mantener como número
+- Los precios no incluyen centavos (usar `decimal_places=0` si se prefiere)
+
+---
+
+## 🚀 Comandos Útiles
+
+```bash
+# Activar entorno virtual con uv
+source .venv/bin/activate
+
+# Ejecutar servidor de desarrollo
+python manage.py runserver
+
+# Crear migraciones
+python manage.py makemigrations
+
+# Aplicar migraciones
+python manage.py migrate
+
+# Crear superusuario
+python manage.py createsuperuser
+
+# Shell de Django
+python manage.py shell
+```
+
+---
+
+## ⚠️ Consideraciones Importantes
+
+1. **Cálculo de costos**: El costo real de cada producto se calcula dinámicamente desde la receta. Si cambia el precio de la materia prima, el costo se actualiza automáticamente.
+
+2. **Variantes de producto**: Un producto puede tener múltiples variantes (tamaños, bases). Cada variante tiene su propia receta y precio.
+
+3. **Addons/Envenenar**: Los shots de licor son productos que se pueden agregar a otras bebidas. Manejar como relación ManyToMany en OrderItem.
+
+4. **Stock**: Opcionalmente, al crear un pedido se puede descontar automáticamente la materia prima del inventario.
+
+5. **Validaciones**: Asegurar que no se puedan crear pedidos de productos inactivos o sin stock.
+
+---
+
+## 📝 Próximos Pasos de Desarrollo
+
+1. [ ] Crear app `products` con modelos Category, Product, ProductVariant
+2. [ ] Crear app `inventory` con modelos UnitOfMeasure, RawMaterial, Recipe
+3. [ ] Crear app `pricing` con modelo ProductPrice
+4. [ ] Crear app `orders` con modelos Order, OrderItem
+5. [ ] Implementar serializers y ViewSets
+6. [ ] Configurar URLs de API
+7. [ ] Agregar filtros y paginación
+8. [ ] Crear fixtures con datos de ejemplo
+9. [ ] Documentar API con drf-spectacular o similar
