@@ -1,0 +1,84 @@
+from django.contrib import admin
+from django.utils.html import format_html
+from django.db.models import Count
+from .models import Order, OrderItem
+
+
+class OrderItemInline(admin.TabularInline):
+    model = OrderItem
+    extra = 0
+    readonly_fields = ["subtotal"]
+    autocomplete_fields = ["product_variant"]
+
+
+@admin.register(Order)
+class OrderAdmin(admin.ModelAdmin):
+    list_display = [
+        "order_number",
+        "customer_name",
+        "status",
+        "total",
+        "is_paid",
+        "payment_method",
+        "get_items_count",
+        "created_at",
+    ]
+    list_filter = ["status", "is_paid", "payment_method", "created_at"]
+    search_fields = ["order_number", "customer_name", "customer_phone"]
+    readonly_fields = ["order_number", "subtotal", "total", "created_at", "updated_at", "completed_at"]
+    date_hierarchy = "created_at"
+    ordering = ["-created_at"]
+    inlines = [OrderItemInline]
+
+    fieldsets = (
+        ("Pedido", {"fields": ("order_number", "status")}),
+        ("Cliente", {"fields": ("customer_name", "customer_phone", "customer_notes")}),
+        ("Pago", {"fields": ("payment_method", "is_paid")}),
+        ("Totales", {"fields": ("subtotal", "discount", "total")}),
+        ("Fechas", {"fields": ("created_at", "updated_at", "completed_at")}),
+    )
+
+    actions = ["mark_as_preparing", "mark_as_ready", "mark_as_delivered", "mark_as_paid"]
+
+    def get_queryset(self, request):
+        queryset = super().get_queryset(request)
+        queryset = queryset.annotate(items_total=Count("items"))
+        return queryset
+
+    @admin.display(description="Items")
+    def get_items_count(self, obj):
+        return getattr(obj, "items_total", 0)
+
+    @admin.action(description="Marcar como Preparando")
+    def mark_as_preparing(self, request, queryset):
+        queryset.update(status=Order.Status.PREPARING)
+
+    @admin.action(description="Marcar como Listo")
+    def mark_as_ready(self, request, queryset):
+        queryset.update(status=Order.Status.READY)
+
+    @admin.action(description="Marcar como Entregado")
+    def mark_as_delivered(self, request, queryset):
+        from django.utils import timezone
+        queryset.update(status=Order.Status.DELIVERED, completed_at=timezone.now())
+
+    @admin.action(description="Marcar como pagado")
+    def mark_as_paid(self, request, queryset):
+        queryset.update(is_paid=True)
+
+
+@admin.register(OrderItem)
+class OrderItemAdmin(admin.ModelAdmin):
+    list_display = [
+        "order",
+        "product_variant",
+        "quantity",
+        "unit_price",
+        "subtotal",
+    ]
+    list_filter = ["order__status", "product_variant__product__category"]
+    search_fields = [
+        "order__order_number",
+        "product_variant__product__name",
+    ]
+    autocomplete_fields = ["order", "product_variant"]

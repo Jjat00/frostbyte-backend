@@ -1,0 +1,177 @@
+from rest_framework import serializers
+from decimal import Decimal
+
+from apps.products.models import ProductVariant
+from .models import Order, OrderItem
+
+
+class OrderItemSerializer(serializers.ModelSerializer):
+    """Serializer para items de pedido"""
+
+    product_name = serializers.CharField(
+        source="product_variant.product.name", read_only=True
+    )
+    variant_name = serializers.CharField(
+        source="product_variant.name", read_only=True
+    )
+    product_variant_id = serializers.PrimaryKeyRelatedField(
+        queryset=ProductVariant.objects.filter(is_active=True),
+        source="product_variant",
+        write_only=True,
+    )
+
+    class Meta:
+        model = OrderItem
+        fields = [
+            "id",
+            "product_variant",
+            "product_variant_id",
+            "product_name",
+            "variant_name",
+            "quantity",
+            "unit_price",
+            "subtotal",
+            "notes",
+        ]
+        read_only_fields = ["subtotal", "product_variant"]
+
+
+class OrderItemCreateSerializer(serializers.Serializer):
+    """Serializer para crear items al crear un pedido"""
+
+    product_variant_id = serializers.PrimaryKeyRelatedField(
+        queryset=ProductVariant.objects.filter(is_active=True),
+    )
+    quantity = serializers.IntegerField(min_value=1, default=1)
+    notes = serializers.CharField(max_length=200, required=False, allow_blank=True)
+
+
+class OrderListSerializer(serializers.ModelSerializer):
+    """Serializer para listar pedidos"""
+
+    status_display = serializers.CharField(source="get_status_display", read_only=True)
+    payment_method_display = serializers.CharField(
+        source="get_payment_method_display", read_only=True
+    )
+    items_count = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = Order
+        fields = [
+            "id",
+            "order_number",
+            "customer_name",
+            "customer_phone",
+            "status",
+            "status_display",
+            "is_paid",
+            "payment_method",
+            "payment_method_display",
+            "total",
+            "items_count",
+            "created_at",
+        ]
+
+
+class OrderDetailSerializer(serializers.ModelSerializer):
+    """Serializer para detalle de pedido"""
+
+    status_display = serializers.CharField(source="get_status_display", read_only=True)
+    payment_method_display = serializers.CharField(
+        source="get_payment_method_display", read_only=True
+    )
+    items = OrderItemSerializer(many=True, read_only=True)
+    items_count = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = Order
+        fields = [
+            "id",
+            "order_number",
+            "customer_name",
+            "customer_phone",
+            "customer_notes",
+            "status",
+            "status_display",
+            "payment_method",
+            "payment_method_display",
+            "is_paid",
+            "subtotal",
+            "discount",
+            "total",
+            "items",
+            "items_count",
+            "created_at",
+            "updated_at",
+            "completed_at",
+        ]
+
+
+class OrderCreateSerializer(serializers.ModelSerializer):
+    """Serializer para crear pedidos"""
+
+    items = OrderItemCreateSerializer(many=True, write_only=True)
+
+    class Meta:
+        model = Order
+        fields = [
+            "customer_name",
+            "customer_phone",
+            "customer_notes",
+            "payment_method",
+            "discount",
+            "items",
+        ]
+
+    def validate_items(self, value):
+        if not value:
+            raise serializers.ValidationError("El pedido debe tener al menos un item.")
+        return value
+
+    def create(self, validated_data):
+        items_data = validated_data.pop("items")
+
+        # Crear el pedido
+        order = Order.objects.create(**validated_data)
+
+        # Crear los items
+        for item_data in items_data:
+            product_variant = item_data["product_variant_id"]
+            quantity = item_data.get("quantity", 1)
+            notes = item_data.get("notes", "")
+
+            OrderItem.objects.create(
+                order=order,
+                product_variant=product_variant,
+                quantity=quantity,
+                unit_price=product_variant.price or Decimal("0.00"),
+                notes=notes,
+            )
+
+        # Recalcular totales
+        order.calculate_totals()
+        order.save()
+
+        return order
+
+
+class OrderUpdateSerializer(serializers.ModelSerializer):
+    """Serializer para actualizar pedidos"""
+
+    class Meta:
+        model = Order
+        fields = [
+            "customer_name",
+            "customer_phone",
+            "customer_notes",
+            "payment_method",
+            "is_paid",
+            "discount",
+        ]
+
+
+class OrderStatusUpdateSerializer(serializers.Serializer):
+    """Serializer para actualizar estado de pedido"""
+
+    status = serializers.ChoiceField(choices=Order.Status.choices)
+
