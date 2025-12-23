@@ -1,4 +1,5 @@
-[service.app]
-buildCommand = "uv sync --locked --no-dev --no-install-project"
-releaseCommand = "uv run python manage.py migrate && uv run python manage.py collectstatic --noinput"
-startCommand = "uv run python manage.py migrate && uv run python manage.py collectstatic --noinput && uv run gunicorn app.wsgi:application --bind 0.0.0.0:$PORT"
+[build]
+builder = "nixpacks"
+
+[deploy]
+startCommand = "python manage.py migrate && python manage.py collectstatic --noinput && gunicorn config.wsgi:application --bind 0.0.0.0:$PORT"
