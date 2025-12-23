@@ -1,18 +1,31 @@
-from rest_framework import viewsets, filters, status
+from rest_framework import viewsets, filters, status, permissions
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.db.models import Sum, F
+from django.utils import timezone
 from decimal import Decimal
 
 from apps.products.models import ProductVariant
-from .models import UnitOfMeasure, RawMaterial, Recipe
+from apps.accounts.views import IsAdminUser
+from .models import UnitOfMeasure, RawMaterial, Recipe, PurchaseOrder, PurchaseOrderItem
 from .serializers import (
     UnitOfMeasureSerializer,
     RawMaterialSerializer,
     RawMaterialListSerializer,
     RecipeSerializer,
     RecipeDetailSerializer,
+    PurchaseOrderSerializer,
+    PurchaseOrderCreateSerializer,
+    PurchaseOrderItemSerializer,
+    PurchaseOrderItemUpdateSerializer,
 )
+
+
+class IsAuthenticated(permissions.BasePermission):
+    """Permiso que requiere autenticación"""
+
+    def has_permission(self, request, view):
+        return request.user.is_authenticated
 
 
 class UnitOfMeasureViewSet(viewsets.ModelViewSet):
@@ -20,6 +33,7 @@ class UnitOfMeasureViewSet(viewsets.ModelViewSet):
 
     queryset = UnitOfMeasure.objects.all()
     serializer_class = UnitOfMeasureSerializer
+    permission_classes = [IsAuthenticated]
     filter_backends = [filters.SearchFilter]
     search_fields = ["name", "abbreviation"]
 
@@ -36,9 +50,10 @@ class RawMaterialViewSet(viewsets.ModelViewSet):
     """
 
     queryset = RawMaterial.objects.filter(is_active=True).select_related("unit")
+    permission_classes = [IsAuthenticated]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["name", "supplier"]
-    ordering_fields = ["name", "current_stock", "cost_per_unit"]
+    ordering_fields = ["name", "current_stock", "cost_per_unit", "minimum_stock"]
     ordering = ["name"]
 
     def get_serializer_class(self):
@@ -52,15 +67,30 @@ class RawMaterialViewSet(viewsets.ModelViewSet):
         low_stock_items = RawMaterial.objects.filter(
             is_active=True,
             current_stock__lte=F("minimum_stock"),
-        ).select_related("unit")
+        ).select_related("unit").order_by("current_stock")
 
         serializer = RawMaterialListSerializer(low_stock_items, many=True)
+        
+        # Calcular total estimado para reabastecer
+        total_estimated = sum(
+            (item.minimum_stock - item.current_stock + item.minimum_stock) * item.cost_per_unit
+            for item in low_stock_items
+        )
+
         return Response(
             {
                 "count": low_stock_items.count(),
+                "estimated_restock_cost": str(total_estimated),
                 "results": serializer.data,
             }
         )
+
+    @action(detail=False, methods=["get"])
+    def all_materials(self, request):
+        """Obtener todos los materiales incluyendo inactivos (para admin)"""
+        materials = RawMaterial.objects.all().select_related("unit").order_by("name")
+        serializer = RawMaterialListSerializer(materials, many=True)
+        return Response(serializer.data)
 
     @action(detail=True, methods=["post"])
     def adjust_stock(self, request, pk=None):
@@ -84,6 +114,54 @@ class RawMaterialViewSet(viewsets.ModelViewSet):
         serializer = RawMaterialSerializer(material)
         return Response(serializer.data)
 
+    @action(detail=True, methods=["patch"])
+    def update_price(self, request, pk=None):
+        """Actualizar precio de materia prima"""
+        material = self.get_object()
+        new_price = request.data.get("cost_per_unit")
+
+        if new_price is None:
+            return Response(
+                {"error": "Se requiere cost_per_unit"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            material.cost_per_unit = Decimal(str(new_price))
+            material.save()
+        except (ValueError, TypeError):
+            return Response(
+                {"error": "Precio inválido"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        serializer = RawMaterialSerializer(material)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=["get"])
+    def stats(self, request):
+        """Estadísticas del inventario"""
+        total_materials = RawMaterial.objects.filter(is_active=True).count()
+        low_stock = RawMaterial.objects.filter(
+            is_active=True,
+            current_stock__lte=F("minimum_stock"),
+        ).count()
+        zero_stock = RawMaterial.objects.filter(
+            is_active=True,
+            current_stock__lte=0,
+        ).count()
+
+        # Valor total del inventario
+        materials = RawMaterial.objects.filter(is_active=True)
+        total_value = sum(m.current_stock * m.cost_per_unit for m in materials)
+
+        return Response({
+            "total_materials": total_materials,
+            "low_stock_count": low_stock,
+            "zero_stock_count": zero_stock,
+            "total_inventory_value": str(total_value),
+        })
+
 
 class RecipeViewSet(viewsets.ModelViewSet):
     """ViewSet para recetas/ingredientes"""
@@ -95,6 +173,7 @@ class RecipeViewSet(viewsets.ModelViewSet):
         "raw_material__unit",
     )
     serializer_class = RecipeSerializer
+    permission_classes = [IsAuthenticated]
     filter_backends = [filters.SearchFilter]
     search_fields = [
         "product_variant__product__name",
@@ -153,3 +232,183 @@ class RecipeViewSet(viewsets.ModelViewSet):
                 ),
             }
         )
+
+
+class PurchaseOrderViewSet(viewsets.ModelViewSet):
+    """ViewSet para órdenes de compra"""
+
+    queryset = PurchaseOrder.objects.prefetch_related("items", "items__raw_material").select_related("created_by")
+    permission_classes = [IsAuthenticated]
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ["order_number", "notes"]
+    ordering = ["-created_at"]
+
+    def get_serializer_class(self):
+        if self.action == "create":
+            return PurchaseOrderCreateSerializer
+        return PurchaseOrderSerializer
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        
+        status_filter = self.request.query_params.get("status")
+        if status_filter:
+            queryset = queryset.filter(status=status_filter)
+
+        return queryset
+
+    @action(detail=False, methods=["post"])
+    def generate_from_low_stock(self, request):
+        """Generar orden de compra automáticamente desde items con stock bajo"""
+        low_stock_items = RawMaterial.objects.filter(
+            is_active=True,
+            current_stock__lte=F("minimum_stock"),
+        )
+
+        if not low_stock_items.exists():
+            return Response(
+                {"message": "No hay items con stock bajo"},
+                status=status.HTTP_200_OK,
+            )
+
+        # Crear la orden
+        order = PurchaseOrder.objects.create(
+            created_by=request.user,
+            notes="Orden generada automáticamente desde stock bajo",
+        )
+
+        # Agregar items
+        for material in low_stock_items:
+            # Calcular cantidad a comprar (llevar al doble del mínimo)
+            quantity_needed = (material.minimum_stock * 2) - material.current_stock
+            if quantity_needed <= 0:
+                quantity_needed = material.minimum_stock
+
+            PurchaseOrderItem.objects.create(
+                purchase_order=order,
+                raw_material=material,
+                quantity_needed=quantity_needed,
+                estimated_unit_price=material.cost_per_unit,
+                supplier=material.supplier,
+            )
+
+        order.calculate_totals()
+
+        serializer = PurchaseOrderSerializer(order)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["post"])
+    def mark_purchased(self, request, pk=None):
+        """Marcar la orden como comprada y actualizar stock"""
+        order = self.get_object()
+
+        if order.status == PurchaseOrder.Status.PURCHASED:
+            return Response(
+                {"error": "Esta orden ya fue marcada como comprada"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        order.status = PurchaseOrder.Status.PURCHASED
+        order.purchased_at = timezone.now()
+        order.save()
+
+        serializer = PurchaseOrderSerializer(order)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=["post"])
+    def cancel(self, request, pk=None):
+        """Cancelar orden de compra"""
+        order = self.get_object()
+
+        if order.status == PurchaseOrder.Status.PURCHASED:
+            return Response(
+                {"error": "No se puede cancelar una orden ya comprada"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        order.status = PurchaseOrder.Status.CANCELLED
+        order.save()
+
+        return Response({"message": "Orden cancelada"})
+
+    @action(detail=True, methods=["post"], url_path="items/(?P<item_id>[^/.]+)/purchase")
+    def purchase_item(self, request, pk=None, item_id=None):
+        """Marcar un item individual como comprado y actualizar stock"""
+        order = self.get_object()
+
+        try:
+            item = order.items.get(id=item_id)
+        except PurchaseOrderItem.DoesNotExist:
+            return Response(
+                {"error": "Item no encontrado"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        serializer = PurchaseOrderItemUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        item.mark_as_purchased(
+            quantity=serializer.validated_data["quantity_purchased"],
+            price=serializer.validated_data["actual_unit_price"],
+            supplier=serializer.validated_data.get("supplier", ""),
+        )
+
+        return Response(PurchaseOrderItemSerializer(item).data)
+
+    @action(detail=True, methods=["post"])
+    def add_item(self, request, pk=None):
+        """Agregar un item a la orden"""
+        order = self.get_object()
+
+        if order.status != PurchaseOrder.Status.PENDING:
+            return Response(
+                {"error": "Solo se pueden agregar items a órdenes pendientes"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        raw_material_id = request.data.get("raw_material")
+        quantity_needed = request.data.get("quantity_needed")
+        estimated_price = request.data.get("estimated_unit_price")
+
+        try:
+            material = RawMaterial.objects.get(id=raw_material_id)
+        except RawMaterial.DoesNotExist:
+            return Response(
+                {"error": "Material no encontrado"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        item = PurchaseOrderItem.objects.create(
+            purchase_order=order,
+            raw_material=material,
+            quantity_needed=Decimal(str(quantity_needed)),
+            estimated_unit_price=Decimal(str(estimated_price or material.cost_per_unit)),
+            supplier=material.supplier,
+        )
+
+        order.calculate_totals()
+
+        return Response(PurchaseOrderItemSerializer(item).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["delete"], url_path="items/(?P<item_id>[^/.]+)")
+    def remove_item(self, request, pk=None, item_id=None):
+        """Eliminar un item de la orden"""
+        order = self.get_object()
+
+        if order.status != PurchaseOrder.Status.PENDING:
+            return Response(
+                {"error": "Solo se pueden eliminar items de órdenes pendientes"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            item = order.items.get(id=item_id)
+            item.delete()
+            order.calculate_totals()
+        except PurchaseOrderItem.DoesNotExist:
+            return Response(
+                {"error": "Item no encontrado"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        return Response({"message": "Item eliminado"})

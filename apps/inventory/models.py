@@ -1,4 +1,5 @@
 from django.db import models
+from django.conf import settings
 from apps.products.models import ProductVariant
 
 
@@ -119,3 +120,162 @@ class Recipe(models.Model):
     def cost(self):
         """Costo de este ingrediente en la receta"""
         return self.quantity * self.raw_material.cost_per_unit
+
+
+class PurchaseOrder(models.Model):
+    """Orden de compra de materia prima"""
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pendiente"
+        PURCHASED = "purchased", "Comprado"
+        CANCELLED = "cancelled", "Cancelado"
+
+    order_number = models.CharField(
+        max_length=50,
+        unique=True,
+        blank=True,
+        verbose_name="Número de orden",
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name="purchase_orders",
+        verbose_name="Creado por",
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.PENDING,
+        verbose_name="Estado",
+    )
+    notes = models.TextField(blank=True, verbose_name="Notas")
+    estimated_total = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=0,
+        verbose_name="Total estimado",
+    )
+    actual_total = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=0,
+        verbose_name="Total real",
+    )
+    purchased_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name="Fecha de compra",
+    )
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="Fecha de creación")
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Orden de compra"
+        verbose_name_plural = "Órdenes de compra"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"Orden #{self.order_number} - {self.get_status_display()}"
+
+    def save(self, *args, **kwargs):
+        if not self.order_number:
+            import uuid
+            from django.utils import timezone
+            date_str = timezone.now().strftime("%Y%m%d")
+            self.order_number = f"PO-{date_str}-{uuid.uuid4().hex[:6].upper()}"
+        super().save(*args, **kwargs)
+
+    def calculate_totals(self):
+        """Recalcula los totales de la orden"""
+        self.estimated_total = sum(item.estimated_subtotal for item in self.items.all())
+        self.actual_total = sum(item.actual_subtotal or 0 for item in self.items.all())
+        self.save(update_fields=["estimated_total", "actual_total"])
+
+
+class PurchaseOrderItem(models.Model):
+    """Item individual de una orden de compra"""
+
+    purchase_order = models.ForeignKey(
+        PurchaseOrder,
+        on_delete=models.CASCADE,
+        related_name="items",
+        verbose_name="Orden de compra",
+    )
+    raw_material = models.ForeignKey(
+        RawMaterial,
+        on_delete=models.PROTECT,
+        related_name="purchase_items",
+        verbose_name="Materia prima",
+    )
+    quantity_needed = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        verbose_name="Cantidad necesaria",
+    )
+    quantity_purchased = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        verbose_name="Cantidad comprada",
+    )
+    estimated_unit_price = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        verbose_name="Precio unitario estimado",
+    )
+    actual_unit_price = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        verbose_name="Precio unitario real",
+    )
+    supplier = models.CharField(
+        max_length=200,
+        blank=True,
+        verbose_name="Proveedor",
+    )
+    notes = models.TextField(blank=True, verbose_name="Notas")
+    is_purchased = models.BooleanField(default=False, verbose_name="Comprado")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Item de orden de compra"
+        verbose_name_plural = "Items de orden de compra"
+        ordering = ["raw_material__name"]
+
+    def __str__(self):
+        return f"{self.quantity_needed} {self.raw_material.unit.abbreviation} de {self.raw_material.name}"
+
+    @property
+    def estimated_subtotal(self):
+        """Subtotal estimado"""
+        return self.quantity_needed * self.estimated_unit_price
+
+    @property
+    def actual_subtotal(self):
+        """Subtotal real (después de la compra)"""
+        if self.quantity_purchased and self.actual_unit_price:
+            return self.quantity_purchased * self.actual_unit_price
+        return None
+
+    def mark_as_purchased(self, quantity, price, supplier=""):
+        """Marca el item como comprado y actualiza el stock"""
+        self.quantity_purchased = quantity
+        self.actual_unit_price = price
+        self.supplier = supplier
+        self.is_purchased = True
+        self.save()
+
+        # Actualizar stock y precio del material
+        self.raw_material.current_stock += quantity
+        self.raw_material.cost_per_unit = price
+        if supplier:
+            self.raw_material.supplier = supplier
+        self.raw_material.save()
+
+        # Recalcular totales de la orden
+        self.purchase_order.calculate_totals()
