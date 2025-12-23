@@ -121,6 +121,7 @@ class PurchaseOrderItemSerializer(serializers.ModelSerializer):
     """Serializer para items de orden de compra"""
 
     raw_material_name = serializers.CharField(source="raw_material.name", read_only=True)
+    raw_material_supplier = serializers.CharField(source="raw_material.supplier", read_only=True)
     unit_abbreviation = serializers.CharField(source="raw_material.unit.abbreviation", read_only=True)
     estimated_subtotal = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
     actual_subtotal = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
@@ -131,6 +132,7 @@ class PurchaseOrderItemSerializer(serializers.ModelSerializer):
             "id",
             "raw_material",
             "raw_material_name",
+            "raw_material_supplier",
             "unit_abbreviation",
             "quantity_needed",
             "quantity_purchased",
