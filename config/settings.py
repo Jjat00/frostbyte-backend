@@ -12,9 +12,13 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 
 from pathlib import Path
 from datetime import timedelta
+import dotenv
+import dj_database_url
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+dotenv.load_dotenv()
 
 
 # Quick-start development settings - unsuitable for production
@@ -28,6 +32,7 @@ DEBUG = True
 
 ALLOWED_HOSTS = []
 
+DATABASE_URL = dotenv.get_key('.env', 'DATABASE_URL')
 
 # Application definition
 
@@ -88,11 +93,10 @@ WSGI_APPLICATION = 'config.wsgi.application'
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
 
 DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
-    }
+    'default': dj_database_url.config(default=DATABASE_URL, conn_max_age=600)
 }
+
+DATABASES['default']['ENGINE'] = 'django.db.backends.postgresql'
 
 
 # Password validation
