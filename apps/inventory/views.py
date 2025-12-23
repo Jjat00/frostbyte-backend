@@ -34,6 +34,7 @@ class UnitOfMeasureViewSet(viewsets.ModelViewSet):
     queryset = UnitOfMeasure.objects.all()
     serializer_class = UnitOfMeasureSerializer
     permission_classes = [IsAuthenticated]
+    pagination_class = None  # Deshabilitamos paginación para obtener todas las unidades
     filter_backends = [filters.SearchFilter]
     search_fields = ["name", "abbreviation"]
 
@@ -51,6 +52,7 @@ class RawMaterialViewSet(viewsets.ModelViewSet):
 
     queryset = RawMaterial.objects.filter(is_active=True).select_related("unit")
     permission_classes = [IsAuthenticated]
+    pagination_class = None  # Deshabilitamos paginación para obtener todos los materiales
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["name", "supplier"]
     ordering_fields = ["name", "current_stock", "cost_per_unit", "minimum_stock"]
