@@ -425,6 +425,14 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
 
         try:
             item = order.items.get(id=item_id)
+
+            # Si el item ya fue comprado, revertir el stock
+            if item.is_purchased and item.quantity_purchased:
+                item.raw_material.current_stock -= item.quantity_purchased
+                if item.raw_material.current_stock < 0:
+                    item.raw_material.current_stock = Decimal("0")
+                item.raw_material.save()
+
             item.delete()
             order.calculate_totals()
         except PurchaseOrderItem.DoesNotExist:
