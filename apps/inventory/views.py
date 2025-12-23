@@ -75,6 +75,19 @@ class RawMaterialViewSet(viewsets.ModelViewSet):
 
         serializer = RawMaterialListSerializer(low_stock_items, many=True)
 
+        # Obtener materiales que tienen órdenes de compra pendientes
+        pending_order_material_ids = set(
+            PurchaseOrderItem.objects.filter(
+                purchase_order__status=PurchaseOrder.Status.PENDING,
+                raw_material__in=low_stock_items
+            ).values_list("raw_material_id", flat=True)
+        )
+
+        # Agregar info de órdenes pendientes a cada material
+        results = serializer.data
+        for item in results:
+            item["has_pending_order"] = item["id"] in pending_order_material_ids
+
         # Calcular total estimado para reabastecer (lo que falta para llegar al mínimo)
         total_estimated = sum(
             max(0, item.minimum_stock - item.current_stock) * item.cost_per_unit
@@ -85,7 +98,7 @@ class RawMaterialViewSet(viewsets.ModelViewSet):
             {
                 "count": low_stock_items.count(),
                 "estimated_restock_cost": str(total_estimated),
-                "results": serializer.data,
+                "results": results,
             }
         )
 
