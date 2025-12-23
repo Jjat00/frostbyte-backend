@@ -19,6 +19,9 @@ class OrderItemSerializer(serializers.ModelSerializer):
         source="product_variant",
         write_only=True,
     )
+    payment_method_display = serializers.CharField(
+        source="get_payment_method_display", read_only=True
+    )
 
     class Meta:
         model = OrderItem
@@ -32,8 +35,34 @@ class OrderItemSerializer(serializers.ModelSerializer):
             "unit_price",
             "subtotal",
             "notes",
+            "is_paid",
+            "payment_method",
+            "payment_method_display",
+            "paid_at",
+            "is_delivered",
+            "delivered_at",
         ]
-        read_only_fields = ["subtotal", "product_variant"]
+        read_only_fields = ["subtotal", "product_variant", "paid_at", "delivered_at"]
+
+
+class AddItemToOrderSerializer(serializers.Serializer):
+    """Serializer para añadir items a una orden existente"""
+    
+    product_variant_id = serializers.PrimaryKeyRelatedField(
+        queryset=ProductVariant.objects.filter(is_active=True),
+    )
+    quantity = serializers.IntegerField(min_value=1, default=1)
+    notes = serializers.CharField(max_length=200, required=False, allow_blank=True)
+
+
+class MarkItemPaidSerializer(serializers.Serializer):
+    """Serializer para marcar un item como pagado"""
+    
+    payment_method = serializers.ChoiceField(
+        choices=Order.PaymentMethod.choices,
+        required=False,
+        allow_blank=True
+    )
 
 
 class OrderItemCreateSerializer(serializers.Serializer):
@@ -82,6 +111,12 @@ class OrderDetailSerializer(serializers.ModelSerializer):
     )
     items = OrderItemSerializer(many=True, read_only=True)
     items_count = serializers.IntegerField(read_only=True)
+    paid_total = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
+    pending_total = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
+    paid_items_count = serializers.IntegerField(read_only=True)
+    unpaid_items_count = serializers.IntegerField(read_only=True)
+    delivered_items_count = serializers.IntegerField(read_only=True)
+    undelivered_items_count = serializers.IntegerField(read_only=True)
 
     class Meta:
         model = Order
@@ -99,6 +134,12 @@ class OrderDetailSerializer(serializers.ModelSerializer):
             "subtotal",
             "discount",
             "total",
+            "paid_total",
+            "pending_total",
+            "paid_items_count",
+            "unpaid_items_count",
+            "delivered_items_count",
+            "undelivered_items_count",
             "items",
             "items_count",
             "created_at",
