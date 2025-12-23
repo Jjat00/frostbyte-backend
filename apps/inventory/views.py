@@ -50,12 +50,14 @@ class RawMaterialViewSet(viewsets.ModelViewSet):
     low_stock: Listar materia prima con stock bajo
     """
 
-    queryset = RawMaterial.objects.filter(is_active=True).select_related("unit")
+    queryset = RawMaterial.objects.filter(
+        is_active=True).select_related("unit")
     permission_classes = [IsAuthenticated]
     pagination_class = None  # Deshabilitamos paginación para obtener todos los materiales
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["name", "supplier"]
-    ordering_fields = ["name", "current_stock", "cost_per_unit", "minimum_stock"]
+    ordering_fields = ["name", "current_stock",
+                       "cost_per_unit", "minimum_stock"]
     ordering = ["name"]
 
     def get_serializer_class(self):
@@ -72,10 +74,10 @@ class RawMaterialViewSet(viewsets.ModelViewSet):
         ).select_related("unit").order_by("current_stock")
 
         serializer = RawMaterialListSerializer(low_stock_items, many=True)
-        
-        # Calcular total estimado para reabastecer
+
+        # Calcular total estimado para reabastecer (lo que falta para llegar al mínimo)
         total_estimated = sum(
-            (item.minimum_stock - item.current_stock + item.minimum_stock) * item.cost_per_unit
+            max(0, item.minimum_stock - item.current_stock) * item.cost_per_unit
             for item in low_stock_items
         )
 
@@ -189,7 +191,8 @@ class RecipeViewSet(viewsets.ModelViewSet):
         # Filtrar por producto
         product_slug = self.request.query_params.get("product")
         if product_slug:
-            queryset = queryset.filter(product_variant__product__slug=product_slug)
+            queryset = queryset.filter(
+                product_variant__product__slug=product_slug)
 
         # Filtrar por variante
         variant_id = self.request.query_params.get("variant")
@@ -202,7 +205,8 @@ class RecipeViewSet(viewsets.ModelViewSet):
     def by_variant(self, request, variant_id=None):
         """Obtener receta completa de una variante de producto"""
         try:
-            variant = ProductVariant.objects.select_related("product").get(id=variant_id)
+            variant = ProductVariant.objects.select_related(
+                "product").get(id=variant_id)
         except ProductVariant.DoesNotExist:
             return Response(
                 {"error": "Variante no encontrada"},
@@ -239,7 +243,8 @@ class RecipeViewSet(viewsets.ModelViewSet):
 class PurchaseOrderViewSet(viewsets.ModelViewSet):
     """ViewSet para órdenes de compra"""
 
-    queryset = PurchaseOrder.objects.prefetch_related("items", "items__raw_material").select_related("created_by")
+    queryset = PurchaseOrder.objects.prefetch_related(
+        "items", "items__raw_material").select_related("created_by")
     permission_classes = [IsAuthenticated]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["order_number", "notes"]
@@ -252,7 +257,7 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         queryset = super().get_queryset()
-        
+
         status_filter = self.request.query_params.get("status")
         if status_filter:
             queryset = queryset.filter(status=status_filter)
@@ -282,7 +287,8 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
         # Agregar items
         for material in low_stock_items:
             # Calcular cantidad a comprar (llevar al doble del mínimo)
-            quantity_needed = (material.minimum_stock * 2) - material.current_stock
+            quantity_needed = (material.minimum_stock * 2) - \
+                material.current_stock
             if quantity_needed <= 0:
                 quantity_needed = material.minimum_stock
 
@@ -384,7 +390,8 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
             purchase_order=order,
             raw_material=material,
             quantity_needed=Decimal(str(quantity_needed)),
-            estimated_unit_price=Decimal(str(estimated_price or material.cost_per_unit)),
+            estimated_unit_price=Decimal(
+                str(estimated_price or material.cost_per_unit)),
             supplier=material.supplier,
         )
 
