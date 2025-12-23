@@ -145,9 +145,32 @@ class OrderViewSet(viewsets.ModelViewSet):
         orders = Order.objects.filter(created_at__gte=start_date)
 
         total_orders = orders.count()
-        total_revenue = orders.filter(
-            status=Order.Status.DELIVERED, is_paid=True
-        ).aggregate(total=Sum("total"))["total"] or 0
+        
+        # Pedidos pagados y entregados
+        paid_orders = orders.filter(status=Order.Status.DELIVERED, is_paid=True)
+        total_revenue = paid_orders.aggregate(total=Sum("total"))["total"] or 0
+
+        # Estadísticas por método de pago
+        by_payment_method = {}
+        for method_code, method_name in Order.PaymentMethod.choices:
+            method_total = paid_orders.filter(payment_method=method_code).aggregate(
+                total=Sum("total"), count=Count("id")
+            )
+            by_payment_method[method_code] = {
+                "name": method_name,
+                "total": str(method_total["total"] or 0),
+                "count": method_total["count"] or 0,
+            }
+
+        # Pedidos pagados sin método especificado
+        no_method_total = paid_orders.filter(payment_method="").aggregate(
+            total=Sum("total"), count=Count("id")
+        )
+        by_payment_method["other"] = {
+            "name": "Otro/Sin especificar",
+            "total": str(no_method_total["total"] or 0),
+            "count": no_method_total["count"] or 0,
+        }
 
         pending_count = orders.filter(status=Order.Status.PENDING).count()
         preparing_count = orders.filter(status=Order.Status.PREPARING).count()
@@ -155,11 +178,17 @@ class OrderViewSet(viewsets.ModelViewSet):
         delivered_count = orders.filter(status=Order.Status.DELIVERED).count()
         cancelled_count = orders.filter(status=Order.Status.CANCELLED).count()
 
+        # Total de pedidos sin pagar
+        unpaid_total = orders.filter(is_paid=False).exclude(
+            status=Order.Status.CANCELLED
+        ).aggregate(total=Sum("total"))["total"] or 0
+
         return Response(
             {
                 "period": date_filter,
                 "total_orders": total_orders,
                 "total_revenue": str(total_revenue),
+                "unpaid_total": str(unpaid_total),
                 "by_status": {
                     "pending": pending_count,
                     "preparing": preparing_count,
@@ -167,6 +196,7 @@ class OrderViewSet(viewsets.ModelViewSet):
                     "delivered": delivered_count,
                     "cancelled": cancelled_count,
                 },
+                "by_payment_method": by_payment_method,
             }
         )
 

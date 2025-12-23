@@ -115,13 +115,17 @@ class OrderCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Order
         fields = [
+            "id",
+            "order_number",
             "customer_name",
             "customer_phone",
             "customer_notes",
             "payment_method",
             "discount",
+            "total",
             "items",
         ]
+        read_only_fields = ["id", "order_number", "total"]
 
     def validate_items(self, value):
         if not value:
