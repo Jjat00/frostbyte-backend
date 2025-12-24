@@ -213,18 +213,54 @@ class OrderViewSet(viewsets.ModelViewSet):
         """Estadísticas de pedidos"""
         # Filtro de fecha - usar hora local (America/Bogota)
         date_filter = request.query_params.get("date", "today")
+        start_date_param = request.query_params.get("start_date")
+        end_date_param = request.query_params.get("end_date")
         local_now = timezone.localtime()
 
-        if date_filter == "today":
+        # Si hay parámetros de fecha personalizados, usarlos
+        if start_date_param and end_date_param:
+            try:
+                from datetime import datetime
+                start_date = timezone.make_aware(
+                    datetime.strptime(start_date_param, "%Y-%m-%d")
+                ).replace(hour=0, minute=0, second=0, microsecond=0)
+                end_date = timezone.make_aware(
+                    datetime.strptime(end_date_param, "%Y-%m-%d")
+                ).replace(hour=23, minute=59, second=59, microsecond=999999)
+                orders = Order.objects.filter(created_at__gte=start_date, created_at__lte=end_date)
+            except (ValueError, TypeError):
+                # Si hay error en el formato, usar today por defecto
+                start_date = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+                orders = Order.objects.filter(created_at__gte=start_date)
+        elif date_filter == "today":
             start_date = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+            orders = Order.objects.filter(created_at__gte=start_date)
+        elif date_filter == "yesterday":
+            yesterday = local_now - timedelta(days=1)
+            start_date = yesterday.replace(hour=0, minute=0, second=0, microsecond=0)
+            end_date = yesterday.replace(hour=23, minute=59, second=59, microsecond=999999)
+            orders = Order.objects.filter(created_at__gte=start_date, created_at__lte=end_date)
         elif date_filter == "week":
             start_date = local_now - timedelta(days=7)
+            orders = Order.objects.filter(created_at__gte=start_date)
         elif date_filter == "month":
-            start_date = local_now - timedelta(days=30)
+            # Este mes (desde el día 1)
+            start_date = local_now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            orders = Order.objects.filter(created_at__gte=start_date)
+        elif date_filter == "last_month":
+            # Mes anterior
+            first_day_this_month = local_now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            last_day_last_month = first_day_this_month - timedelta(days=1)
+            start_date = last_day_last_month.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            end_date = last_day_last_month.replace(hour=23, minute=59, second=59, microsecond=999999)
+            orders = Order.objects.filter(created_at__gte=start_date, created_at__lte=end_date)
+        elif date_filter == "year":
+            # Este año (desde el 1 de enero)
+            start_date = local_now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+            orders = Order.objects.filter(created_at__gte=start_date)
         else:
             start_date = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
-
-        orders = Order.objects.filter(created_at__gte=start_date)
+            orders = Order.objects.filter(created_at__gte=start_date)
         order_ids = orders.values_list('id', flat=True)
 
         total_orders = orders.count()
