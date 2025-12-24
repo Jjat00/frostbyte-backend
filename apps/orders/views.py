@@ -54,19 +54,26 @@ class OrderViewSet(viewsets.ModelViewSet):
         if status_filter:
             queryset = queryset.filter(status=status_filter)
 
-        # Filtrar por fecha (hoy, semana, mes) - usar hora local (America/Bogota)
+        # Filtrar por fecha (hoy, ayer, semana, mes) - usar hora local (America/Bogota)
         date_filter = self.request.query_params.get("date")
+        local_now = timezone.localtime()
+        
         if date_filter == "today":
             # Obtener inicio y fin del día en hora local
-            local_now = timezone.localtime()
             start_of_day = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
             end_of_day = local_now.replace(hour=23, minute=59, second=59, microsecond=999999)
             queryset = queryset.filter(created_at__gte=start_of_day, created_at__lte=end_of_day)
+        elif date_filter == "yesterday":
+            # Obtener inicio y fin de ayer en hora local
+            yesterday = local_now - timedelta(days=1)
+            start_of_yesterday = yesterday.replace(hour=0, minute=0, second=0, microsecond=0)
+            end_of_yesterday = yesterday.replace(hour=23, minute=59, second=59, microsecond=999999)
+            queryset = queryset.filter(created_at__gte=start_of_yesterday, created_at__lte=end_of_yesterday)
         elif date_filter == "week":
-            week_ago = timezone.localtime() - timedelta(days=7)
+            week_ago = local_now - timedelta(days=7)
             queryset = queryset.filter(created_at__gte=week_ago)
         elif date_filter == "month":
-            month_ago = timezone.localtime() - timedelta(days=30)
+            month_ago = local_now - timedelta(days=30)
             queryset = queryset.filter(created_at__gte=month_ago)
 
         # Filtrar solo activos
