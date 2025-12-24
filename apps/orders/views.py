@@ -160,16 +160,18 @@ class OrderViewSet(viewsets.ModelViewSet):
             notes = serializer.validated_data.get("notes", "")
             unit_price = product_variant.price or 0
 
-            # Crear el nuevo item (sin pagar por defecto)
-            OrderItem.objects.create(
-                order_id=order.pk,
-                product_variant=product_variant,
-                quantity=quantity,
-                unit_price=unit_price,
-                subtotal=unit_price * quantity,
-                notes=notes,
-                is_paid=False,  # El nuevo item no está pagado
-            )
+            # Crear items individuales (cada uno con quantity=1) para permitir pagos separados
+            # Si quantity > 1, se crean múltiples items independientes
+            for _ in range(quantity):
+                OrderItem.objects.create(
+                    order_id=order.pk,
+                    product_variant=product_variant,
+                    quantity=1,  # Siempre 1 para que cada item sea independiente
+                    unit_price=unit_price,
+                    subtotal=unit_price,  # Subtotal de un solo item
+                    notes=notes,
+                    is_paid=False,  # El nuevo item no está pagado
+                )
 
             # Recalcular totales directamente en la BD
             from django.db.models import Sum

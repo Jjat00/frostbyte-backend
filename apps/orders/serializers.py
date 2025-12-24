@@ -179,19 +179,23 @@ class OrderCreateSerializer(serializers.ModelSerializer):
         # Crear el pedido
         order = Order.objects.create(**validated_data)
 
-        # Crear los items
+        # Crear los items individuales (cada uno con quantity=1) para permitir pagos separados
         for item_data in items_data:
             product_variant = item_data["product_variant_id"]
             quantity = item_data.get("quantity", 1)
             notes = item_data.get("notes", "")
+            unit_price = product_variant.price or Decimal("0.00")
 
-            OrderItem.objects.create(
-                order=order,
-                product_variant=product_variant,
-                quantity=quantity,
-                unit_price=product_variant.price or Decimal("0.00"),
-                notes=notes,
-            )
+            # Si quantity > 1, crear múltiples items independientes
+            for _ in range(quantity):
+                OrderItem.objects.create(
+                    order=order,
+                    product_variant=product_variant,
+                    quantity=1,  # Siempre 1 para que cada item sea independiente
+                    unit_price=unit_price,
+                    subtotal=unit_price,  # Subtotal de un solo item
+                    notes=notes,
+                )
 
         # Recalcular totales
         order.calculate_totals()
