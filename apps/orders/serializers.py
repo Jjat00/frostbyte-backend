@@ -42,22 +42,24 @@ class OrderItemSerializer(serializers.ModelSerializer):
             "is_delivered",
             "delivered_at",
         ]
-        read_only_fields = ["subtotal", "product_variant", "paid_at", "delivered_at"]
+        read_only_fields = ["subtotal",
+                            "product_variant", "paid_at", "delivered_at"]
 
 
 class AddItemToOrderSerializer(serializers.Serializer):
     """Serializer para añadir items a una orden existente"""
-    
+
     product_variant_id = serializers.PrimaryKeyRelatedField(
         queryset=ProductVariant.objects.filter(is_active=True),
     )
     quantity = serializers.IntegerField(min_value=1, default=1)
-    notes = serializers.CharField(max_length=200, required=False, allow_blank=True)
+    notes = serializers.CharField(
+        max_length=200, required=False, allow_blank=True)
 
 
 class MarkItemPaidSerializer(serializers.Serializer):
     """Serializer para marcar un item como pagado"""
-    
+
     payment_method = serializers.ChoiceField(
         choices=Order.PaymentMethod.choices,
         required=False,
@@ -72,13 +74,15 @@ class OrderItemCreateSerializer(serializers.Serializer):
         queryset=ProductVariant.objects.filter(is_active=True),
     )
     quantity = serializers.IntegerField(min_value=1, default=1)
-    notes = serializers.CharField(max_length=200, required=False, allow_blank=True)
+    notes = serializers.CharField(
+        max_length=200, required=False, allow_blank=True)
 
 
 class OrderListSerializer(serializers.ModelSerializer):
     """Serializer para listar pedidos"""
 
-    status_display = serializers.CharField(source="get_status_display", read_only=True)
+    status_display = serializers.CharField(
+        source="get_status_display", read_only=True)
     payment_method_display = serializers.CharField(
         source="get_payment_method_display", read_only=True
     )
@@ -105,14 +109,17 @@ class OrderListSerializer(serializers.ModelSerializer):
 class OrderDetailSerializer(serializers.ModelSerializer):
     """Serializer para detalle de pedido"""
 
-    status_display = serializers.CharField(source="get_status_display", read_only=True)
+    status_display = serializers.CharField(
+        source="get_status_display", read_only=True)
     payment_method_display = serializers.CharField(
         source="get_payment_method_display", read_only=True
     )
     items = OrderItemSerializer(many=True, read_only=True)
     items_count = serializers.IntegerField(read_only=True)
-    paid_total = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
-    pending_total = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
+    paid_total = serializers.DecimalField(
+        max_digits=10, decimal_places=2, read_only=True)
+    pending_total = serializers.DecimalField(
+        max_digits=10, decimal_places=2, read_only=True)
     paid_items_count = serializers.IntegerField(read_only=True)
     unpaid_items_count = serializers.IntegerField(read_only=True)
     delivered_items_count = serializers.IntegerField(read_only=True)
@@ -147,6 +154,21 @@ class OrderDetailSerializer(serializers.ModelSerializer):
             "completed_at",
         ]
 
+    def to_representation(self, instance):
+        """Ordena los items alfabéticamente por nombre del producto"""
+        representation = super().to_representation(instance)
+
+        # Obtener los items ordenados alfabéticamente por nombre del producto
+        items = instance.items.select_related('product_variant__product').order_by(
+            'product_variant__product__name',
+            'product_variant__name'
+        )
+
+        # Serializar los items ordenados
+        representation['items'] = OrderItemSerializer(items, many=True).data
+
+        return representation
+
 
 class OrderCreateSerializer(serializers.ModelSerializer):
     """Serializer para crear pedidos"""
@@ -170,7 +192,8 @@ class OrderCreateSerializer(serializers.ModelSerializer):
 
     def validate_items(self, value):
         if not value:
-            raise serializers.ValidationError("El pedido debe tener al menos un item.")
+            raise serializers.ValidationError(
+                "El pedido debe tener al menos un item.")
         return value
 
     def create(self, validated_data):
@@ -223,4 +246,3 @@ class OrderStatusUpdateSerializer(serializers.Serializer):
     """Serializer para actualizar estado de pedido"""
 
     status = serializers.ChoiceField(choices=Order.Status.choices)
-
