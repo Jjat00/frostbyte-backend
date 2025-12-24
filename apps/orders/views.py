@@ -54,16 +54,19 @@ class OrderViewSet(viewsets.ModelViewSet):
         if status_filter:
             queryset = queryset.filter(status=status_filter)
 
-        # Filtrar por fecha (hoy, semana, mes)
+        # Filtrar por fecha (hoy, semana, mes) - usar hora local (America/Bogota)
         date_filter = self.request.query_params.get("date")
         if date_filter == "today":
-            today = timezone.now().date()
-            queryset = queryset.filter(created_at__date=today)
+            # Obtener inicio y fin del día en hora local
+            local_now = timezone.localtime()
+            start_of_day = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+            end_of_day = local_now.replace(hour=23, minute=59, second=59, microsecond=999999)
+            queryset = queryset.filter(created_at__gte=start_of_day, created_at__lte=end_of_day)
         elif date_filter == "week":
-            week_ago = timezone.now() - timedelta(days=7)
+            week_ago = timezone.localtime() - timedelta(days=7)
             queryset = queryset.filter(created_at__gte=week_ago)
         elif date_filter == "month":
-            month_ago = timezone.now() - timedelta(days=30)
+            month_ago = timezone.localtime() - timedelta(days=30)
             queryset = queryset.filter(created_at__gte=month_ago)
 
         # Filtrar solo activos
@@ -201,17 +204,18 @@ class OrderViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=["get"])
     def stats(self, request):
         """Estadísticas de pedidos"""
-        # Filtro de fecha
+        # Filtro de fecha - usar hora local (America/Bogota)
         date_filter = request.query_params.get("date", "today")
+        local_now = timezone.localtime()
 
         if date_filter == "today":
-            start_date = timezone.now().replace(hour=0, minute=0, second=0, microsecond=0)
+            start_date = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
         elif date_filter == "week":
-            start_date = timezone.now() - timedelta(days=7)
+            start_date = local_now - timedelta(days=7)
         elif date_filter == "month":
-            start_date = timezone.now() - timedelta(days=30)
+            start_date = local_now - timedelta(days=30)
         else:
-            start_date = timezone.now().replace(hour=0, minute=0, second=0, microsecond=0)
+            start_date = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
 
         orders = Order.objects.filter(created_at__gte=start_date)
         order_ids = orders.values_list('id', flat=True)
