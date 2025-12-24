@@ -412,16 +412,72 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
 
         return Response(PurchaseOrderItemSerializer(item).data, status=status.HTTP_201_CREATED)
 
-    @action(detail=True, methods=["delete"], url_path="items/(?P<item_id>[^/.]+)")
-    def remove_item(self, request, pk=None, item_id=None):
-        """Eliminar un item de la orden"""
+    @action(detail=True, methods=["patch"], url_path="items/(?P<item_id>[^/.]+)/update")
+    def update_item(self, request, pk=None, item_id=None):
+        """Actualizar un item de la orden (permite editar incluso si la orden está completada)"""
         order = self.get_object()
 
-        if order.status != PurchaseOrder.Status.PENDING:
+        try:
+            item = order.items.get(id=item_id)
+        except PurchaseOrderItem.DoesNotExist:
             return Response(
-                {"error": "Solo se pueden eliminar items de órdenes pendientes"},
-                status=status.HTTP_400_BAD_REQUEST,
+                {"error": "Item no encontrado"},
+                status=status.HTTP_404_NOT_FOUND,
             )
+
+        # Si el item ya fue comprado, necesitamos revertir el stock antes de actualizar
+        old_quantity_purchased = item.quantity_purchased if item.is_purchased else None
+        old_actual_price = item.actual_unit_price if item.is_purchased else None
+
+        # Actualizar campos del item
+        if "quantity_needed" in request.data:
+            item.quantity_needed = Decimal(
+                str(request.data["quantity_needed"]))
+
+        if "estimated_unit_price" in request.data:
+            item.estimated_unit_price = Decimal(
+                str(request.data["estimated_unit_price"]))
+
+        if "quantity_purchased" in request.data:
+            new_qty = Decimal(str(request.data["quantity_purchased"]))
+            # Ajustar stock
+            if item.is_purchased and old_quantity_purchased is not None:
+                # Revertir el stock anterior y agregar el nuevo
+                item.raw_material.current_stock -= old_quantity_purchased
+                item.raw_material.current_stock += new_qty
+                if item.raw_material.current_stock < 0:
+                    item.raw_material.current_stock = Decimal("0")
+                item.raw_material.save()
+            elif new_qty > 0 and not item.is_purchased:
+                # Si no estaba comprado y ahora se establece cantidad, agregar al stock
+                item.raw_material.current_stock += new_qty
+                item.raw_material.save()
+                item.is_purchased = True
+            item.quantity_purchased = new_qty
+
+        if "actual_unit_price" in request.data:
+            new_price = Decimal(str(request.data["actual_unit_price"]))
+            item.actual_unit_price = new_price
+            # Actualizar precio del material si el item está comprado o tiene cantidad comprada
+            if item.is_purchased or (item.quantity_purchased and item.quantity_purchased > 0):
+                item.raw_material.cost_per_unit = new_price
+                item.raw_material.save()
+
+        if "supplier" in request.data:
+            item.supplier = request.data["supplier"]
+            if item.is_purchased:
+                item.raw_material.supplier = request.data["supplier"]
+                item.raw_material.save()
+
+        item.save()
+        order.calculate_totals()
+
+        return Response(PurchaseOrderItemSerializer(item).data)
+
+    @action(detail=True, methods=["delete"], url_path="items/(?P<item_id>[^/.]+)")
+    def remove_item(self, request, pk=None, item_id=None):
+        """Eliminar un item de la orden (permite eliminar incluso si la orden está completada)"""
+        order = self.get_object()
 
         try:
             item = order.items.get(id=item_id)
