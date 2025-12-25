@@ -1,4 +1,4 @@
-from rest_framework import viewsets, filters
+from rest_framework import viewsets, filters, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
@@ -6,42 +6,68 @@ from .models import Category, Product, ProductVariant
 from .serializers import (
     CategorySerializer,
     CategoryDetailSerializer,
+    CategoryCreateUpdateSerializer,
     ProductSerializer,
     ProductListSerializer,
+    ProductCreateUpdateSerializer,
     ProductVariantSerializer,
+    ProductVariantCreateUpdateSerializer,
 )
 
 
-class CategoryViewSet(viewsets.ReadOnlyModelViewSet):
+class CategoryViewSet(viewsets.ModelViewSet):
     """
     ViewSet para categorías de productos.
 
-    list: Listar todas las categorías activas
+    list: Listar todas las categorías
     retrieve: Obtener detalle de una categoría con sus productos
+    create: Crear nueva categoría
+    update: Actualizar categoría
+    destroy: Eliminar categoría (soft delete)
     """
 
-    queryset = Category.objects.filter(is_active=True)
+    queryset = Category.objects.all()
     lookup_field = "slug"
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["name", "description"]
     ordering_fields = ["display_order", "name"]
     ordering = ["display_order"]
 
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        # Filtrar por activos si se solicita
+        active_only = self.request.query_params.get("active_only", "false")
+        if active_only.lower() == "true":
+            queryset = queryset.filter(is_active=True)
+        return queryset
+
     def get_serializer_class(self):
         if self.action == "retrieve":
             return CategoryDetailSerializer
+        elif self.action in ["create", "update", "partial_update"]:
+            return CategoryCreateUpdateSerializer
         return CategorySerializer
 
+    def destroy(self, request, *args, **kwargs):
+        """Soft delete: marcar como inactivo en lugar de eliminar"""
+        instance = self.get_object()
+        instance.is_active = False
+        instance.save()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
-class ProductViewSet(viewsets.ReadOnlyModelViewSet):
+
+class ProductViewSet(viewsets.ModelViewSet):
     """
     ViewSet para productos.
 
-    list: Listar todos los productos activos
+    list: Listar todos los productos
     retrieve: Obtener detalle de un producto con sus variantes
+    create: Crear nuevo producto
+    update: Actualizar producto
+    destroy: Eliminar producto (soft delete)
     """
 
-    queryset = Product.objects.filter(is_active=True).select_related(
+    queryset = Product.objects.all().select_related(
         "category").prefetch_related("variants")
     lookup_field = "slug"
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
@@ -52,10 +78,18 @@ class ProductViewSet(viewsets.ReadOnlyModelViewSet):
     def get_serializer_class(self):
         if self.action == "list":
             return ProductListSerializer
+        elif self.action in ["create", "update", "partial_update"]:
+            return ProductCreateUpdateSerializer
         return ProductSerializer
 
     def get_queryset(self):
         queryset = super().get_queryset()
+
+        # Filtrar por activos si se solicita (por defecto en list)
+        if self.action == "list":
+            active_only = self.request.query_params.get("active_only", "true")
+            if active_only.lower() == "true":
+                queryset = queryset.filter(is_active=True)
 
         # Filtrar por categoría si se proporciona
         category_slug = self.request.query_params.get("category")
@@ -70,6 +104,13 @@ class ProductViewSet(viewsets.ReadOnlyModelViewSet):
 
         return queryset
 
+    def destroy(self, request, *args, **kwargs):
+        """Soft delete: marcar como inactivo en lugar de eliminar"""
+        instance = self.get_object()
+        instance.is_active = False
+        instance.save()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
     @action(detail=True, methods=["get"])
     def variants(self, request, slug=None):
         """Obtener solo las variantes de un producto específico"""
@@ -79,13 +120,44 @@ class ProductViewSet(viewsets.ReadOnlyModelViewSet):
         return Response(serializer.data)
 
 
-class ProductVariantViewSet(viewsets.ReadOnlyModelViewSet):
+class ProductVariantViewSet(viewsets.ModelViewSet):
     """
     ViewSet para variantes de producto.
+
+    list: Listar todas las variantes
+    retrieve: Obtener detalle de una variante
+    create: Crear nueva variante
+    update: Actualizar variante
+    destroy: Eliminar variante (soft delete)
     """
 
-    queryset = ProductVariant.objects.filter(
-        is_active=True).select_related("product", "product__category")
+    queryset = ProductVariant.objects.all().select_related("product", "product__category")
     serializer_class = ProductVariantSerializer
     filter_backends = [filters.SearchFilter]
     search_fields = ["name", "sku", "product__name"]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        # Filtrar por activos si se solicita
+        active_only = self.request.query_params.get("active_only", "false")
+        if active_only.lower() == "true":
+            queryset = queryset.filter(is_active=True)
+        
+        # Filtrar por producto si se proporciona
+        product_id = self.request.query_params.get("product")
+        if product_id:
+            queryset = queryset.filter(product_id=product_id)
+        
+        return queryset
+
+    def get_serializer_class(self):
+        if self.action in ["create", "update", "partial_update"]:
+            return ProductVariantCreateUpdateSerializer
+        return ProductVariantSerializer
+
+    def destroy(self, request, *args, **kwargs):
+        """Soft delete: marcar como inactivo en lugar de eliminar"""
+        instance = self.get_object()
+        instance.is_active = False
+        instance.save()
+        return Response(status=status.HTTP_204_NO_CONTENT)
