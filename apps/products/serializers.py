@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from rest_framework.exceptions import ValidationError
 from .models import Category, Product, ProductVariant
 
 
@@ -15,6 +16,47 @@ class ProductVariantSerializer(serializers.ModelSerializer):
             "is_default",
             "is_active",
         ]
+        read_only_fields = ["sku"]
+
+
+class ProductVariantCreateUpdateSerializer(serializers.ModelSerializer):
+    """Serializer para crear/actualizar variantes de producto"""
+
+    class Meta:
+        model = ProductVariant
+        fields = [
+            "id",
+            "product",
+            "name",
+            "sku",
+            "price",
+            "is_default",
+            "is_active",
+        ]
+        read_only_fields = ["sku"]
+
+    def validate(self, data):
+        """Validar que solo haya una variante por defecto por producto"""
+        is_default = data.get('is_default', False)
+        product = data.get('product')
+        
+        if is_default and product:
+            # Si estamos actualizando, excluir el objeto actual
+            instance = self.instance
+            existing_default = ProductVariant.objects.filter(
+                product=product,
+                is_default=True
+            )
+            if instance:
+                existing_default = existing_default.exclude(id=instance.id)
+            
+            if existing_default.exists():
+                raise ValidationError(
+                    "Ya existe una variante por defecto para este producto. "
+                    "Solo puede haber una variante por defecto por producto."
+                )
+        
+        return data
 
 
 class ProductSerializer(serializers.ModelSerializer):
@@ -40,6 +82,25 @@ class ProductSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
+        read_only_fields = ["slug", "created_at", "updated_at"]
+
+
+class ProductCreateUpdateSerializer(serializers.ModelSerializer):
+    """Serializer para crear/actualizar productos"""
+
+    class Meta:
+        model = Product
+        fields = [
+            "id",
+            "name",
+            "slug",
+            "description",
+            "image_url",
+            "is_active",
+            "is_coming_soon",
+            "category",
+        ]
+        read_only_fields = ["slug"]
 
 
 class ProductListSerializer(serializers.ModelSerializer):
@@ -89,9 +150,26 @@ class CategorySerializer(serializers.ModelSerializer):
             "is_active",
             "products_count",
         ]
+        read_only_fields = ["slug", "products_count"]
 
     def get_products_count(self, obj):
         return obj.products.filter(is_active=True).count()
+
+
+class CategoryCreateUpdateSerializer(serializers.ModelSerializer):
+    """Serializer para crear/actualizar categorías"""
+
+    class Meta:
+        model = Category
+        fields = [
+            "id",
+            "name",
+            "slug",
+            "description",
+            "display_order",
+            "is_active",
+        ]
+        read_only_fields = ["slug"]
 
 
 class CategoryDetailSerializer(serializers.ModelSerializer):
