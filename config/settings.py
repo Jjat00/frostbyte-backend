@@ -56,6 +56,7 @@ INSTALLED_APPS = [
     'apps.products',
     'apps.inventory',
     'apps.orders',
+    'apps.music',
 ]
 
 # Custom User Model

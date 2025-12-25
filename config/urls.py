@@ -14,4 +14,6 @@ urlpatterns = [
     path('api/v1/inventory/', include('apps.inventory.urls')),
     # Orders
     path('api/v1/', include('apps.orders.urls')),
+    # Music
+    path('api/v1/', include('apps.music.urls')),
 ]
