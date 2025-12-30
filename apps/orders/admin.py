@@ -32,7 +32,7 @@ class OrderAdmin(admin.ModelAdmin):
 
     fieldsets = (
         ("Pedido", {"fields": ("order_number", "status")}),
-        ("Cliente", {"fields": ("customer_name", "customer_phone", "customer_notes")}),
+        ("Cliente", {"fields": ("customer_name", "customer_phone", "customer_notes", "table_number")}),
         ("Pago", {"fields": ("payment_method", "is_paid")}),
         ("Totales", {"fields": ("subtotal", "discount", "total")}),
         ("Fechas", {"fields": ("created_at", "updated_at", "completed_at")}),

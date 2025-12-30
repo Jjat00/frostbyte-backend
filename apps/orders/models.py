@@ -47,6 +47,12 @@ class Order(models.Model):
         verbose_name="Notas del cliente",
         help_text="Instrucciones especiales o alergias",
     )
+    table_number = models.IntegerField(
+        null=True,
+        blank=True,
+        verbose_name="Número de mesa",
+        help_text="Número de mesa donde se atiende al cliente (0=Barra, 1-5=Mesas)",
+    )
 
     # Estado y pago
     status = models.CharField(

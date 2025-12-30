@@ -102,6 +102,7 @@ class OrderListSerializer(serializers.ModelSerializer):
             "payment_method_display",
             "total",
             "items_count",
+            "table_number",
             "created_at",
         ]
 
@@ -149,6 +150,7 @@ class OrderDetailSerializer(serializers.ModelSerializer):
             "undelivered_items_count",
             "items",
             "items_count",
+            "table_number",
             "created_at",
             "updated_at",
             "completed_at",
@@ -174,6 +176,7 @@ class OrderCreateSerializer(serializers.ModelSerializer):
     """Serializer para crear pedidos"""
 
     items = OrderItemCreateSerializer(many=True, write_only=True)
+    table_number = serializers.IntegerField(min_value=0, max_value=5, required=True)
 
     class Meta:
         model = Order
@@ -186,9 +189,19 @@ class OrderCreateSerializer(serializers.ModelSerializer):
             "payment_method",
             "discount",
             "total",
+            "table_number",
             "items",
         ]
         read_only_fields = ["id", "order_number", "total"]
+
+    def validate_table_number(self, value):
+        if value is None:
+            raise serializers.ValidationError(
+                "Debe seleccionar una mesa o barra.")
+        if value < 0 or value > 5:
+            raise serializers.ValidationError(
+                "El valor debe estar entre 0 (Barra) y 5.")
+        return value
 
     def validate_items(self, value):
         if not value:
@@ -230,6 +243,8 @@ class OrderCreateSerializer(serializers.ModelSerializer):
 class OrderUpdateSerializer(serializers.ModelSerializer):
     """Serializer para actualizar pedidos"""
 
+    table_number = serializers.IntegerField(min_value=0, max_value=5, required=False)
+
     class Meta:
         model = Order
         fields = [
@@ -239,7 +254,15 @@ class OrderUpdateSerializer(serializers.ModelSerializer):
             "payment_method",
             "is_paid",
             "discount",
+            "table_number",
         ]
+
+    def validate_table_number(self, value):
+        if value is not None:
+            if value < 0 or value > 5:
+                raise serializers.ValidationError(
+                    "El valor debe estar entre 0 (Barra) y 5.")
+        return value
 
 
 class OrderStatusUpdateSerializer(serializers.Serializer):
