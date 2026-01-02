@@ -51,12 +51,14 @@ INSTALLED_APPS = [
     'rest_framework_simplejwt',
     'rest_framework_simplejwt.token_blacklist',
     'corsheaders',
+    'channels',
     # Local apps - accounts first (custom user model)
     'apps.accounts',
     'apps.products',
     'apps.inventory',
     'apps.orders',
     'apps.music',
+    'apps.games',
 ]
 
 # Custom User Model
@@ -171,3 +173,13 @@ CORS_ALLOW_CREDENTIALS = True
 
 # Default primary key field type
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+# Django Channels configuration
+ASGI_APPLICATION = 'config.asgi.application'
+
+# Channel layers (usando in-memory para desarrollo, Redis para producción)
+CHANNEL_LAYERS = {
+    'default': {
+        'BACKEND': 'channels.layers.InMemoryChannelLayer',
+    },
+}
