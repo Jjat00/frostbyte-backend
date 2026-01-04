@@ -7,7 +7,6 @@ For more information on this file, see
 https://docs.djangoproject.com/en/6.0/howto/deployment/asgi/
 """
 
-from apps.games.routing import websocket_urlpatterns
 import os
 from channels.auth import AuthMiddlewareStack
 from channels.routing import ProtocolTypeRouter, URLRouter
@@ -21,7 +20,9 @@ os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
 django_asgi_app = get_asgi_application()
 
 # Import routing after Django is set up
-
+# IMPORTANTE: Esta importación DEBE estar DESPUÉS de get_asgi_application()
+# porque routing.py importa consumers.py, que importa models.py, que necesita Django configurado
+from apps.games.routing import websocket_urlpatterns
 # Permitir todos los orígenes para WebSockets
 # Nota: AllowedHostsOriginValidator puede bloquear conexiones si el frontend
 # está en un dominio diferente al backend. Como ya tenemos CORS configurado
