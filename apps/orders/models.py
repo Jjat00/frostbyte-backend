@@ -146,6 +146,12 @@ class Order(models.Model):
         self.status = self.Status.DELIVERED
         self.completed_at = timezone.now()
         self.save(update_fields=["status", "completed_at", "updated_at"])
+        
+        # Marcar todos los items como entregados
+        OrderItem.objects.filter(order_id=self.pk, is_delivered=False).update(
+            is_delivered=True,
+            delivered_at=timezone.now()
+        )
 
     def mark_as_cancelled(self):
         """Cancelar pedido"""

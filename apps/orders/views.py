@@ -102,12 +102,14 @@ class OrderViewSet(viewsets.ModelViewSet):
 
         if serializer.is_valid():
             new_status = serializer.validated_data["status"]
-            order.status = new_status
 
             if new_status == Order.Status.DELIVERED:
-                order.completed_at = timezone.now()
+                # Usar el método del modelo que marca todos los items como entregados
+                order.mark_as_delivered()
+            else:
+                order.status = new_status
+                order.save()
 
-            order.save()
             return Response(OrderDetailSerializer(order).data)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

@@ -60,7 +60,17 @@ class OrderAdmin(admin.ModelAdmin):
     @admin.action(description="Marcar como Entregado")
     def mark_as_delivered(self, request, queryset):
         from django.utils import timezone
+        from .models import OrderItem
+        
+        # Marcar pedidos como entregados
         queryset.update(status=Order.Status.DELIVERED, completed_at=timezone.now())
+        
+        # Marcar todos los items de los pedidos como entregados
+        order_ids = queryset.values_list('pk', flat=True)
+        OrderItem.objects.filter(order_id__in=order_ids, is_delivered=False).update(
+            is_delivered=True,
+            delivered_at=timezone.now()
+        )
 
     @admin.action(description="Marcar como pagado")
     def mark_as_paid(self, request, queryset):
