@@ -528,13 +528,7 @@ class GameRoomViewSet(viewsets.ModelViewSet):
         """Terminar el juego y hacer que todos los participantes salgan de la sala"""
         room = self.get_object()
 
-        # Solo se puede terminar si no está ya terminada o cancelada
-        if room.status in [GameRoom.Status.FINISHED, GameRoom.Status.CANCELLED, GameRoom.Status.EXPIRED]:
-            return Response(
-                {"error": "El juego ya está terminado"},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
+        # Permitir terminar el juego en cualquier estado
         # Eliminar todos los participantes de la sala
         GameParticipant.objects.filter(room=room).delete()
 
