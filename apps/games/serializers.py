@@ -1,6 +1,8 @@
 from rest_framework import serializers
 from django.utils import timezone
 from .models import Table, GameRoom, GameParticipant, GameRound, GameRoundResult
+# Importar order_allows_game desde views (evitar import circular moviendo la función)
+from apps.orders.models import Order
 
 
 class TableSerializer(serializers.ModelSerializer):
@@ -143,9 +145,16 @@ class GameRoomDetailSerializer(serializers.ModelSerializer):
     can_play = serializers.BooleanField(read_only=True)
     
     def get_order_is_active(self, obj):
-        """Obtener si el pedido está activo"""
+        """Obtener si el pedido permite el juego (usando order_allows_game)"""
         if obj.order:
-            return obj.order.is_active
+            # Usar la misma lógica que order_allows_game: permite juego si NO está cancelado
+            # y NO (entregado Y pagado)
+            if obj.order.status == Order.Status.CANCELLED:
+                return False
+            if obj.order.status == Order.Status.DELIVERED and obj.order.is_paid:
+                return False
+            # En cualquier otro caso (PENDING, PREPARING, READY, o DELIVERED sin pagar), permite juego
+            return True
         return False
     
     class Meta:
