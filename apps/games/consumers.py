@@ -15,13 +15,6 @@ class GameRoomConsumer(AsyncWebsocketConsumer):
         """Conectar al WebSocket"""
         self.room_id = int(self.scope['url_route']['kwargs']['room_id'])
         self.room_group_name = f'game_room_{self.room_id}'
-        
-        # Obtener device_id de los query params si está disponible
-        query_string = self.scope.get('query_string', b'').decode()
-        self.device_id = None
-        if query_string:
-            params = dict(param.split('=') for param in query_string.split('&') if '=' in param)
-            self.device_id = params.get('device_id')
 
         # Verificar que la sala existe
         room_exists = await self.room_exists()
@@ -42,9 +35,9 @@ class GameRoomConsumer(AsyncWebsocketConsumer):
 
     async def disconnect(self, close_code):
         """Desconectar del WebSocket"""
-        # Si tenemos device_id, eliminar al participante de la sala
-        if self.device_id:
-            await self.remove_participant()
+        # NO eliminar al participante automáticamente cuando se desconecta el WebSocket
+        # Los jugadores solo deben salir cuando explícitamente usan el botón de salir
+        # Esto evita que se eliminen jugadores por problemas de conexión temporal
         
         # Salir del grupo
         await self.channel_layer.group_discard(
@@ -93,20 +86,6 @@ class GameRoomConsumer(AsyncWebsocketConsumer):
             'rounds': event['rounds']
         }))
 
-    @database_sync_to_async
-    def remove_participant(self):
-        """Eliminar participante de la sala cuando se desconecta"""
-        try:
-            participant = GameParticipant.objects.get(
-                room_id=self.room_id,
-                player_device_id=self.device_id
-            )
-            participant.delete()
-            # Notificar actualización a todos los demás
-            from .views import broadcast_room_update
-            broadcast_room_update(self.room_id)
-        except GameParticipant.DoesNotExist:
-            pass  # El participante ya no existe, no hay problema
 
     @database_sync_to_async
     def room_exists(self):
