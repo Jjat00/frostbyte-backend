@@ -2,13 +2,46 @@
 #    uv pip compile pyproject.toml -o requirements.txt
 asgiref==3.11.0
     # via
+    #   channels
+    #   channels-redis
+    #   daphne
     #   django
     #   django-cors-headers
+attrs==25.4.0
+    # via
+    #   service-identity
+    #   twisted
+autobahn==25.12.2
+    # via daphne
+automat==25.4.16
+    # via twisted
+cbor2==5.8.0
+    # via autobahn
+cffi==2.0.0
+    # via
+    #   autobahn
+    #   cryptography
+channels==4.3.2
+    # via
+    #   frostbyte-backend (pyproject.toml)
+    #   channels-redis
+channels-redis==4.3.0
+    # via frostbyte-backend (pyproject.toml)
+constantly==23.10.4
+    # via twisted
+cryptography==46.0.3
+    # via
+    #   autobahn
+    #   pyopenssl
+    #   service-identity
+daphne==4.2.1
+    # via frostbyte-backend (pyproject.toml)
 dj-database-url==3.0.1
     # via frostbyte-backend (pyproject.toml)
 django==6.0
     # via
     #   frostbyte-backend (pyproject.toml)
+    #   channels
     #   dj-database-url
     #   django-cors-headers
     #   djangorestframework
@@ -25,19 +58,63 @@ dotenv==0.9.9
     # via frostbyte-backend (pyproject.toml)
 gunicorn==23.0.0
     # via frostbyte-backend (pyproject.toml)
+hyperlink==21.0.0
+    # via
+    #   autobahn
+    #   twisted
+idna==3.11
+    # via
+    #   hyperlink
+    #   twisted
+incremental==24.11.0
+    # via twisted
+msgpack==1.1.2
+    # via
+    #   autobahn
+    #   channels-redis
 packaging==25.0
-    # via gunicorn
+    # via
+    #   gunicorn
+    #   incremental
 psycopg2-binary==2.9.11
     # via frostbyte-backend (pyproject.toml)
+py-ubjson==0.16.1
+    # via autobahn
+pyasn1==0.6.1
+    # via
+    #   pyasn1-modules
+    #   service-identity
+pyasn1-modules==0.4.2
+    # via service-identity
+pycparser==2.23
+    # via cffi
 pyjwt==2.10.1
     # via djangorestframework-simplejwt
+pyopenssl==25.3.0
+    # via twisted
 python-dotenv==1.2.1
     # via
     #   frostbyte-backend (pyproject.toml)
     #   dotenv
+redis==7.1.0
+    # via channels-redis
 rest-framework-simplejwt==0.0.2
     # via frostbyte-backend (pyproject.toml)
+service-identity==24.2.0
+    # via twisted
 sqlparse==0.5.5
     # via django
+twisted==25.5.0
+    # via daphne
+txaio==25.12.2
+    # via autobahn
+typing-extensions==4.15.0
+    # via
+    #   pyopenssl
+    #   twisted
+ujson==5.11.0
+    # via autobahn
 whitenoise==6.11.0
     # via frostbyte-backend (pyproject.toml)
+zope-interface==8.1.1
+    # via twisted
