@@ -490,3 +490,29 @@ class GameRoomViewSet(viewsets.ModelViewSet):
         broadcast_room_update(room.id)
         serializer = GameRoomDetailSerializer(room)
         return Response(serializer.data)
+
+    @action(detail=True, methods=["post"])
+    def terminate(self, request, pk=None):
+        """Terminar el juego y hacer que todos los participantes salgan de la sala"""
+        room = self.get_object()
+        
+        # Solo se puede terminar si no está ya terminada o cancelada
+        if room.status in [GameRoom.Status.FINISHED, GameRoom.Status.CANCELLED, GameRoom.Status.EXPIRED]:
+            return Response(
+                {"error": "El juego ya está terminado"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Eliminar todos los participantes de la sala
+        GameParticipant.objects.filter(room=room).delete()
+        
+        # Marcar la sala como terminada
+        room.status = GameRoom.Status.FINISHED
+        room.finished_at = timezone.now()
+        room.save()
+        
+        # Notificar a todos los jugadores (aunque ya no estén en la sala, por si acaso)
+        broadcast_room_update(room.id)
+        
+        serializer = GameRoomDetailSerializer(room)
+        return Response(serializer.data)
