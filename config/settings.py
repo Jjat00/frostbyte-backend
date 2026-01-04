@@ -178,8 +178,24 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 ASGI_APPLICATION = 'config.asgi.application'
 
 # Channel layers (usando in-memory para desarrollo, Redis para producción)
-CHANNEL_LAYERS = {
-    'default': {
-        'BACKEND': 'channels.layers.InMemoryChannelLayer',
-    },
-}
+REDIS_URL = os.getenv('REDIS_URL')
+
+if REDIS_URL:
+    # Producción: usar Redis para channel layers
+    # Railway provee REDIS_URL como redis://host:port o redis://:password@host:port
+    # channels-redis puede usar la URL directamente
+    CHANNEL_LAYERS = {
+        'default': {
+            'BACKEND': 'channels_redis.core.RedisChannelLayer',
+            'CONFIG': {
+                'hosts': [REDIS_URL],
+            },
+        },
+    }
+else:
+    # Desarrollo: usar in-memory channel layer
+    CHANNEL_LAYERS = {
+        'default': {
+            'BACKEND': 'channels.layers.InMemoryChannelLayer',
+        },
+    }
