@@ -278,6 +278,18 @@ class GameRoomViewSet(viewsets.ModelViewSet):
         """Iniciar el juego"""
         room = self.get_object()
 
+        # Refrescar el objeto desde la base de datos para obtener el estado actual
+        room.refresh_from_db()
+
+        # Si el estado es PLAYING pero no hay rondas iniciadas, resetear a CONFIGURING
+        # Esto puede pasar si hubo un error anterior que dejó el estado inconsistente
+        if room.status == GameRoom.Status.PLAYING:
+            rounds_count = room.rounds.count()
+            # Si no hay rondas o current_round es 0, el juego no se inició realmente
+            if rounds_count == 0 or room.current_round == 0:
+                room.status = GameRoom.Status.CONFIGURING
+                room.save(update_fields=["status"])
+
         # Refrescar la relación de participantes para obtener el conteo actualizado
         participant_count = room.participants.count()
 
