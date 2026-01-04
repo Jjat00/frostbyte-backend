@@ -11,13 +11,13 @@ class GameRoomConsumer(AsyncWebsocketConsumer):
 
     async def connect(self):
         """Conectar al WebSocket"""
-        self.room_id = self.scope['url_route']['kwargs']['room_id']
+        self.room_id = int(self.scope['url_route']['kwargs']['room_id'])
         self.room_group_name = f'game_room_{self.room_id}'
 
         # Verificar que la sala existe
         room_exists = await self.room_exists()
         if not room_exists:
-            await self.close()
+            await self.close(code=4001)
             return
 
         # Unirse al grupo de la sala
@@ -53,13 +53,32 @@ class GameRoomConsumer(AsyncWebsocketConsumer):
             elif message_type == 'request_update':
                 # Cliente solicita actualización
                 await self.send_room_update()
+            elif message_type == 'temp_round_selection':
+                # Reenviar selección temporal a todos los demás en el grupo
+                await self.channel_layer.group_send(
+                    self.room_group_name,
+                    {
+                        'type': 'temp_round_selection',
+                        'rounds': data.get('rounds')
+                    }
+                )
 
         except json.JSONDecodeError:
             pass
 
     async def room_update(self, event):
         """Enviar actualización de sala a todos los clientes"""
-        await self.send(text_data=json.dumps(event['data']))
+        await self.send(text_data=json.dumps({
+            'type': 'room_update',
+            'data': event['data']
+        }))
+
+    async def temp_round_selection(self, event):
+        """Enviar selección temporal de rondas a todos los clientes"""
+        await self.send(text_data=json.dumps({
+            'type': 'temp_round_selection',
+            'rounds': event['rounds']
+        }))
 
     @database_sync_to_async
     def room_exists(self):

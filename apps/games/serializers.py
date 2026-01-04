@@ -135,11 +135,18 @@ class GameRoomDetailSerializer(serializers.ModelSerializer):
     
     table_number = serializers.IntegerField(source="table.table_number", read_only=True)
     order_number = serializers.CharField(source="order.order_number", read_only=True)
+    order_is_active = serializers.SerializerMethodField()
     participants = GameParticipantSerializer(many=True, read_only=True)
     participant_count = serializers.IntegerField(source="participants.count", read_only=True)
     rounds = GameRoundSerializer(many=True, read_only=True)
     is_expired = serializers.BooleanField(read_only=True)
     can_play = serializers.BooleanField(read_only=True)
+    
+    def get_order_is_active(self, obj):
+        """Obtener si el pedido está activo"""
+        if obj.order:
+            return obj.order.is_active
+        return False
     
     class Meta:
         model = GameRoom
@@ -151,6 +158,7 @@ class GameRoomDetailSerializer(serializers.ModelSerializer):
             "table_number",
             "order",
             "order_number",
+            "order_is_active",
             "game_type",
             "status",
             "total_rounds",

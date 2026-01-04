@@ -226,12 +226,12 @@ class GameRoomViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["post"])
     def configure(self, request, pk=None):
-        """Configurar número de rondas antes de iniciar"""
+        """Configurar número de rondas antes de iniciar (permite editar si ya está configurado)"""
         room = self.get_object()
         
-        if room.status != GameRoom.Status.WAITING:
+        if room.status not in [GameRoom.Status.WAITING, GameRoom.Status.CONFIGURING]:
             return Response(
-                {"error": "Solo se puede configurar cuando la sala está esperando jugadores"},
+                {"error": "Solo se puede configurar cuando la sala está esperando jugadores o configurando"},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
@@ -444,6 +444,7 @@ class GameRoomViewSet(viewsets.ModelViewSet):
         # Resetear sala para nueva partida
         room.status = GameRoom.Status.WAITING
         room.current_round = 0
+        room.total_rounds = 3  # Resetear a valor por defecto (se configurará después)
         room.started_at = None
         room.finished_at = None
         room.expires_at = timezone.now() + timezone.timedelta(hours=1)
