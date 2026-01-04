@@ -278,15 +278,36 @@ class GameRoomViewSet(viewsets.ModelViewSet):
         """Iniciar el juego"""
         room = self.get_object()
 
-        if not room.can_play:
+        # Refrescar la relación de participantes para obtener el conteo actualizado
+        participant_count = room.participants.count()
+
+        # Verificaciones detalladas para mejor mensaje de error
+        if room.status not in [GameRoom.Status.WAITING, GameRoom.Status.CONFIGURING]:
             return Response(
-                {"error": "La sala no puede iniciar el juego. Verifica que haya al menos 2 jugadores y que el pedido esté activo"},
+                {"error": f"El juego no puede iniciarse. Estado actual: {room.status}"},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        if room.status not in [GameRoom.Status.WAITING, GameRoom.Status.CONFIGURING]:
+        if participant_count < 2:
             return Response(
-                {"error": "El juego ya está en curso o ha finalizado"},
+                {"error": f"Se requieren al menos 2 jugadores. Actualmente hay {participant_count} jugador(es)"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Verificar que el pedido permita el juego
+        order_allows = not (room.order.status ==
+                            Order.Status.DELIVERED and room.order.is_paid)
+        order_allows = order_allows and room.order.status != Order.Status.CANCELLED
+
+        if not order_allows:
+            return Response(
+                {"error": "El pedido no permite iniciar el juego. Verifica que el pedido esté activo"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if room.is_expired:
+            return Response(
+                {"error": "La sala ha expirado"},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
