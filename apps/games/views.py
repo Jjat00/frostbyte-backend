@@ -424,6 +424,40 @@ class GameRoomViewSet(viewsets.ModelViewSet):
         return Response(serializer.data)
 
     @action(detail=True, methods=["post"])
+    def leave(self, request, pk=None):
+        """Salir de la sala (eliminar participante)"""
+        room = self.get_object()
+        
+        player_device_id = request.data.get("player_device_id")
+        if not player_device_id:
+            return Response(
+                {"error": "player_device_id es requerido"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Buscar y eliminar participante
+        try:
+            participant = GameParticipant.objects.get(
+                room=room,
+                player_device_id=player_device_id
+            )
+            participant.delete()
+            
+            # Si no quedan participantes, no hacemos nada especial
+            # La sala seguirá existiendo por si alguien quiere volver a unirse
+            
+            broadcast_room_update(room.id)
+            return Response(
+                {"message": "Has salido de la sala"},
+                status=status.HTTP_200_OK
+            )
+        except GameParticipant.DoesNotExist:
+            return Response(
+                {"error": "No estás en esta sala"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+    @action(detail=True, methods=["post"])
     def rematch(self, request, pk=None):
         """Crear una nueva partida (revancha) en la misma sala"""
         room = self.get_object()
