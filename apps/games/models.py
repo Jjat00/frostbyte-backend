@@ -203,10 +203,14 @@ class GameRoom(models.Model):
     @property
     def can_play(self):
         """Verifica si la sala puede iniciar el juego"""
+        # Verificar que el pedido permita el juego (no entregado y pagado)
+        order_allows = not (self.order.status == self.order.Status.DELIVERED and self.order.is_paid)
+        order_allows = order_allows and self.order.status != self.order.Status.CANCELLED
+        
         return (
             self.status in [self.Status.WAITING, self.Status.CONFIGURING]
             and self.participant_count >= 2
-            and self.order.is_active
+            and order_allows
             and not self.is_expired
         )
 
