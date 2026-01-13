@@ -3,7 +3,7 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework import status
 from openai import OpenAI
-from datetime import datetime
+from django.utils import timezone
 import os
 
 
@@ -26,8 +26,8 @@ def get_motivational_phrase(request):
         # Inicializar el cliente de OpenAI
         client = OpenAI(api_key=api_key)
 
-        # Obtener la fecha actual
-        fecha_actual = datetime.now()
+        # Obtener la fecha actual en la zona horaria configurada (America/Bogota)
+        fecha_actual = timezone.localtime(timezone.now())
         dia_semana = fecha_actual.strftime('%A')
         dia_mes = fecha_actual.day
         mes = fecha_actual.strftime('%B')
