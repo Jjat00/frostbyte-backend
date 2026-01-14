@@ -6,7 +6,7 @@ from django.db.models.functions import TruncDate
 from django.utils import timezone
 from datetime import timedelta
 
-from .models import Order, OrderItem
+from .models import Order, OrderItem, Table
 from .serializers import (
     OrderListSerializer,
     OrderDetailSerializer,
@@ -657,3 +657,64 @@ class OrderItemViewSet(viewsets.ModelViewSet):
             )
 
         return Response(OrderItemSerializer(item).data)
+
+
+class TableViewSet(viewsets.ViewSet):
+    """ViewSet para tracking de visitas a mesas"""
+
+    @action(detail=False, methods=["post"], url_path="register-visit")
+    def register_visit(self, request):
+        """Registra una visita a una mesa"""
+        table_number = request.data.get("table_number")
+
+        if table_number is None or table_number == "":
+            return Response(
+                {"error": "table_number es requerido"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            table_number = int(table_number)
+        except (ValueError, TypeError):
+            return Response(
+                {"error": "table_number debe ser un número"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Buscar o crear la mesa (0 = Barra)
+        table_name = "Barra" if table_number == 0 else f"Mesa {table_number}"
+        table, created = Table.objects.get_or_create(
+            table_number=table_number,
+            defaults={
+                "table_name": table_name,
+                "is_active": True
+            }
+        )
+
+        # Registrar la visita
+        table.register_visit()
+
+        return Response({
+            "table_number": table.table_number,
+            "table_name": table.table_name,
+            "visit_count": table.visit_count
+        })
+
+    @action(detail=False, methods=["get"], url_path="stats")
+    def stats(self, request):
+        """Obtiene estadísticas de visitas por mesa"""
+        tables = Table.objects.filter(is_active=True).order_by("-visit_count")
+
+        data = [
+            {
+                "table_number": table.table_number,
+                "table_name": table.table_name,
+                "visit_count": table.visit_count
+            }
+            for table in tables
+        ]
+
+        return Response({
+            "tables": data,
+            "total_visits": sum(t.visit_count for t in tables)
+        })

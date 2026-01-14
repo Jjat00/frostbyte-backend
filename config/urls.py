@@ -18,4 +18,6 @@ urlpatterns = [
     path('api/v1/', include('apps.music.urls')),
     # Games
     path('api/v1/', include('apps.games.urls')),
+    # Motivational
+    path('api/v1/motivational/', include('apps.motivational.urls')),
 ]

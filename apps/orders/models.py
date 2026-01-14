@@ -8,6 +8,47 @@ import uuid
 from apps.products.models import ProductVariant
 
 
+class Table(models.Model):
+    """Mesa del restaurante para tracking de visitas"""
+
+    table_number = models.IntegerField(
+        unique=True,
+        verbose_name="Número de mesa",
+        help_text="Número de la mesa (0=Barra, 1-N=Mesas)"
+    )
+    table_name = models.CharField(
+        max_length=50,
+        verbose_name="Nombre",
+        help_text="Nombre descriptivo de la mesa"
+    )
+    visit_count = models.PositiveIntegerField(
+        default=0,
+        verbose_name="Visitas",
+        help_text="Cantidad de veces que se ha accedido a esta mesa"
+    )
+    is_active = models.BooleanField(
+        default=True,
+        verbose_name="Activa"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Mesa"
+        verbose_name_plural = "Mesas"
+        ordering = ["table_number"]
+
+    def __str__(self):
+        if self.table_number == 0:
+            return self.table_name
+        return f"{self.table_name} (#{self.table_number})"
+
+    def register_visit(self):
+        """Incrementa el contador de visitas"""
+        self.visit_count += 1
+        self.save(update_fields=["visit_count", "updated_at"])
+
+
 class Order(models.Model):
     """Pedido de cliente"""
 

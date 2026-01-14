@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django.utils.html import format_html
 from django.db.models import Count
-from .models import Order, OrderItem
+from .models import Order, OrderItem, Table
 
 
 class OrderItemInline(admin.TabularInline):
@@ -92,3 +92,25 @@ class OrderItemAdmin(admin.ModelAdmin):
         "product_variant__product__name",
     ]
     autocomplete_fields = ["order", "product_variant"]
+
+
+@admin.register(Table)
+class TableAdmin(admin.ModelAdmin):
+    list_display = [
+        "table_number",
+        "table_name",
+        "visit_count",
+        "is_active",
+        "created_at",
+        "updated_at",
+    ]
+    list_filter = ["is_active", "created_at"]
+    search_fields = ["table_name", "table_number"]
+    readonly_fields = ["visit_count", "created_at", "updated_at"]
+    ordering = ["table_number"]
+
+    fieldsets = (
+        ("Información de Mesa", {"fields": ("table_number", "table_name", "is_active")}),
+        ("Estadísticas", {"fields": ("visit_count",)}),
+        ("Fechas", {"fields": ("created_at", "updated_at")}),
+    )
