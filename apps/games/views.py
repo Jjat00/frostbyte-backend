@@ -71,6 +71,32 @@ class GameRoomViewSet(viewsets.ModelViewSet):
             return GameRoomStartSerializer
         return GameRoomDetailSerializer
 
+    def get_queryset(self):
+        """Personalizar queryset con filtros para admin"""
+        queryset = super().get_queryset()
+
+        # Filtros opcionales para el listado (solo admin puede listar)
+        if self.action == "list":
+            # Filtro por estado
+            status_filter = self.request.query_params.get('status')
+            if status_filter:
+                queryset = queryset.filter(status=status_filter)
+
+            # Filtro por mesa
+            table_filter = self.request.query_params.get('table_number')
+            if table_filter:
+                queryset = queryset.filter(table__table_number=int(table_filter))
+
+            # Filtro solo activas
+            active_only = self.request.query_params.get('active_only', 'false')
+            if active_only.lower() == 'true':
+                queryset = queryset.filter(
+                    status__in=[GameRoom.Status.WAITING, GameRoom.Status.CONFIGURING,
+                               GameRoom.Status.PLAYING]
+                )
+
+        return queryset
+
     @action(detail=False, methods=["post"], url_path="create-from-qr")
     def create_from_qr(self, request):
         """
@@ -575,3 +601,79 @@ class GameRoomViewSet(viewsets.ModelViewSet):
 
         serializer = GameRoomDetailSerializer(room)
         return Response(serializer.data)
+
+    @action(detail=False, methods=["post"], url_path="clean-table")
+    def clean_table(self, request):
+        """Terminar todas las salas activas de una mesa específica (solo admin)"""
+        table_number = request.data.get("table_number")
+
+        if table_number is None:
+            return Response(
+                {"error": "table_number es requerido"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Buscar todas las salas activas en esa mesa
+        active_rooms = GameRoom.objects.filter(
+            table__table_number=table_number,
+            status__in=[GameRoom.Status.WAITING, GameRoom.Status.CONFIGURING,
+                       GameRoom.Status.PLAYING]
+        )
+
+        count = 0
+        for room in active_rooms:
+            # Eliminar participantes
+            GameParticipant.objects.filter(room=room).delete()
+
+            # Marcar sala como cancelada
+            room.status = GameRoom.Status.CANCELLED
+            room.finished_at = timezone.now()
+            room.save()
+
+            # Notificar
+            broadcast_room_update(room.id)
+            count += 1
+
+        mesa_label = "Barra" if table_number == 0 else f"Mesa {table_number}"
+        return Response({
+            "message": f"{count} sala(s) terminada(s) en {mesa_label}",
+            "terminated_count": count,
+            "table_number": table_number,
+            "table_label": mesa_label
+        })
+
+    @action(detail=False, methods=["get"], url_path="admin-stats")
+    def admin_stats(self, request):
+        """Estadísticas para el panel de administración (solo admin)"""
+
+        # Contar salas por estado
+        stats = {
+            "total_active_rooms": GameRoom.objects.filter(
+                status__in=[GameRoom.Status.WAITING, GameRoom.Status.CONFIGURING,
+                           GameRoom.Status.PLAYING]
+            ).count(),
+            "by_status": {
+                "waiting": GameRoom.objects.filter(status=GameRoom.Status.WAITING).count(),
+                "configuring": GameRoom.objects.filter(status=GameRoom.Status.CONFIGURING).count(),
+                "playing": GameRoom.objects.filter(status=GameRoom.Status.PLAYING).count(),
+            },
+            "by_table": []
+        }
+
+        # Salas activas por mesa (0=Barra, 1-5=Mesas)
+        for table_num in range(0, 6):
+            active_count = GameRoom.objects.filter(
+                table__table_number=table_num,
+                status__in=[GameRoom.Status.WAITING, GameRoom.Status.CONFIGURING,
+                           GameRoom.Status.PLAYING]
+            ).count()
+
+            if active_count > 0:
+                mesa_label = "Barra" if table_num == 0 else f"Mesa {table_num}"
+                stats["by_table"].append({
+                    "table_number": table_num,
+                    "table_label": mesa_label,
+                    "active_rooms_count": active_count
+                })
+
+        return Response(stats)
