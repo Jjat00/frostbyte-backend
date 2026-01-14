@@ -224,6 +224,42 @@ class OrderViewSet(viewsets.ModelViewSet):
         return Response(serializer.data)
 
     @action(detail=False, methods=["get"])
+    def pending_payments(self, request):
+        """
+        Obtener pedidos con pagos pendientes independientemente de la fecha.
+        Incluye pedidos donde is_paid=False o que tienen items sin pagar.
+        Excluye pedidos cancelados.
+        """
+        # Obtener pedidos que no están completamente pagados y no están cancelados
+        pending_orders = self.get_queryset().filter(
+            is_paid=False
+        ).exclude(
+            status=Order.Status.CANCELLED
+        ).order_by("-created_at")
+
+        # Calcular estadísticas
+        total_pending = pending_orders.aggregate(
+            total=Sum("total")
+        )["total"] or 0
+
+        # Contar items pendientes de pago
+        from django.db.models import Count, Q
+        orders_with_unpaid_count = pending_orders.annotate(
+            unpaid_items=Count(
+                'items',
+                filter=Q(items__is_paid=False)
+            )
+        )
+
+        serializer = OrderListSerializer(orders_with_unpaid_count, many=True)
+
+        return Response({
+            "orders": serializer.data,
+            "total_orders": pending_orders.count(),
+            "total_pending": str(total_pending),
+        })
+
+    @action(detail=False, methods=["get"])
     def stats(self, request):
         """Estadísticas de pedidos"""
         # Filtro de fecha - usar hora local (America/Bogota)
@@ -315,10 +351,10 @@ class OrderViewSet(viewsets.ModelViewSet):
     def _get_date_range(self, date_filter, start_date_param, end_date_param):
         """Helper para obtener rango de fechas"""
         from datetime import datetime as dt
-        
+
         # Obtener la fecha/hora local actual
         local_now = timezone.localtime()
-        
+
         # Si hay parámetros de fecha personalizados o el filtro es "custom", usarlos
         if (start_date_param and end_date_param) or date_filter == "custom":
             if start_date_param and end_date_param:
@@ -400,11 +436,11 @@ class OrderViewSet(viewsets.ModelViewSet):
         from django.db.models import F, Q
         from django.db.models.functions import Coalesce
         from datetime import datetime, timedelta
-        
+
         date_filter = request.query_params.get("date", "today")
         start_date_param = request.query_params.get("start_date")
         end_date_param = request.query_params.get("end_date")
-        
+
         start_date, end_date = self._get_date_range(
             date_filter, start_date_param, end_date_param)
 
@@ -418,7 +454,7 @@ class OrderViewSet(viewsets.ModelViewSet):
         ).filter(
             Q(payment_date__gte=start_date) & Q(payment_date__lte=end_date)
         )
-        
+
         # Agrupar por día usando la fecha de pago
         revenue_by_day = (
             paid_items
@@ -440,7 +476,7 @@ class OrderViewSet(viewsets.ModelViewSet):
         data = []
         current_date = start_date.date()
         end_date_only = end_date.date()
-        
+
         # Si el filtro es "today", forzar que end_date_only sea el día de hoy
         # Esto asegura que siempre incluya el día actual, incluso si hay problemas de zona horaria
         if date_filter == "today":
@@ -455,7 +491,7 @@ class OrderViewSet(viewsets.ModelViewSet):
                 "revenue": revenue_dict.get(date_str, 0.0),
             })
             current_date += timedelta(days=1)
-        
+
         # Verificación final: si el filtro es "today", asegurarse de que hoy esté en la lista
         if date_filter == "today":
             today_date = timezone.localtime().date()
@@ -479,7 +515,7 @@ class OrderViewSet(viewsets.ModelViewSet):
                 "calculated_end_date": end_date.isoformat(),
                 "end_date_only": end_date_only.isoformat(),
             }
-        
+
         return Response({
             "data": data,
             "start_date": start_date.isoformat(),
@@ -502,7 +538,7 @@ class OrderViewSet(viewsets.ModelViewSet):
         # Esto asegura que incluimos items pagados en el rango, independientemente de cuándo se creó el pedido
         from django.db.models import Q
         from django.db.models.functions import Coalesce
-        
+
         paid_items = OrderItem.objects.filter(
             is_paid=True
         ).exclude(order__status=Order.Status.CANCELLED).annotate(
