@@ -37,7 +37,7 @@ def get_motivational_phrase(request):
         # Crear el prompt para OpenAI
         prompt = f"""Hoy es {dia_semana} {dia_mes} de {mes} de {anio}.
 
-Genera una frase motivacional basada en la fecha actual elige una de las siguientes opciones aleatoriamente:
+Genera una frase basada en la fecha actual elige una de las siguientes opciones aleatoriamente:
 
 OPCIÓN 1 - Frase motivacional:
 Una frase inspiradora relacionada con el día de la semana, el inicio/mitad/fin de mes
@@ -53,7 +53,6 @@ REGLAS:
 - NO usar emojis
 - Tono casual pero profesional
 - Solo devuelve la frase o dato, sin comillas ni explicaciones adicionales
-- Asegúrate de que el dato histórico sea verídico
 - la respuesta debe estar en español
 """
 
@@ -62,7 +61,7 @@ REGLAS:
             model="gpt-4o-mini",
             messages=[
                 # {"role": "system", "content": "Eres un experto en dar datos curiosos e interesantes basados en la fecha actual y también un creador de frases motivacionales inspiradoras. Tus datos históricos son siempre precisos y verificables."},
-                {"role": "system", "content": "Eres un experto en motivar a las personas a ser mejores y a cumplir sus objetivos."},
+                {"role": "system", "content": "Eres un experto en motivar a las personas a ser mejores y a cumplir sus objetivos y en dar datos curiosos e interesantes basados en la fecha actual y en frases motivacionales inspiradoras."},
                 {"role": "user", "content": prompt}
             ],
             max_tokens=60,
