@@ -61,7 +61,8 @@ REGLAS:
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": "Eres un experto en dar datos curiosos e interesantes basados en la fecha actual y también un creador de frases motivacionales inspiradoras. Tus datos históricos son siempre precisos y verificables."},
+                # {"role": "system", "content": "Eres un experto en dar datos curiosos e interesantes basados en la fecha actual y también un creador de frases motivacionales inspiradoras. Tus datos históricos son siempre precisos y verificables."},
+                {"role": "system", "content": "Eres un experto en motivar a las personas a ser mejores y a cumplir sus objetivos."},
                 {"role": "user", "content": prompt}
             ],
             max_tokens=60,
