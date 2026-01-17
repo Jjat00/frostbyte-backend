@@ -6,7 +6,7 @@ import uuid
 
 class Table(models.Model):
     """Mesa física con QR fijo"""
-    
+
     table_number = models.IntegerField(
         unique=True,
         verbose_name="Número de mesa",
@@ -45,17 +45,17 @@ class Table(models.Model):
 class GameRoom(models.Model):
     """
     Sala de juego temporal asociada a una mesa con pedido activo.
-    
+
     NOTA: Actualmente solo soporta juegos CHILL (sin apuestas).
     Los campos de apuestas están preparados para futuros juegos donde
     el perdedor paga productos de Frostbyte como apuesta.
     """
-    
+
     class GameType(models.TextChoices):
         CHILL = "chill", "Chill (sin apuestas)"
         # Futuros tipos de juego con apuestas:
         # WAGER = "wager", "Con apuestas"
-    
+
     class Status(models.TextChoices):
         WAITING = "waiting", "Esperando jugadores"
         CONFIGURING = "configuring", "Configurando juego"
@@ -101,7 +101,7 @@ class GameRoom(models.Model):
         verbose_name="Pedido",
         help_text="Pedido activo asociado a esta sala",
     )
-    
+
     # Campos para apuestas (NULL para juegos CHILL)
     # Estos campos se usarán en futuros juegos donde el perdedor paga productos
     wager_product = models.ForeignKey(
@@ -204,9 +204,10 @@ class GameRoom(models.Model):
     def can_play(self):
         """Verifica si la sala puede iniciar el juego"""
         # Verificar que el pedido permita el juego (no entregado y pagado)
-        order_allows = not (self.order.status == self.order.Status.DELIVERED and self.order.is_paid)
+        order_allows = not (self.order.status ==
+                            self.order.Status.DELIVERED and self.order.is_paid)
         order_allows = order_allows and self.order.status != self.order.Status.CANCELLED
-        
+
         return (
             self.status in [self.Status.WAITING, self.Status.CONFIGURING]
             and self.participant_count >= 2
@@ -222,7 +223,7 @@ class GameRoom(models.Model):
 
 class GameParticipant(models.Model):
     """Participante en una sala de juego"""
-    
+
     # Relaciones
     room = models.ForeignKey(
         GameRoom,
@@ -264,7 +265,7 @@ class GameParticipant(models.Model):
 
 class GameRound(models.Model):
     """Ronda individual del juego"""
-    
+
     # Relaciones
     room = models.ForeignKey(
         GameRoom,
@@ -318,11 +319,11 @@ class GameRound(models.Model):
 class GameRoundResult(models.Model):
     """
     Resultado de un participante en una ronda.
-    
+
     NOTA: Para futuros juegos con apuestas, este modelo puede extenderse
     para rastrear quién perdió y debe pagar la apuesta (campo is_loser).
     """
-    
+
     # Relaciones
     round = models.ForeignKey(
         GameRound,
@@ -393,3 +394,69 @@ class GameRoundResult(models.Model):
         if self.did_not_tap:
             return "Sin respuesta"
         return f"{self.reaction_time_ms}ms"
+
+
+class GameUsage(models.Model):
+    """
+    Registro de uso de juegos por participante.
+
+    Este modelo registra cada vez que un participante completa un juego,
+    permitiendo rastrear cuántas veces cada persona ha jugado.
+    """
+
+    # Relaciones
+    room = models.ForeignKey(
+        GameRoom,
+        on_delete=models.CASCADE,
+        related_name="usage_records",
+        verbose_name="Sala de juego",
+        help_text="Sala de juego que se completó",
+    )
+    table = models.ForeignKey(
+        Table,
+        on_delete=models.CASCADE,
+        related_name="game_usages",
+        verbose_name="Mesa",
+        help_text="Mesa donde se jugó",
+    )
+
+    # Información del participante
+    player_name = models.CharField(
+        max_length=50,
+        verbose_name="Nombre del jugador",
+        help_text="Nombre que el jugador usó en este juego",
+    )
+    player_device_id = models.CharField(
+        max_length=200,
+        verbose_name="ID del dispositivo",
+        help_text="Identificador único del dispositivo del jugador",
+        db_index=True,  # Índice para búsquedas rápidas por dispositivo
+    )
+
+    # Información del juego completado
+    total_rounds = models.PositiveIntegerField(
+        verbose_name="Total de rondas",
+        help_text="Número de rondas que se jugaron en este juego",
+    )
+
+    # Timestamps
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+        verbose_name="Fecha de registro",
+        help_text="Momento en que se completó el juego",
+    )
+    game_finished_at = models.DateTimeField(
+        verbose_name="Juego finalizado",
+        help_text="Momento en que el juego terminó",
+    )
+
+    class Meta:
+        verbose_name = "Registro de uso de juego"
+        verbose_name_plural = "Registros de uso de juegos"
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["player_device_id", "-created_at"]),
+        ]
+
+    def __str__(self):
+        return f"{self.player_name} ({self.player_device_id[:8]}...) - {self.total_rounds} rondas - {self.created_at.strftime('%Y-%m-%d %H:%M')}"

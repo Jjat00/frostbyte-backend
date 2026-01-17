@@ -7,7 +7,7 @@ from django.shortcuts import get_object_or_404
 from django.db import transaction
 
 from apps.orders.models import Order
-from .models import Table, GameRoom, GameParticipant, GameRound, GameRoundResult
+from .models import Table, GameRoom, GameParticipant, GameRound, GameRoundResult, GameUsage
 from .consumers import broadcast_room_update
 from .serializers import (
     TableSerializer,
@@ -40,6 +40,44 @@ def order_allows_game(order):
         return False
     # En cualquier otro caso (PENDING, PREPARING, READY, o DELIVERED sin pagar), permite juego
     return True
+
+
+def register_game_usage(room):
+    """
+    Registra el uso del juego para todos los participantes cuando un juego termina.
+    
+    Esta función crea un registro GameUsage para cada participante que completó el juego.
+    Solo registra si el juego realmente se completó (estado FINISHED y tiene participantes).
+    """
+    if room.status != GameRoom.Status.FINISHED:
+        return
+    
+    # Obtener todos los participantes de la sala
+    participants = room.participants.all()
+    
+    # Solo registrar si hay participantes
+    if not participants.exists():
+        return
+    
+    # Crear un registro de uso para cada participante
+    usage_records = []
+    finished_at = room.finished_at or timezone.now()
+    
+    for participant in participants:
+        usage_records.append(
+            GameUsage(
+                room=room,
+                table=room.table,
+                player_name=participant.player_name,
+                player_device_id=participant.player_device_id,
+                total_rounds=room.total_rounds,
+                game_finished_at=finished_at,
+            )
+        )
+    
+    # Crear todos los registros en una sola operación para mejor rendimiento
+    if usage_records:
+        GameUsage.objects.bulk_create(usage_records)
 
 
 class TableViewSet(viewsets.ReadOnlyModelViewSet):
@@ -460,6 +498,11 @@ class GameRoomViewSet(viewsets.ModelViewSet):
                 room.status = GameRoom.Status.FINISHED
                 room.finished_at = timezone.now()
             room.save()
+            
+            # Registrar el uso del juego para todos los participantes
+            if room.status == GameRoom.Status.FINISHED:
+                register_game_usage(room)
+            
             broadcast_room_update(room.id)
 
         serializer_response = GameRoundResultSerializer(result)
@@ -587,14 +630,22 @@ class GameRoomViewSet(viewsets.ModelViewSet):
         """Terminar el juego y hacer que todos los participantes salgan de la sala"""
         room = self.get_object()
 
-        # Permitir terminar el juego en cualquier estado
+        # Registrar el uso del juego ANTES de eliminar participantes
+        # Solo registrar si el juego estaba en estado PLAYING (se completó)
+        if room.status == GameRoom.Status.PLAYING:
+            # Marcar como terminado primero para que register_game_usage funcione
+            room.status = GameRoom.Status.FINISHED
+            room.finished_at = timezone.now()
+            room.save()
+            register_game_usage(room)
+        else:
+            # Si no estaba jugando, solo marcar como terminado
+            room.status = GameRoom.Status.FINISHED
+            room.finished_at = timezone.now()
+            room.save()
+
         # Eliminar todos los participantes de la sala
         GameParticipant.objects.filter(room=room).delete()
-
-        # Marcar la sala como terminada
-        room.status = GameRoom.Status.FINISHED
-        room.finished_at = timezone.now()
-        room.save()
 
         # Notificar a todos los jugadores (aunque ya no estén en la sala, por si acaso)
         broadcast_room_update(room.id)
@@ -675,5 +726,79 @@ class GameRoomViewSet(viewsets.ModelViewSet):
                     "table_label": mesa_label,
                     "active_rooms_count": active_count
                 })
+
+        return Response(stats)
+
+    @action(detail=False, methods=["get"], url_path="usage-stats")
+    def usage_stats(self, request):
+        """
+        Estadísticas de uso de juegos por dispositivo.
+        
+        Permite consultar cuántas veces ha jugado un dispositivo específico.
+        Query params:
+        - player_device_id: ID del dispositivo (requerido)
+        """
+        player_device_id = request.query_params.get("player_device_id")
+        
+        if not player_device_id:
+            return Response(
+                {"error": "player_device_id es requerido"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Obtener todos los registros de uso para este dispositivo
+        usages = GameUsage.objects.filter(
+            player_device_id=player_device_id
+        ).order_by("-created_at")
+
+        # Estadísticas generales
+        total_games = usages.count()
+        
+        # Estadísticas por mesa
+        by_table = {}
+        for usage in usages:
+            table_num = usage.table.table_number
+            table_label = "Barra" if table_num == 0 else f"Mesa {table_num}"
+            if table_label not in by_table:
+                by_table[table_label] = {
+                    "table_number": table_num,
+                    "table_label": table_label,
+                    "count": 0
+                }
+            by_table[table_label]["count"] += 1
+
+        # Último juego
+        last_game = None
+        if usages.exists():
+            last_usage = usages.first()
+            last_game = {
+                "room_code": last_usage.room.room_code,
+                "table": last_usage.table.table_number,
+                "table_label": "Barra" if last_usage.table.table_number == 0 else f"Mesa {last_usage.table.table_number}",
+                "total_rounds": last_usage.total_rounds,
+                "finished_at": last_usage.game_finished_at.isoformat() if last_usage.game_finished_at else None,
+                "player_name": last_usage.player_name,
+            }
+
+        # Historial reciente (últimos 10 juegos)
+        recent_games = []
+        for usage in usages[:10]:
+            recent_games.append({
+                "room_code": usage.room.room_code,
+                "table": usage.table.table_number,
+                "table_label": "Barra" if usage.table.table_number == 0 else f"Mesa {usage.table.table_number}",
+                "total_rounds": usage.total_rounds,
+                "finished_at": usage.game_finished_at.isoformat() if usage.game_finished_at else None,
+                "player_name": usage.player_name,
+                "created_at": usage.created_at.isoformat(),
+            })
+
+        stats = {
+            "player_device_id": player_device_id,
+            "total_games_played": total_games,
+            "by_table": list(by_table.values()),
+            "last_game": last_game,
+            "recent_games": recent_games,
+        }
 
         return Response(stats)

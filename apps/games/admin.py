@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Table, GameRoom, GameParticipant, GameRound, GameRoundResult
+from .models import Table, GameRoom, GameParticipant, GameRound, GameRoundResult, GameUsage
 
 
 @admin.register(Table)
@@ -122,3 +122,41 @@ class GameRoundResultAdmin(admin.ModelAdmin):
             "fields": ("created_at",)
         }),
     )
+
+
+@admin.register(GameUsage)
+class GameUsageAdmin(admin.ModelAdmin):
+    list_display = [
+        "player_name",
+        "player_device_id_short",
+        "table",
+        "total_rounds",
+        "room",
+        "created_at",
+        "game_finished_at",
+    ]
+    list_filter = ["created_at", "table", "total_rounds"]
+    search_fields = [
+        "player_name",
+        "player_device_id",
+        "room__room_code",
+        "table__table_number",
+    ]
+    readonly_fields = ["created_at", "game_finished_at"]
+    fieldsets = (
+        ("Información del jugador", {
+            "fields": ("player_name", "player_device_id")
+        }),
+        ("Información del juego", {
+            "fields": ("room", "table", "total_rounds")
+        }),
+        ("Fechas", {
+            "fields": ("created_at", "game_finished_at")
+        }),
+    )
+    ordering = ["-created_at"]
+
+    def player_device_id_short(self, obj):
+        """Muestra solo los primeros 8 caracteres del device_id"""
+        return f"{obj.player_device_id[:8]}..." if len(obj.player_device_id) > 8 else obj.player_device_id
+    player_device_id_short.short_description = "ID Dispositivo"
