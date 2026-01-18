@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django.utils.html import format_html
 from django.db.models import Count
-from .models import Order, OrderItem, Table
+from .models import Order, OrderItem, Table, PageVisit
 
 
 class OrderItemInline(admin.TabularInline):
@@ -111,6 +111,28 @@ class TableAdmin(admin.ModelAdmin):
 
     fieldsets = (
         ("Información de Mesa", {"fields": ("table_number", "table_name", "is_active")}),
+        ("Estadísticas", {"fields": ("visit_count",)}),
+        ("Fechas", {"fields": ("created_at", "updated_at")}),
+    )
+
+
+@admin.register(PageVisit)
+class PageVisitAdmin(admin.ModelAdmin):
+    list_display = [
+        "path",
+        "page_name",
+        "visit_count",
+        "is_active",
+        "created_at",
+        "updated_at",
+    ]
+    list_filter = ["is_active", "created_at"]
+    search_fields = ["path", "page_name"]
+    readonly_fields = ["visit_count", "created_at", "updated_at"]
+    ordering = ["-visit_count"]
+
+    fieldsets = (
+        ("Información de Página", {"fields": ("path", "page_name", "is_active")}),
         ("Estadísticas", {"fields": ("visit_count",)}),
         ("Fechas", {"fields": ("created_at", "updated_at")}),
     )

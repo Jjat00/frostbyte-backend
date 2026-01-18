@@ -6,7 +6,7 @@ from django.db.models.functions import TruncDate
 from django.utils import timezone
 from datetime import timedelta
 
-from .models import Order, OrderItem, Table
+from .models import Order, OrderItem, Table, PageVisit
 from .serializers import (
     OrderListSerializer,
     OrderDetailSerializer,
@@ -753,4 +753,69 @@ class TableViewSet(viewsets.ViewSet):
         return Response({
             "tables": data,
             "total_visits": sum(t.visit_count for t in tables)
+        })
+
+
+class PageVisitViewSet(viewsets.ViewSet):
+    """ViewSet para tracking de visitas a páginas"""
+
+    # Mapeo de rutas a nombres descriptivos (solo rutas que existen)
+    PAGE_NAMES = {
+        "/": "Carta Pública",
+        "/game": "Juegos",
+    }
+
+    @action(detail=False, methods=["post"], url_path="register-visit")
+    def register_visit(self, request):
+        """Registra una visita a una página"""
+        path = request.data.get("path")
+
+        if not path:
+            return Response(
+                {"error": "path es requerido"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Normalizar la ruta (asegurar que empiece con /)
+        if not path.startswith("/"):
+            path = "/" + path
+
+        # Determinar el nombre de la página
+        page_name = self.PAGE_NAMES.get(path, f"Página {path}")
+
+        # Buscar o crear la página
+        page, created = PageVisit.objects.get_or_create(
+            path=path,
+            defaults={
+                "page_name": page_name,
+                "is_active": True
+            }
+        )
+
+        # Registrar la visita
+        page.register_visit()
+
+        return Response({
+            "path": page.path,
+            "page_name": page.page_name,
+            "visit_count": page.visit_count
+        })
+
+    @action(detail=False, methods=["get"], url_path="stats")
+    def stats(self, request):
+        """Obtiene estadísticas de visitas por página"""
+        pages = PageVisit.objects.filter(is_active=True).order_by("-visit_count")
+
+        data = [
+            {
+                "path": page.path,
+                "page_name": page.page_name,
+                "visit_count": page.visit_count
+            }
+            for page in pages
+        ]
+
+        return Response({
+            "pages": data,
+            "total_visits": sum(p.visit_count for p in pages)
         })

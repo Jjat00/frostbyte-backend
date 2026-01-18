@@ -391,3 +391,43 @@ def recalculate_order_totals_on_item_delete(sender, instance, **kwargs):
         order.update_payment_status()
     except Order.DoesNotExist:
         pass
+
+
+class PageVisit(models.Model):
+    """Registro de visitas a páginas específicas del sitio"""
+
+    path = models.CharField(
+        max_length=200,
+        unique=True,
+        verbose_name="Ruta",
+        help_text="Ruta de la página (ej: /, /menu, /contacto)"
+    )
+    page_name = models.CharField(
+        max_length=100,
+        verbose_name="Nombre",
+        help_text="Nombre descriptivo de la página"
+    )
+    visit_count = models.PositiveIntegerField(
+        default=0,
+        verbose_name="Visitas",
+        help_text="Cantidad de veces que se ha accedido a esta página"
+    )
+    is_active = models.BooleanField(
+        default=True,
+        verbose_name="Activa"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Visita de página"
+        verbose_name_plural = "Visitas de páginas"
+        ordering = ["-visit_count"]
+
+    def __str__(self):
+        return f"{self.page_name} ({self.path})"
+
+    def register_visit(self):
+        """Incrementa el contador de visitas"""
+        self.visit_count += 1
+        self.save(update_fields=["visit_count", "updated_at"])
