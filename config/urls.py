@@ -20,4 +20,6 @@ urlpatterns = [
     path('api/v1/', include('apps.games.urls')),
     # Motivational
     path('api/v1/motivational/', include('apps.motivational.urls')),
+    # Feedback
+    path('api/v1/', include('apps.feedback.urls')),
 ]

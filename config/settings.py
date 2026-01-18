@@ -60,6 +60,7 @@ INSTALLED_APPS = [
     'apps.music',
     'apps.games',
     'apps.motivational',
+    'apps.feedback',
 ]
 
 # Custom User Model
