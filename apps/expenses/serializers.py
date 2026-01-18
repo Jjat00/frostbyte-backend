@@ -1,0 +1,151 @@
+from rest_framework import serializers
+from .models import ExpenseCategory, OperationalExpense, RecurringExpenseTemplate
+
+
+class ExpenseCategorySerializer(serializers.ModelSerializer):
+    """Serializer para categorias de gastos"""
+    expenses_count = serializers.IntegerField(read_only=True)
+    total_amount = serializers.DecimalField(
+        max_digits=12, decimal_places=2, read_only=True
+    )
+
+    class Meta:
+        model = ExpenseCategory
+        fields = [
+            'id', 'name', 'slug', 'description', 'icon', 'color',
+            'is_recurring_default', 'is_active', 'display_order',
+            'expenses_count', 'total_amount', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['slug', 'created_at', 'updated_at']
+
+
+class OperationalExpenseListSerializer(serializers.ModelSerializer):
+    """Serializer para listado de gastos"""
+    category_name = serializers.CharField(source='category.name', read_only=True)
+    category_icon = serializers.CharField(source='category.icon', read_only=True)
+    category_color = serializers.CharField(source='category.color', read_only=True)
+    category_slug = serializers.CharField(source='category.slug', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    payment_method_display = serializers.CharField(
+        source='get_payment_method_display', read_only=True
+    )
+    created_by_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = OperationalExpense
+        fields = [
+            'id', 'expense_number', 'category', 'category_name',
+            'category_icon', 'category_color', 'category_slug',
+            'description', 'amount', 'expense_date', 'status',
+            'status_display', 'payment_method', 'payment_method_display',
+            'is_recurring', 'created_by_name', 'created_at'
+        ]
+
+    def get_created_by_name(self, obj):
+        if obj.created_by:
+            return obj.created_by.get_full_name() or obj.created_by.username
+        return None
+
+
+class OperationalExpenseDetailSerializer(serializers.ModelSerializer):
+    """Serializer para detalle de gasto"""
+    category = ExpenseCategorySerializer(read_only=True)
+    category_id = serializers.PrimaryKeyRelatedField(
+        queryset=ExpenseCategory.objects.filter(is_active=True),
+        source='category',
+        write_only=True
+    )
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    payment_method_display = serializers.CharField(
+        source='get_payment_method_display', read_only=True
+    )
+    recurrence_period_display = serializers.CharField(
+        source='get_recurrence_period_display', read_only=True
+    )
+    created_by_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = OperationalExpense
+        fields = '__all__'
+        read_only_fields = ['expense_number', 'created_by', 'created_at', 'updated_at']
+
+    def get_created_by_name(self, obj):
+        if obj.created_by:
+            return obj.created_by.get_full_name() or obj.created_by.username
+        return None
+
+
+class OperationalExpenseCreateSerializer(serializers.ModelSerializer):
+    """Serializer para crear gastos"""
+    category_id = serializers.PrimaryKeyRelatedField(
+        queryset=ExpenseCategory.objects.filter(is_active=True),
+        source='category'
+    )
+    payment_method = serializers.ChoiceField(
+        choices=OperationalExpense.PaymentMethod.choices,
+        required=False,
+        allow_blank=True
+    )
+    reference_number = serializers.CharField(required=False, allow_blank=True)
+    receipt_url = serializers.URLField(required=False, allow_blank=True)
+    notes = serializers.CharField(required=False, allow_blank=True)
+    recurrence_period = serializers.ChoiceField(
+        choices=OperationalExpense.RecurrencePeriod.choices,
+        required=False
+    )
+
+    class Meta:
+        model = OperationalExpense
+        fields = [
+            'category_id', 'description', 'amount', 'expense_date',
+            'status', 'payment_method', 'reference_number', 'receipt_url',
+            'notes', 'is_recurring', 'recurrence_period'
+        ]
+
+    def create(self, validated_data):
+        request = self.context.get('request')
+        if request and request.user.is_authenticated:
+            validated_data['created_by'] = request.user
+        return super().create(validated_data)
+
+
+class RecurringExpenseTemplateSerializer(serializers.ModelSerializer):
+    """Serializer para plantillas de gastos recurrentes"""
+    category_name = serializers.CharField(source='category.name', read_only=True)
+    category_icon = serializers.CharField(source='category.icon', read_only=True)
+    category_color = serializers.CharField(source='category.color', read_only=True)
+    recurrence_type_display = serializers.CharField(
+        source='get_recurrence_type_display', read_only=True
+    )
+    created_by_name = serializers.SerializerMethodField()
+    category_id = serializers.PrimaryKeyRelatedField(
+        queryset=ExpenseCategory.objects.filter(is_active=True),
+        source='category',
+        write_only=True,
+        required=False
+    )
+
+    class Meta:
+        model = RecurringExpenseTemplate
+        fields = '__all__'
+        read_only_fields = ['created_by', 'last_generated_at', 'created_at', 'updated_at']
+
+    def get_created_by_name(self, obj):
+        if obj.created_by:
+            return obj.created_by.get_full_name() or obj.created_by.username
+        return None
+
+    def create(self, validated_data):
+        request = self.context.get('request')
+        if request and request.user.is_authenticated:
+            validated_data['created_by'] = request.user
+        return super().create(validated_data)
+
+
+class MarkExpensePaidSerializer(serializers.Serializer):
+    """Serializer para marcar gasto como pagado"""
+    payment_method = serializers.ChoiceField(
+        choices=OperationalExpense.PaymentMethod.choices,
+        required=False,
+        allow_blank=True
+    )

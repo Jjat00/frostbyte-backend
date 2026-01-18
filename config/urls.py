@@ -22,4 +22,6 @@ urlpatterns = [
     path('api/v1/motivational/', include('apps.motivational.urls')),
     # Feedback
     path('api/v1/', include('apps.feedback.urls')),
+    # Expenses
+    path('api/v1/expenses/', include('apps.expenses.urls')),
 ]
