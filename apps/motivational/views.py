@@ -34,17 +34,33 @@ def get_motivational_phrase(request):
         mes = fecha_actual.strftime("%B")
         anio = fecha_actual.year
 
-        # Obtener productos activos
-        active_products = Product.objects.filter(is_active=True).values_list(
-            "name", flat=True
+        # Obtener productos activos agrupados por categoría
+        active_products = Product.objects.filter(
+            is_active=True, category__is_active=True
+        ).select_related("category").order_by("category__display_order", "name")
+
+        # Agrupar productos por categoría
+        products_by_category = {}
+        for product in active_products:
+            category_name = product.category.name
+            if category_name not in products_by_category:
+                products_by_category[category_name] = []
+            products_by_category[category_name].append(product.name)
+
+        # Formatear productos por categoría para el prompt
+        products_formatted = "\n".join(
+            f"- {category}: {', '.join(products)}"
+            for category, products in products_by_category.items()
         )
-        products_list = list(active_products)
+
+        print("♥️♥️♥️| PRODUCTOS POR CATEGORÍA: ", products_formatted)
 
         print("😕😕", dia_semana, dia_mes, mes, anio)
         # Crear el prompt para OpenAI
         prompt = f"""Hoy es {dia_semana} {dia_mes} de {mes} de {anio}.
-        
-        Productos activos de Frostbyte: {", ".join(products_list)}
+
+        Productos activos de Frostbyte por categoría:
+{products_formatted}
         Crea una frase motivacional o dato curioso histórico basada en la fecha actual
         y invita a consumir uno de los productos activos de Frostbyte.
         La frase debe ser breve y motivadora.
