@@ -67,14 +67,14 @@ class RawMaterial(models.Model):
     @property
     def is_low_stock(self):
         """Verifica si el stock está por debajo del mínimo"""
-        return self.current_stock <= self.minimum_stock
+        return self.current_stock < self.minimum_stock
 
     @property
     def stock_status(self):
         """Retorna el estado del stock"""
         if self.current_stock <= 0:
             return "sin_stock"
-        elif self.current_stock <= self.minimum_stock:
+        elif self.current_stock < self.minimum_stock:
             return "bajo"
         return "normal"
 
