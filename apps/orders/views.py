@@ -274,20 +274,21 @@ class OrderViewSet(viewsets.ModelViewSet):
         start_date, end_date = self._get_date_range(
             date_filter, start_date_param, end_date_param)
 
-        # Filtrar pedidos por el rango de fechas
+        # Filtrar pedidos por el rango de fechas (para conteo de pedidos y estados)
         orders = Order.objects.filter(
             created_at__gte=start_date, created_at__lte=end_date)
-        order_ids = orders.values_list('id', flat=True)
 
         total_orders = orders.count()
 
-        # Items pagados de pedidos en el período (excluyendo cancelados)
+        # Items pagados en el período por fecha de pago (igual que analytics)
+        # Esto asegura consistencia con el dashboard financiero
         paid_items = OrderItem.objects.filter(
-            order_id__in=order_ids,
-            is_paid=True
+            is_paid=True,
+            paid_at__gte=start_date,
+            paid_at__lte=end_date
         ).exclude(order__status=Order.Status.CANCELLED)
 
-        # Total de ingresos = suma de items pagados
+        # Total de ingresos = suma de items pagados en el período
         total_revenue = paid_items.aggregate(
             total=Sum("subtotal"))["total"] or 0
 
@@ -320,7 +321,8 @@ class OrderViewSet(viewsets.ModelViewSet):
         delivered_count = orders.filter(status=Order.Status.DELIVERED).count()
         cancelled_count = orders.filter(status=Order.Status.CANCELLED).count()
 
-        # Total pendiente = suma de items NO pagados (excluyendo cancelados)
+        # Total pendiente = suma de items NO pagados de pedidos del período
+        order_ids = orders.values_list('id', flat=True)
         unpaid_items = OrderItem.objects.filter(
             order_id__in=order_ids,
             is_paid=False
@@ -354,21 +356,25 @@ class OrderViewSet(viewsets.ModelViewSet):
     def _get_date_range(self, date_filter, start_date_param, end_date_param):
         """Helper para obtener rango de fechas"""
         from datetime import datetime as dt, time
+        import zoneinfo
 
-        # Obtener la fecha/hora local actual
-        local_now = timezone.localtime()
+        # Usar la zona horaria de Colombia explícitamente
+        tz = zoneinfo.ZoneInfo('America/Bogota')
+
+        # Obtener la fecha/hora local actual en la zona horaria de Colombia
+        local_now = timezone.localtime(timezone=tz)
 
         # Si hay parámetros de fecha personalizados o el filtro es "custom", usarlos
         if (start_date_param and end_date_param) or date_filter == "custom":
             if start_date_param and end_date_param:
                 try:
-                    # Parsear las fechas y convertirlas a timezone-aware
-                    start_date = timezone.make_aware(
-                        dt.strptime(start_date_param, "%Y-%m-%d")
-                    ).replace(hour=0, minute=0, second=0, microsecond=0)
-                    end_date = timezone.make_aware(
-                        dt.strptime(end_date_param, "%Y-%m-%d")
-                    ).replace(hour=23, minute=59, second=59, microsecond=999999)
+                    # Parsear las fechas y convertirlas a timezone-aware en zona horaria de Colombia
+                    start_date = dt.strptime(start_date_param, "%Y-%m-%d").replace(
+                        hour=0, minute=0, second=0, microsecond=0, tzinfo=tz
+                    )
+                    end_date = dt.strptime(end_date_param, "%Y-%m-%d").replace(
+                        hour=23, minute=59, second=59, microsecond=999999, tzinfo=tz
+                    )
                     return start_date, end_date
                 except (ValueError, TypeError):
                     # Si hay error, usar hoy como fallback
@@ -379,19 +385,12 @@ class OrderViewSet(viewsets.ModelViewSet):
                     return start_date, end_date
         elif date_filter == "today":
             # Para "today", usar la fecha de hoy desde las 00:00 hasta las 23:59:59
-            # Asegurarse de usar la fecha actual, no la hora actual
-            # timezone.localtime() ya devuelve la fecha/hora en la zona horaria configurada (America/Bogota)
-            # Obtener la fecha de hoy explícitamente
+            # Usar la zona horaria de Colombia explícitamente
             today_date = local_now.date()
-            # Crear start_date y end_date usando la fecha de hoy
-            today_start = timezone.make_aware(
-                dt.combine(today_date, time.min)
-            )
-            # Usar 23:59:59.999999 en lugar de dt.max.time() para evitar problemas
+            # Crear start_date y end_date usando la fecha de hoy con zona horaria explícita
+            today_start = dt.combine(today_date, time.min).replace(tzinfo=tz)
             max_time = time(23, 59, 59, 999999)
-            today_end = timezone.make_aware(
-                dt.combine(today_date, max_time)
-            )
+            today_end = dt.combine(today_date, max_time).replace(tzinfo=tz)
             return today_start, today_end
         elif date_filter == "yesterday":
             yesterday = local_now - timedelta(days=1)
@@ -436,9 +435,8 @@ class OrderViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=["get"])
     def revenue_by_day(self, request):
         """Ingresos por día para gráfica de línea"""
-        from django.db.models import F, Q
-        from django.db.models.functions import Coalesce
         from datetime import datetime, timedelta
+        import zoneinfo
 
         date_filter = request.query_params.get("date", "today")
         start_date_param = request.query_params.get("start_date")
@@ -447,22 +445,22 @@ class OrderViewSet(viewsets.ModelViewSet):
         start_date, end_date = self._get_date_range(
             date_filter, start_date_param, end_date_param)
 
-        # Obtener items pagados en el rango de fechas (excluyendo cancelados)
-        # Filtrar por la fecha de pago (paid_at si existe, sino order.created_at)
-        # Esto asegura que incluimos items pagados en el rango, independientemente de cuándo se creó el pedido
+        # Obtener items pagados en el rango de fechas por paid_at (igual que analytics)
+        # Esto asegura consistencia con el dashboard financiero
         paid_items = OrderItem.objects.filter(
-            is_paid=True
-        ).exclude(order__status=Order.Status.CANCELLED).annotate(
-            payment_date=Coalesce('paid_at', 'order__created_at')
-        ).filter(
-            Q(payment_date__gte=start_date) & Q(payment_date__lte=end_date)
-        )
+            is_paid=True,
+            paid_at__gte=start_date,
+            paid_at__lte=end_date
+        ).exclude(order__status=Order.Status.CANCELLED)
 
-        # Agrupar por día usando la fecha de pago
+        # Obtener la zona horaria configurada
+        tz = zoneinfo.ZoneInfo('America/Bogota')
+
+        # Agrupar por día usando la fecha de pago en la zona horaria correcta
         revenue_by_day = (
             paid_items
             .annotate(
-                date=TruncDate('payment_date')
+                date=TruncDate('paid_at', tzinfo=tz)
             )
             .values('date')
             .annotate(revenue=Sum('subtotal'))
@@ -536,19 +534,13 @@ class OrderViewSet(viewsets.ModelViewSet):
         start_date, end_date = self._get_date_range(
             date_filter, start_date_param, end_date_param)
 
-        # Obtener items pagados en el rango de fechas (excluyendo cancelados)
-        # Filtrar por la fecha de pago (paid_at si existe, sino order.created_at)
-        # Esto asegura que incluimos items pagados en el rango, independientemente de cuándo se creó el pedido
-        from django.db.models import Q
-        from django.db.models.functions import Coalesce
-
+        # Obtener items pagados en el rango de fechas por paid_at (igual que analytics)
+        # Esto asegura consistencia con el dashboard financiero
         paid_items = OrderItem.objects.filter(
-            is_paid=True
-        ).exclude(order__status=Order.Status.CANCELLED).annotate(
-            payment_date=Coalesce('paid_at', 'order__created_at')
-        ).filter(
-            Q(payment_date__gte=start_date) & Q(payment_date__lte=end_date)
-        )
+            is_paid=True,
+            paid_at__gte=start_date,
+            paid_at__lte=end_date
+        ).exclude(order__status=Order.Status.CANCELLED)
 
         # Agrupar por producto y variante
         product_stats = (
