@@ -64,7 +64,7 @@ class RawMaterialViewSet(viewsets.ModelViewSet):
         """Obtener materia prima con stock bajo o sin stock"""
         low_stock_items = RawMaterial.objects.filter(
             is_active=True,
-            current_stock__lte=F("minimum_stock"),
+            current_stock__lt=F("minimum_stock"),
         ).select_related("unit").order_by("current_stock")
 
         serializer = RawMaterialListSerializer(low_stock_items, many=True)
@@ -155,7 +155,7 @@ class RawMaterialViewSet(viewsets.ModelViewSet):
         total_materials = RawMaterial.objects.filter(is_active=True).count()
         low_stock = RawMaterial.objects.filter(
             is_active=True,
-            current_stock__lte=F("minimum_stock"),
+            current_stock__lt=F("minimum_stock"),
         ).count()
         zero_stock = RawMaterial.objects.filter(
             is_active=True,
@@ -307,7 +307,7 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
         """Generar orden de compra automáticamente desde items con stock bajo"""
         low_stock_items = RawMaterial.objects.filter(
             is_active=True,
-            current_stock__lte=F("minimum_stock"),
+            current_stock__lt=F("minimum_stock"),
         )
 
         if not low_stock_items.exists():
