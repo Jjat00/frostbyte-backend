@@ -74,6 +74,14 @@ class OperationalExpenseDetailSerializer(serializers.ModelSerializer):
             return obj.created_by.get_full_name() or obj.created_by.username
         return None
 
+    def update(self, instance, validated_data):
+        from django.utils import timezone
+        # Si se cambia el estado a 'paid' y no tenía paid_at, establecerlo
+        new_status = validated_data.get('status')
+        if new_status == OperationalExpense.Status.PAID and not instance.paid_at:
+            validated_data['paid_at'] = timezone.now()
+        return super().update(instance, validated_data)
+
 
 class OperationalExpenseCreateSerializer(serializers.ModelSerializer):
     """Serializer para crear gastos"""
@@ -103,9 +111,13 @@ class OperationalExpenseCreateSerializer(serializers.ModelSerializer):
         ]
 
     def create(self, validated_data):
+        from django.utils import timezone
         request = self.context.get('request')
         if request and request.user.is_authenticated:
             validated_data['created_by'] = request.user
+        # Si se crea con estado 'paid', establecer paid_at automáticamente
+        if validated_data.get('status') == OperationalExpense.Status.PAID:
+            validated_data['paid_at'] = timezone.now()
         return super().create(validated_data)
 
 

@@ -353,7 +353,7 @@ class OrderViewSet(viewsets.ModelViewSet):
 
     def _get_date_range(self, date_filter, start_date_param, end_date_param):
         """Helper para obtener rango de fechas"""
-        from datetime import datetime as dt
+        from datetime import datetime as dt, time
 
         # Obtener la fecha/hora local actual
         local_now = timezone.localtime()
@@ -385,10 +385,10 @@ class OrderViewSet(viewsets.ModelViewSet):
             today_date = local_now.date()
             # Crear start_date y end_date usando la fecha de hoy
             today_start = timezone.make_aware(
-                dt.combine(today_date, dt.min.time())
+                dt.combine(today_date, time.min)
             )
             # Usar 23:59:59.999999 en lugar de dt.max.time() para evitar problemas
-            max_time = dt.time(23, 59, 59, 999999)
+            max_time = time(23, 59, 59, 999999)
             today_end = timezone.make_aware(
                 dt.combine(today_date, max_time)
             )

@@ -24,4 +24,6 @@ urlpatterns = [
     path('api/v1/', include('apps.feedback.urls')),
     # Expenses
     path('api/v1/expenses/', include('apps.expenses.urls')),
+    # Analytics
+    path('api/v1/analytics/', include('apps.analytics.urls')),
 ]
