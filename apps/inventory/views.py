@@ -330,7 +330,7 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["post"])
     def mark_purchased(self, request, pk=None):
-        """Marcar la orden como comprada y actualizar stock"""
+        """Marcar la orden como comprada y actualizar stock de todos los items"""
         order = self.get_object()
 
         if order.status == PurchaseOrder.Status.PURCHASED:
@@ -339,9 +339,24 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # Marcar todos los items como comprados
+        for item in order.items.all():
+            if not item.is_purchased:
+                # Usar cantidad y precio estimados si no hay valores reales
+                quantity = item.quantity_purchased or item.quantity_needed
+                price = item.actual_unit_price or item.estimated_unit_price
+                supplier = item.supplier or item.raw_material.supplier or ""
+                
+                item.mark_as_purchased(
+                    quantity=quantity,
+                    price=price,
+                    supplier=supplier
+                )
+
         order.status = PurchaseOrder.Status.PURCHASED
         order.purchased_at = timezone.now()
         order.save()
+        order.calculate_totals()
 
         serializer = PurchaseOrderSerializer(order)
         return Response(serializer.data)
