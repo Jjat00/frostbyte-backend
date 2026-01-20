@@ -68,11 +68,13 @@ class FinancialAnalyticsViewSet(viewsets.ViewSet):
         return paid_items.aggregate(total=Sum('subtotal'))['total'] or 0
 
     def _calculate_inventory_expenses(self, start_date, end_date):
-        """Calcula gastos de inventario (ordenes de compra completadas)"""
+        """Calcula gastos de inventario (ordenes de compra completadas).
+        Usa created_at para determinar el período del gasto.
+        """
         purchases = PurchaseOrder.objects.filter(
             status=PurchaseOrder.Status.PURCHASED,
-            purchased_at__gte=start_date,
-            purchased_at__lte=end_date
+            created_at__gte=start_date,
+            created_at__lte=end_date
         )
         return purchases.aggregate(total=Sum('actual_total'))['total'] or 0
 
@@ -249,8 +251,8 @@ class FinancialAnalyticsViewSet(viewsets.ViewSet):
                 'total': float(inventory_total),
                 'count': PurchaseOrder.objects.filter(
                     status=PurchaseOrder.Status.PURCHASED,
-                    purchased_at__gte=current_start,
-                    purchased_at__lte=current_end
+                    created_at__gte=current_start,
+                    created_at__lte=current_end
                 ).count(),
                 'type': 'inventory'
             })

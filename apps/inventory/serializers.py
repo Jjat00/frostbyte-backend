@@ -189,6 +189,9 @@ class PurchaseOrderSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "order_number", "estimated_total", "actual_total", "created_at"]
 
     def get_items_count(self, obj):
+        # Usa el annotate si está disponible, sino cuenta manualmente
+        if hasattr(obj, '_items_count'):
+            return obj._items_count
         return obj.items.count()
 
 

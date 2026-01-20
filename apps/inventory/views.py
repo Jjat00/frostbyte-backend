@@ -1,7 +1,8 @@
 from rest_framework import viewsets, filters, status, permissions
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from django.db.models import Sum, F
+from rest_framework.pagination import PageNumberPagination
+from django.db.models import Sum, F, Count, Prefetch
 from django.utils import timezone
 from decimal import Decimal
 
@@ -246,12 +247,28 @@ class RecipeViewSet(viewsets.ModelViewSet):
         )
 
 
+class PurchaseOrderPagination(PageNumberPagination):
+    """Paginación para órdenes de compra"""
+    page_size = 20
+    page_size_query_param = 'page_size'
+    max_page_size = 100
+
+
 class PurchaseOrderViewSet(viewsets.ModelViewSet):
     """ViewSet para órdenes de compra"""
 
     queryset = PurchaseOrder.objects.prefetch_related(
-        "items", "items__raw_material").select_related("created_by")
+        Prefetch(
+            "items",
+            queryset=PurchaseOrderItem.objects.select_related(
+                "raw_material", "raw_material__unit"
+            )
+        )
+    ).select_related("created_by").annotate(
+        _items_count=Count("items")
+    )
     permission_classes = [IsAdminUser]
+    pagination_class = PurchaseOrderPagination
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["order_number", "notes"]
     ordering = ["-created_at"]
