@@ -2,6 +2,7 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny, IsAuthenticated
+from apps.accounts.permissions import IsAdminUser
 from django.db.models import Avg
 
 from .models import Feedback
@@ -37,10 +38,13 @@ class FeedbackViewSet(viewsets.ModelViewSet):
         """
         Permisos personalizados:
         - Cualquiera puede crear feedback
-        - Solo autenticados pueden listar/ver/actualizar/eliminar
+        - Solo autenticados pueden listar/ver/actualizar
+        - Solo admin puede eliminar
         """
         if self.action == "create":
             return [AllowAny()]
+        if self.action == "destroy":
+            return [IsAdminUser()]
         return [IsAuthenticated()]
 
     def get_queryset(self):

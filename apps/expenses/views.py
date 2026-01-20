@@ -1,7 +1,7 @@
 from rest_framework import viewsets, filters, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
+from apps.accounts.permissions import IsAdminUser
 from django.db.models import Sum, Count, Q
 from django.utils import timezone
 from datetime import timedelta
@@ -21,7 +21,7 @@ class ExpenseCategoryViewSet(viewsets.ModelViewSet):
     """ViewSet para categorias de gastos"""
     queryset = ExpenseCategory.objects.filter(is_active=True)
     serializer_class = ExpenseCategorySerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAdminUser]
     lookup_field = 'slug'
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ['name', 'description']
@@ -49,7 +49,7 @@ class ExpenseCategoryViewSet(viewsets.ModelViewSet):
 class OperationalExpenseViewSet(viewsets.ModelViewSet):
     """ViewSet para gastos operativos"""
     queryset = OperationalExpense.objects.select_related('category', 'created_by')
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAdminUser]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ['expense_number', 'description', 'reference_number']
     ordering = ['-expense_date', '-created_at']
@@ -224,7 +224,7 @@ class RecurringExpenseTemplateViewSet(viewsets.ModelViewSet):
     """ViewSet para plantillas de gastos recurrentes"""
     queryset = RecurringExpenseTemplate.objects.select_related('category', 'created_by')
     serializer_class = RecurringExpenseTemplateSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAdminUser]
 
     def get_queryset(self):
         queryset = super().get_queryset()

@@ -1,6 +1,8 @@
 from rest_framework import viewsets, filters, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated, AllowAny
+from apps.accounts.permissions import IsAdminUser
 from django.db.models import Sum, Count
 from django.db.models.functions import TruncDate
 from django.utils import timezone
@@ -32,6 +34,7 @@ class OrderViewSet(viewsets.ModelViewSet):
 
     queryset = Order.objects.prefetch_related(
         "items", "items__product_variant__product")
+    permission_classes = [IsAuthenticated]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["order_number", "customer_name", "customer_phone"]
     ordering_fields = ["created_at", "total", "status"]
@@ -599,6 +602,7 @@ class OrderItemViewSet(viewsets.ModelViewSet):
         "order", "product_variant", "product_variant__product"
     )
     serializer_class = OrderItemSerializer
+    permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -697,6 +701,7 @@ class OrderItemViewSet(viewsets.ModelViewSet):
 
 class TableViewSet(viewsets.ViewSet):
     """ViewSet para tracking de visitas a mesas"""
+    permission_classes = [AllowAny]
 
     @action(detail=False, methods=["post"], url_path="register-visit")
     def register_visit(self, request):
@@ -736,7 +741,7 @@ class TableViewSet(viewsets.ViewSet):
             "visit_count": table.visit_count
         })
 
-    @action(detail=False, methods=["get"], url_path="stats")
+    @action(detail=False, methods=["get"], url_path="stats", permission_classes=[IsAdminUser])
     def stats(self, request):
         """Obtiene estadísticas de visitas por mesa"""
         tables = Table.objects.filter(is_active=True).order_by("-visit_count")
@@ -758,6 +763,7 @@ class TableViewSet(viewsets.ViewSet):
 
 class PageVisitViewSet(viewsets.ViewSet):
     """ViewSet para tracking de visitas a páginas"""
+    permission_classes = [AllowAny]
 
     # Mapeo de rutas a nombres descriptivos (solo rutas que existen)
     PAGE_NAMES = {
@@ -801,7 +807,7 @@ class PageVisitViewSet(viewsets.ViewSet):
             "visit_count": page.visit_count
         })
 
-    @action(detail=False, methods=["get"], url_path="stats")
+    @action(detail=False, methods=["get"], url_path="stats", permission_classes=[IsAdminUser])
     def stats(self, request):
         """Obtiene estadísticas de visitas por página"""
         pages = PageVisit.objects.filter(is_active=True).order_by("-visit_count")

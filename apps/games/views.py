@@ -2,11 +2,13 @@ import random
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from rest_framework.permissions import AllowAny
 from django.utils import timezone
 from django.shortcuts import get_object_or_404
 from django.db import transaction
 
 from apps.orders.models import Order
+from apps.accounts.permissions import IsEmployeeOrAdmin
 from .models import Table, GameRoom, GameParticipant, GameRound, GameRoundResult, GameUsage
 from .consumers import broadcast_room_update
 from .serializers import (
@@ -81,18 +83,39 @@ def register_game_usage(room):
 
 
 class TableViewSet(viewsets.ReadOnlyModelViewSet):
-    """ViewSet para mesas (solo lectura)"""
+    """ViewSet para mesas (solo lectura) - Público"""
 
     queryset = Table.objects.all()
     serializer_class = TableSerializer
+    permission_classes = [AllowAny]
 
 
 class GameRoomViewSet(viewsets.ModelViewSet):
-    """ViewSet para salas de juego"""
+    """
+    ViewSet para salas de juego.
+    
+    Público para jugadores:
+    - create_from_qr, join, status, configure, start, signal_round, 
+      submit_result, disqualify_participant, leave, rematch, terminate
+    
+    Solo admin:
+    - list, clean_table, admin_stats
+    """
 
     queryset = GameRoom.objects.select_related("table", "order").prefetch_related(
         "participants", "rounds", "rounds__results", "rounds__results__participant"
     )
+    permission_classes = [AllowAny]  # Default para jugadores, acciones admin tienen su propio permiso
+
+    def get_permissions(self):
+        """
+        Permisos por acción:
+        - Staff (empleados y admin): list, clean_table, admin_stats
+        - Público: todo lo demás (jugadores)
+        """
+        if self.action in ["list", "clean_table", "admin_stats"]:
+            return [IsEmployeeOrAdmin()]
+        return [AllowAny()]
 
     def get_serializer_class(self):
         if self.action == "list":

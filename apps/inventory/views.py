@@ -6,7 +6,7 @@ from django.utils import timezone
 from decimal import Decimal
 
 from apps.products.models import ProductVariant
-from apps.accounts.views import IsAdminUser
+from apps.accounts.permissions import IsAdminUser
 from .models import UnitOfMeasure, RawMaterial, Recipe, PurchaseOrder, PurchaseOrderItem
 from .serializers import (
     UnitOfMeasureSerializer,
@@ -21,19 +21,12 @@ from .serializers import (
 )
 
 
-class IsAuthenticated(permissions.BasePermission):
-    """Permiso que requiere autenticación"""
-
-    def has_permission(self, request, view):
-        return request.user.is_authenticated
-
-
 class UnitOfMeasureViewSet(viewsets.ModelViewSet):
     """ViewSet para unidades de medida"""
 
     queryset = UnitOfMeasure.objects.all()
     serializer_class = UnitOfMeasureSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAdminUser]
     pagination_class = None  # Deshabilitamos paginación para obtener todas las unidades
     filter_backends = [filters.SearchFilter]
     search_fields = ["name", "abbreviation"]
@@ -52,7 +45,7 @@ class RawMaterialViewSet(viewsets.ModelViewSet):
 
     queryset = RawMaterial.objects.filter(
         is_active=True).select_related("unit")
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAdminUser]
     pagination_class = None  # Deshabilitamos paginación para obtener todos los materiales
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["name", "supplier"]
@@ -190,7 +183,7 @@ class RecipeViewSet(viewsets.ModelViewSet):
         "raw_material__unit",
     )
     serializer_class = RecipeSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAdminUser]
     filter_backends = [filters.SearchFilter]
     search_fields = [
         "product_variant__product__name",
@@ -258,7 +251,7 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
 
     queryset = PurchaseOrder.objects.prefetch_related(
         "items", "items__raw_material").select_related("created_by")
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAdminUser]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["order_number", "notes"]
     ordering = ["-created_at"]

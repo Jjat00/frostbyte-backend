@@ -2,6 +2,7 @@ from rest_framework import viewsets, filters, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
+from apps.accounts.permissions import IsAdminOrReadOnly
 from .models import Category, Product, ProductVariant
 from .serializers import (
     CategorySerializer,
@@ -27,6 +28,7 @@ class CategoryViewSet(viewsets.ModelViewSet):
     """
 
     queryset = Category.objects.all()
+    permission_classes = [IsAdminOrReadOnly]
     lookup_field = "slug"
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["name", "description"]
@@ -69,6 +71,7 @@ class ProductViewSet(viewsets.ModelViewSet):
 
     queryset = Product.objects.all().select_related(
         "category").prefetch_related("variants")
+    permission_classes = [IsAdminOrReadOnly]
     lookup_field = "slug"
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["name", "description"]
@@ -133,6 +136,7 @@ class ProductVariantViewSet(viewsets.ModelViewSet):
 
     queryset = ProductVariant.objects.all().select_related("product", "product__category")
     serializer_class = ProductVariantSerializer
+    permission_classes = [IsAdminOrReadOnly]
     filter_backends = [filters.SearchFilter]
     search_fields = ["name", "sku", "product__name"]
 
