@@ -377,6 +377,39 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
 
         return Response({"message": "Orden cancelada"})
 
+    @action(detail=True, methods=["post"])
+    def revert_to_pending(self, request, pk=None):
+        """Revertir orden a pendiente y desmarcar todos los items como comprados"""
+        order = self.get_object()
+
+        if order.status != PurchaseOrder.Status.PURCHASED:
+            return Response(
+                {"error": "Solo se pueden revertir órdenes completadas"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Revertir cada item comprado
+        for item in order.items.filter(is_purchased=True):
+            # Revertir el stock
+            if item.quantity_purchased:
+                item.raw_material.current_stock -= item.quantity_purchased
+                if item.raw_material.current_stock < 0:
+                    item.raw_material.current_stock = Decimal("0")
+                item.raw_material.save()
+
+            # Marcar item como no comprado (mantener valores para referencia)
+            item.is_purchased = False
+            item.save()
+
+        # Cambiar estado de la orden
+        order.status = PurchaseOrder.Status.PENDING
+        order.purchased_at = None
+        order.save()
+        order.calculate_totals()
+
+        serializer = PurchaseOrderSerializer(order)
+        return Response(serializer.data)
+
     @action(detail=True, methods=["post"], url_path="items/(?P<item_id>[^/.]+)/purchase")
     def purchase_item(self, request, pk=None, item_id=None):
         """Marcar un item individual como comprado y actualizar stock"""
@@ -465,7 +498,7 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
 
         if "quantity_purchased" in request.data:
             new_qty = Decimal(str(request.data["quantity_purchased"]))
-            # Ajustar stock
+            # Solo ajustar stock si el item ya está comprado
             if item.is_purchased and old_quantity_purchased is not None:
                 # Revertir el stock anterior y agregar el nuevo
                 item.raw_material.current_stock -= old_quantity_purchased
@@ -473,18 +506,14 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
                 if item.raw_material.current_stock < 0:
                     item.raw_material.current_stock = Decimal("0")
                 item.raw_material.save()
-            elif new_qty > 0 and not item.is_purchased:
-                # Si no estaba comprado y ahora se establece cantidad, agregar al stock
-                item.raw_material.current_stock += new_qty
-                item.raw_material.save()
-                item.is_purchased = True
+            # Ya no marcamos como comprado automáticamente al establecer cantidad
             item.quantity_purchased = new_qty
 
         if "actual_unit_price" in request.data:
             new_price = Decimal(str(request.data["actual_unit_price"]))
             item.actual_unit_price = new_price
-            # Actualizar precio del material si el item está comprado o tiene cantidad comprada
-            if item.is_purchased or (item.quantity_purchased and item.quantity_purchased > 0):
+            # Solo actualizar precio del material si el item ya está comprado
+            if item.is_purchased:
                 item.raw_material.cost_per_unit = new_price
                 item.raw_material.save()
 
