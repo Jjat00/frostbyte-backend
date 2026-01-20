@@ -187,9 +187,36 @@ class PurchaseOrder(models.Model):
         super().save(*args, **kwargs)
 
     def calculate_totals(self):
-        """Recalcula los totales de la orden"""
-        self.estimated_total = sum(item.estimated_subtotal for item in self.items.all())
-        self.actual_total = sum(item.actual_subtotal or 0 for item in self.items.all())
+        """Recalcula los totales de la orden usando query directa (sin cache)"""
+        from django.db.models import Sum, F, DecimalField
+        from django.db.models.functions import Coalesce
+        
+        # Query directa para evitar problemas con prefetch cache
+        items = PurchaseOrderItem.objects.filter(purchase_order=self)
+        
+        # Calcular total estimado
+        estimated = items.aggregate(
+            total=Coalesce(
+                Sum(F('quantity_needed') * F('estimated_unit_price'), output_field=DecimalField()),
+                0,
+                output_field=DecimalField()
+            )
+        )['total']
+        
+        # Calcular total real (solo items con quantity_purchased y actual_unit_price)
+        actual = items.filter(
+            quantity_purchased__isnull=False,
+            actual_unit_price__isnull=False
+        ).aggregate(
+            total=Coalesce(
+                Sum(F('quantity_purchased') * F('actual_unit_price'), output_field=DecimalField()),
+                0,
+                output_field=DecimalField()
+            )
+        )['total']
+        
+        self.estimated_total = estimated or 0
+        self.actual_total = actual or 0
         self.save(update_fields=["estimated_total", "actual_total"])
 
 

@@ -287,6 +287,21 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
 
         return queryset
 
+    def destroy(self, request, *args, **kwargs):
+        """Eliminar orden y revertir stock de items comprados"""
+        order = self.get_object()
+
+        # Revertir el stock de todos los items comprados antes de eliminar
+        for item in order.items.filter(is_purchased=True):
+            if item.quantity_purchased:
+                item.raw_material.current_stock -= item.quantity_purchased
+                if item.raw_material.current_stock < 0:
+                    item.raw_material.current_stock = Decimal("0")
+                item.raw_material.save()
+
+        # Eliminar la orden (esto también elimina los items por CASCADE)
+        return super().destroy(request, *args, **kwargs)
+
     @action(detail=False, methods=["post"])
     def generate_from_low_stock(self, request):
         """Generar orden de compra automáticamente desde items con stock bajo"""
@@ -544,6 +559,9 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
                 item.raw_material.save()
 
             item.delete()
+            
+            # Refrescar la orden para limpiar el cache de prefetch
+            order.refresh_from_db()
             order.calculate_totals()
         except PurchaseOrderItem.DoesNotExist:
             return Response(
