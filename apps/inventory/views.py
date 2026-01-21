@@ -279,27 +279,30 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
         if status_filter:
             queryset = queryset.filter(status=status_filter)
 
-        # Filtrar por mes y año (basado en created_at)
-        month = self.request.query_params.get("month")
-        year = self.request.query_params.get("year")
-        
-        if month and year:
-            try:
-                month = int(month)
-                year = int(year)
+        # Solo aplicar filtro de mes en la acción 'list'
+        # Para otras acciones (retrieve, update, destroy, etc.) no filtrar por mes
+        if self.action == 'list':
+            # Filtrar por mes y año (basado en created_at)
+            month = self.request.query_params.get("month")
+            year = self.request.query_params.get("year")
+
+            if month and year:
+                try:
+                    month = int(month)
+                    year = int(year)
+                    queryset = queryset.filter(
+                        created_at__year=year,
+                        created_at__month=month
+                    )
+                except (ValueError, TypeError):
+                    pass
+            else:
+                # Por defecto, filtrar por el mes actual
+                now = timezone.localtime()
                 queryset = queryset.filter(
-                    created_at__year=year,
-                    created_at__month=month
+                    created_at__year=now.year,
+                    created_at__month=now.month
                 )
-            except (ValueError, TypeError):
-                pass
-        elif not month and not year:
-            # Por defecto, filtrar por el mes actual
-            now = timezone.localtime()
-            queryset = queryset.filter(
-                created_at__year=now.year,
-                created_at__month=now.month
-            )
 
         return queryset
 
@@ -377,7 +380,7 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
                 quantity = item.quantity_purchased or item.quantity_needed
                 price = item.actual_unit_price or item.estimated_unit_price
                 supplier = item.supplier or item.raw_material.supplier or ""
-                
+
                 item.mark_as_purchased(
                     quantity=quantity,
                     price=price,
@@ -575,7 +578,7 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
                 item.raw_material.save()
 
             item.delete()
-            
+
             # Refrescar la orden para limpiar el cache de prefetch
             order.refresh_from_db()
             order.calculate_totals()
