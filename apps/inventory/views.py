@@ -247,13 +247,6 @@ class RecipeViewSet(viewsets.ModelViewSet):
         )
 
 
-class PurchaseOrderPagination(PageNumberPagination):
-    """Paginación para órdenes de compra"""
-    page_size = 20
-    page_size_query_param = 'page_size'
-    max_page_size = 100
-
-
 class PurchaseOrderViewSet(viewsets.ModelViewSet):
     """ViewSet para órdenes de compra"""
 
@@ -268,7 +261,7 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
         _items_count=Count("items")
     )
     permission_classes = [IsAdminUser]
-    pagination_class = PurchaseOrderPagination
+    pagination_class = None  # Sin paginación, filtrado por mes
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["order_number", "notes"]
     ordering = ["-created_at"]
@@ -281,9 +274,32 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         queryset = super().get_queryset()
 
+        # Filtrar por estado
         status_filter = self.request.query_params.get("status")
         if status_filter:
             queryset = queryset.filter(status=status_filter)
+
+        # Filtrar por mes y año (basado en created_at)
+        month = self.request.query_params.get("month")
+        year = self.request.query_params.get("year")
+        
+        if month and year:
+            try:
+                month = int(month)
+                year = int(year)
+                queryset = queryset.filter(
+                    created_at__year=year,
+                    created_at__month=month
+                )
+            except (ValueError, TypeError):
+                pass
+        elif not month and not year:
+            # Por defecto, filtrar por el mes actual
+            now = timezone.localtime()
+            queryset = queryset.filter(
+                created_at__year=now.year,
+                created_at__month=now.month
+            )
 
         return queryset
 
