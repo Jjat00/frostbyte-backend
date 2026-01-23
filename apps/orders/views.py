@@ -4,7 +4,7 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from apps.accounts.permissions import IsAdminUser
 from django.db.models import Sum, Count
-from django.db.models.functions import TruncDate
+from django.db.models.functions import TruncDate, ExtractHour, ExtractWeekDay
 from django.utils import timezone
 from datetime import timedelta
 
@@ -578,6 +578,139 @@ class OrderViewSet(viewsets.ModelViewSet):
                 "quantity_sold": item['quantity_sold'] or 0,
                 "revenue": float(item['revenue'] or 0),
                 "count": item['count'] or 0,
+            })
+
+        return Response({
+            "data": data,
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat(),
+        })
+
+    @action(detail=False, methods=["get"])
+    def sales_by_hour(self, request):
+        """Ventas agrupadas por hora del día para identificar horarios pico"""
+        import zoneinfo
+
+        date_filter = request.query_params.get("date", "month")
+        start_date_param = request.query_params.get("start_date")
+        end_date_param = request.query_params.get("end_date")
+
+        start_date, end_date = self._get_date_range(
+            date_filter, start_date_param, end_date_param)
+
+        # Obtener la zona horaria de Colombia
+        tz = zoneinfo.ZoneInfo('America/Bogota')
+
+        # Obtener items pagados en el rango de fechas
+        paid_items = OrderItem.objects.filter(
+            is_paid=True,
+            paid_at__gte=start_date,
+            paid_at__lte=end_date
+        ).exclude(order__status=Order.Status.CANCELLED)
+
+        # Agrupar por hora del día
+        sales_by_hour = (
+            paid_items
+            .annotate(hour=ExtractHour('paid_at', tzinfo=tz))
+            .values('hour')
+            .annotate(
+                revenue=Sum('subtotal'),
+                count=Count('id')
+            )
+            .order_by('hour')
+        )
+
+        # Crear diccionario con los datos existentes
+        hour_dict = {}
+        for item in sales_by_hour:
+            hour_dict[item['hour']] = {
+                'revenue': float(item['revenue'] or 0),
+                'count': item['count'] or 0
+            }
+
+        # Generar todas las horas del día (0-23)
+        data = []
+        for hour in range(24):
+            hour_data = hour_dict.get(hour, {'revenue': 0, 'count': 0})
+            # Formatear hora para mostrar (ej: "08:00", "14:00")
+            hour_label = f"{hour:02d}:00"
+            data.append({
+                "hour": hour,
+                "hour_label": hour_label,
+                "revenue": hour_data['revenue'],
+                "count": hour_data['count']
+            })
+
+        return Response({
+            "data": data,
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat(),
+        })
+
+    @action(detail=False, methods=["get"])
+    def sales_by_weekday(self, request):
+        """Ventas agrupadas por día de la semana"""
+        import zoneinfo
+
+        date_filter = request.query_params.get("date", "month")
+        start_date_param = request.query_params.get("start_date")
+        end_date_param = request.query_params.get("end_date")
+
+        start_date, end_date = self._get_date_range(
+            date_filter, start_date_param, end_date_param)
+
+        # Obtener la zona horaria de Colombia
+        tz = zoneinfo.ZoneInfo('America/Bogota')
+
+        # Obtener items pagados en el rango de fechas
+        paid_items = OrderItem.objects.filter(
+            is_paid=True,
+            paid_at__gte=start_date,
+            paid_at__lte=end_date
+        ).exclude(order__status=Order.Status.CANCELLED)
+
+        # Agrupar por día de la semana (1=Domingo, 2=Lunes, ..., 7=Sábado en Django)
+        sales_by_weekday = (
+            paid_items
+            .annotate(weekday=ExtractWeekDay('paid_at', tzinfo=tz))
+            .values('weekday')
+            .annotate(
+                revenue=Sum('subtotal'),
+                count=Count('id')
+            )
+            .order_by('weekday')
+        )
+
+        # Crear diccionario con los datos existentes
+        weekday_dict = {}
+        for item in sales_by_weekday:
+            weekday_dict[item['weekday']] = {
+                'revenue': float(item['revenue'] or 0),
+                'count': item['count'] or 0
+            }
+
+        # Nombres de los días en español (Django: 1=Domingo, 2=Lunes, ..., 7=Sábado)
+        weekday_names = {
+            1: "Domingo",
+            2: "Lunes",
+            3: "Martes",
+            4: "Miércoles",
+            5: "Jueves",
+            6: "Viernes",
+            7: "Sábado"
+        }
+
+        # Ordenar empezando por Lunes (2) y terminando en Domingo (1)
+        weekday_order = [2, 3, 4, 5, 6, 7, 1]
+
+        data = []
+        for weekday in weekday_order:
+            weekday_data = weekday_dict.get(weekday, {'revenue': 0, 'count': 0})
+            data.append({
+                "weekday": weekday,
+                "weekday_name": weekday_names[weekday],
+                "revenue": weekday_data['revenue'],
+                "count": weekday_data['count']
             })
 
         return Response({
