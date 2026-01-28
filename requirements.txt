@@ -21,6 +21,12 @@ autobahn==25.12.2
     # via daphne
 automat==25.4.16
     # via twisted
+boto3==1.42.36
+    # via frostbyte-backend (pyproject.toml)
+botocore==1.42.36
+    # via
+    #   boto3
+    #   s3transfer
 cbor2==5.8.0
     # via autobahn
 certifi==2026.1.4
@@ -90,6 +96,10 @@ incremental==24.11.0
     # via twisted
 jiter==0.12.0
     # via openai
+jmespath==1.1.0
+    # via
+    #   boto3
+    #   botocore
 msgpack==1.1.2
     # via
     #   autobahn
@@ -100,6 +110,8 @@ packaging==25.0
     # via
     #   gunicorn
     #   incremental
+pillow==12.1.0
+    # via frostbyte-backend (pyproject.toml)
 psycopg2-binary==2.9.11
     # via frostbyte-backend (pyproject.toml)
 py-ubjson==0.16.1
@@ -121,7 +133,9 @@ pyjwt==2.10.1
 pyopenssl==25.3.0
     # via twisted
 python-dateutil==2.9.0.post0
-    # via frostbyte-backend (pyproject.toml)
+    # via
+    #   frostbyte-backend (pyproject.toml)
+    #   botocore
 python-dotenv==1.2.1
     # via
     #   frostbyte-backend (pyproject.toml)
@@ -130,6 +144,8 @@ redis==7.1.0
     # via channels-redis
 rest-framework-simplejwt==0.0.2
     # via frostbyte-backend (pyproject.toml)
+s3transfer==0.16.0
+    # via boto3
 service-identity==24.2.0
     # via twisted
 six==1.17.0
@@ -157,6 +173,8 @@ typing-inspection==0.4.2
     # via pydantic
 ujson==5.11.0
     # via autobahn
+urllib3==2.6.3
+    # via botocore
 whitenoise==6.11.0
     # via frostbyte-backend (pyproject.toml)
 zope-interface==8.2

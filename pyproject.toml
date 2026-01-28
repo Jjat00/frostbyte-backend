@@ -21,4 +21,6 @@ dependencies = [
     "channels-redis>=4.2.0",
     "daphne>=4.1.0",
     "python-dateutil>=2.8.2",
+    "boto3>=1.42.0",
+    "pillow>=12.1.0",
 ]

@@ -1,8 +1,12 @@
 from rest_framework import viewsets, filters, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from rest_framework.views import APIView
+from rest_framework.parsers import MultiPartParser, FormParser
 
-from apps.accounts.permissions import IsAdminOrReadOnly
+from apps.accounts.permissions import IsAdminOrReadOnly, IsAdminUser
+from .services import R2UploadService
+from .services.r2_upload import R2UploadError
 from .models import Category, Product, ProductVariant
 from .serializers import (
     CategorySerializer,
@@ -146,12 +150,12 @@ class ProductVariantViewSet(viewsets.ModelViewSet):
         active_only = self.request.query_params.get("active_only", "false")
         if active_only.lower() == "true":
             queryset = queryset.filter(is_active=True)
-        
+
         # Filtrar por producto si se proporciona
         product_id = self.request.query_params.get("product")
         if product_id:
             queryset = queryset.filter(product_id=product_id)
-        
+
         return queryset
 
     def get_serializer_class(self):
@@ -165,3 +169,52 @@ class ProductVariantViewSet(viewsets.ModelViewSet):
         instance.is_active = False
         instance.save()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class ImageUploadView(APIView):
+    """
+    Vista para subir imágenes de productos a Cloudflare R2.
+
+    POST: Subir una imagen y recibir la URL pública
+    """
+
+    parser_classes = [MultiPartParser, FormParser]
+    permission_classes = [IsAdminUser]
+
+    def post(self, request):
+        """
+        Subir una imagen a R2.
+
+        Expects:
+            - image: archivo de imagen (multipart/form-data)
+
+        Returns:
+            - url: URL pública de la imagen subida
+        """
+        if 'image' not in request.FILES:
+            return Response(
+                {'error': 'No se proporcionó ninguna imagen'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        image_file = request.FILES['image']
+
+        try:
+            upload_service = R2UploadService()
+            url = upload_service.upload(image_file)
+
+            return Response(
+                {'url': url},
+                status=status.HTTP_201_CREATED
+            )
+
+        except R2UploadError as e:
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except Exception as e:
+            return Response(
+                {'error': 'Error interno al procesar la imagen'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
