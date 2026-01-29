@@ -24,43 +24,45 @@ class OpenAIImageGenerator:
         self.client = OpenAI(api_key=settings.OPENAI_API_KEY)
         self.model = 'gpt-image-1.5'  # Modelo más reciente
 
-    def build_prompt(
+    def build_edit_prompt(
         self,
         user_prompt: str,
         has_reference: bool = False,
+        transparent_background: bool = False,
         context: str = "restaurant menu"
     ) -> str:
         """
-        Construye el prompt completo para OpenAI
-
-        Args:
-            user_prompt: Instrucciones del usuario
-            has_reference: Si se proporcionó imagen de referencia
-            context: Contexto de uso (menu, social media, etc.)
-
-        Returns:
-            Prompt completo optimizado
+        Prompt para images.edit: producto de la imagen original mejorado;
+        la referencia aporta estilo y efectos llamativos (aros de luz, salpicadura, etc.).
         """
-        base_prompt = f"""Create a professional, high-quality photograph suitable for a {context}.
+        system_instructions = f"""Actúa como un fotógrafo profesional de alimentos y bebidas de clase mundial.
+Tu objetivo es mejorar la foto del producto para que se vea de alta gama, digna de menú o campaña premium.
 
-The image should be:
-- Well-lit with professional lighting
-- Sharp and in focus
-- Appetizing and visually appealing
-- Clean and attractive composition
-- High resolution and print-ready
-- Commercial-grade quality suitable for menus and marketing
+REGLAS:
+1. La PRIMERA imagen es la IMAGEN FUENTE (el producto). La imagen generada debe mostrar ÚNICAMENTE ese producto mejorado. Mismo plato/bebida, mismo producto; no cambies qué es.
+
+2. CONSERVA LOS COLORES DEL PRODUCTO ORIGINAL. El producto de la primera imagen debe mantener TODOS sus colores: color del borde/rim (ej. verde), color de la bebida, colores de la pajilla, colores de los dulces o ingredientes visibles, colores de la etiqueta y del empaque. No reemplaces la paleta del producto por los colores de la referencia. La referencia aporta efectos e iluminación, NO un nuevo esquema de color para el producto en sí.
+
+3. La SEGUNDA imagen (si hay) es la REFERENCIA DE ESTILO. De ella aplica al producto de la primera imagen solo los EFECTOS que hacen sobresalir la referencia:
+   - Efectos de luz: aros de luz (anillos luminosos, halos, rings), neones, resplandores alrededor del producto (pueden usar tonos que complementen, pero el producto en sí conserva sus colores).
+   - Dinamismo: líquido estrellando/salpicando (splash), gotas, partículas de luz, estelas.
+   - Iluminación dramática: rim light, reflejos, profundidad de campo, ambiente y mood.
+   NO copies de la referencia: fondo, otros objetos, props, ni la paleta de color del producto. En la salida solo está el producto de la primera imagen CON sus colores originales y CON los efectos visuales de la referencia.
+
+4. Mejora la textura del producto para que se vea apetitoso y profesional (efecto "food porn").
+
+5. Salida fotorrealista, muy alta resolución, apta para {context} y marketing.
 """
+        if transparent_background:
+            system_instructions += """
+6. FONDO: La imagen debe quedar SIN FONDO (fondo transparente). El producto (con sus colores originales) y los efectos visuales (aros de luz, salpicadura, partículas, neones) deben mantenerse sobre transparencia; solo se elimina el fondo de escenario.
+"""
+        else:
+            system_instructions += "\n6. Fondo limpio y profesional.\n"
 
-        if has_reference:
-            base_prompt += "\nMatch the visual style and aesthetic of the reference image provided."
-
-        if user_prompt:
-            base_prompt += f"\n\nAdditional instructions: {user_prompt}"
-
-        base_prompt += "\n\nEnsure the final image is suitable for commercial use in restaurant menus and marketing materials."
-
-        return base_prompt
+        user_part = user_prompt.strip(
+        ) if user_prompt else "Haz que se vea increíble y profesional."
+        return system_instructions + f"\nInstrucciones adicionales del usuario: {user_part}"
 
     def generate_professional_menu_image(
         self,
@@ -72,71 +74,55 @@ The image should be:
         quality: str = "hd"
     ) -> Dict:
         """
-        Genera una imagen profesional de menú usando OpenAI
-
-        Args:
-            original_image_path: Path a la imagen original del producto
-            reference_image_path: Path a la imagen de referencia (opcional)
-            user_prompt: Instrucciones adicionales del usuario
-            transparent_background: Si generar con fondo transparente
-            size: Tamaño de la imagen (1024x1024, 1792x1024, 1024x1792)
-            quality: Calidad (standard, hd)
-
-        Returns:
-            Dict con:
-                - image_data: bytes de la imagen generada
-                - full_prompt: prompt completo usado
-                - cost_usd: costo de la generación
-                - metadata: metadata adicional
+        Genera una imagen profesional de menú usando OpenAI images.edit.
+        Envía la imagen original (y la de referencia) para que el modelo la edite
+        y mantenga la identidad del producto aplicando solo el estilo.
         """
         try:
-            # Construir prompt
-            full_prompt = self.build_prompt(
+            full_prompt = self.build_edit_prompt(
                 user_prompt=user_prompt,
-                has_reference=reference_image_path is not None
+                has_reference=reference_image_path is not None,
+                transparent_background=transparent_background,
             )
 
-            logger.info(f"Generating image with model {self.model}")
-            logger.debug(f"Prompt: {full_prompt[:100]}...")
+            logger.info(
+                f"Generating image with model {self.model} (edit mode)")
+            logger.debug(f"Prompt: {full_prompt[:150]}...")
 
-            # Si hay imagen de referencia, analizar su estilo
-            style_description = None
-            if reference_image_path:
-                style_description = self._analyze_reference_style(
-                    reference_image_path)
-                full_prompt += f"\n\nVisual style reference: {style_description}"
-
-            # Nota: OpenAI GPT Image 1.5 actualmente no soporta edición directa de imágenes
-            # Usamos generate con prompt descriptivo basado en la imagen original
-
-            # Leer y analizar imagen original
-            original_description = self._analyze_image(original_image_path)
-            full_prompt = f"Based on this image: {original_description}\n\n{full_prompt}"
-
-            # Para modelos GPT Image (gpt-image-1.5, etc.) no se usa response_format;
-            # siempre devuelven base64. quality debe ser high/medium/low (no hd/standard).
             quality_param = "high" if quality == "hd" else (
                 "medium" if quality == "standard" else quality)
             background_param = "transparent" if transparent_background else "auto"
 
-            response = self.client.images.generate(
-                model=self.model,
-                prompt=full_prompt,
-                size=size,
-                quality=quality_param,
-                n=1,
-                background=background_param,
-            )
+            # images.edit recibe la(s) imagen(es) a editar: fuente + opcional referencia
+            files_to_close = []
+            try:
+                f_orig = open(original_image_path, "rb")
+                files_to_close.append(f_orig)
+                image_list = [f_orig]
+                if reference_image_path:
+                    f_ref = open(reference_image_path, "rb")
+                    files_to_close.append(f_ref)
+                    image_list = [f_orig, f_ref]
 
-            # Obtener imagen generada
+                response = self.client.images.edit(
+                    model=self.model,
+                    image=image_list,
+                    prompt=full_prompt,
+                    size=size,
+                    quality=quality_param,
+                    n=1,
+                    background=background_param,
+                )
+            finally:
+                for f in files_to_close:
+                    f.close()
+
             image_b64 = response.data[0].b64_json
             image_data = base64.b64decode(image_b64)
 
-            # Post-procesamiento para fondo transparente si es necesario
             if transparent_background:
                 image_data = self._ensure_transparent_background(image_data)
 
-            # Calcular costo
             cost = self.PRICING.get(self.model, 0.04)
 
             return {
