@@ -1,6 +1,8 @@
 """
 URL configuration for config project.
 """
+from django.conf import settings
+from django.conf.urls.static import static
 from django.contrib import admin
 from django.urls import path, include
 
@@ -26,4 +28,11 @@ urlpatterns = [
     path('api/v1/expenses/', include('apps.expenses.urls')),
     # Analytics
     path('api/v1/analytics/', include('apps.analytics.urls')),
+    # AI Generator
+    path('api/v1/ai/', include('apps.ai_generator.urls')),
 ]
+
+# Servir archivos media en desarrollo
+if settings.DEBUG:
+    urlpatterns += static(settings.MEDIA_URL,
+                          document_root=settings.MEDIA_ROOT)

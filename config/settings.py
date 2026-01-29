@@ -63,6 +63,7 @@ INSTALLED_APPS = [
     'apps.feedback',
     'apps.expenses',
     'apps.analytics',
+    'apps.ai_generator',
 ]
 
 # Custom User Model
@@ -148,6 +149,10 @@ STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 
+# Media files (uploads: imágenes de IA, etc.)
+MEDIA_URL = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'
+
 # Django REST Framework
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
@@ -214,3 +219,12 @@ R2_PUBLIC_URL = os.getenv('R2_PUBLIC_URL', '')
 # File Upload Settings
 FILE_UPLOAD_MAX_SIZE = 5 * 1024 * 1024  # 5MB
 ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif']
+
+# OpenAI Configuration for Image Generation
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')
+
+# Image Generation Limits
+IMAGE_GEN_DAILY_LIMIT = int(os.getenv('IMAGE_GEN_DAILY_LIMIT', '50'))
+IMAGE_GEN_MONTHLY_LIMIT = int(os.getenv('IMAGE_GEN_MONTHLY_LIMIT', '500'))
+IMAGE_GEN_COST_LIMIT_MONTHLY = float(
+    os.getenv('IMAGE_GEN_COST_LIMIT_MONTHLY', '50.0'))
