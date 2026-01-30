@@ -6,7 +6,7 @@ sin él en modo síncrono para desarrollo.
 """
 from django.core.files.base import ContentFile
 from django.utils import timezone
-from .models import AIImageGeneration, AIGenerationUsageQuota
+from .models import AIImageGeneration
 from .openai_integration import OpenAIImageGenerator
 import logging
 import time
@@ -82,13 +82,6 @@ def generate_image_task(self, generation_id):
         generation.completed_at = timezone.now()
         generation.save()
 
-        # Actualizar cuota del usuario
-        quota, created = AIGenerationUsageQuota.objects.get_or_create(
-            user=generation.user,
-            defaults={'monthly_limit': 10}
-        )
-        quota.increment_usage(cost=result['cost_usd'])
-
         logger.info(
             f"Generation {generation_id} completed successfully in "
             f"{generation.generation_time_seconds}s. Cost: ${generation.cost_usd}"
@@ -149,9 +142,7 @@ def cleanup_old_generations():
     cutoff_date = timezone.now() - timedelta(days=90)
 
     old_generations = AIImageGeneration.objects.filter(
-        created_at__lt=cutoff_date,
-        product__isnull=True  # No asociadas a productos
-    )
+        created_at__lt=cutoff_date)
 
     deleted_count = 0
     for gen in old_generations:
