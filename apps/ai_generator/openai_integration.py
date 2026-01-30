@@ -43,22 +43,24 @@ REGLAS:
 
 2. CONSERVA LOS COLORES DEL PRODUCTO ORIGINAL. El producto de la primera imagen debe mantener TODOS sus colores: color del borde/rim (ej. verde), color de la bebida, colores de la pajilla, colores de los dulces o ingredientes visibles, colores de la etiqueta y del empaque. No reemplaces la paleta del producto por los colores de la referencia. La referencia aporta efectos e iluminación, NO un nuevo esquema de color para el producto en sí.
 
-3. La SEGUNDA imagen (si hay) es la REFERENCIA DE ESTILO. De ella aplica al producto de la primera imagen solo los EFECTOS que hacen sobresalir la referencia:
+3. CONSERVA TODO EL TEXTO DE LA IMAGEN ORIGINAL TAL CUAL. Si en la primera imagen hay texto (marca, etiqueta, logo, leyendas, ingredientes, advertencias, etc.), debe quedar exactamente igual: mismas palabras, misma tipografía, mismos colores y posición. No modifiques, reescribas ni inventes texto. El texto del producto es intocable.
+
+4. La SEGUNDA imagen (si hay) es la REFERENCIA DE ESTILO. De ella aplica al producto de la primera imagen solo los EFECTOS que hacen sobresalir la referencia:
    - Efectos de luz: aros de luz (anillos luminosos, halos, rings), neones, resplandores alrededor del producto (pueden usar tonos que complementen, pero el producto en sí conserva sus colores).
    - Dinamismo: líquido estrellando/salpicando (splash), gotas, partículas de luz, estelas.
    - Iluminación dramática: rim light, reflejos, profundidad de campo, ambiente y mood.
    NO copies de la referencia: fondo, otros objetos, props, ni la paleta de color del producto. En la salida solo está el producto de la primera imagen CON sus colores originales y CON los efectos visuales de la referencia.
 
-4. Mejora la textura del producto para que se vea apetitoso y profesional (efecto "food porn").
+5. Mejora la textura del producto para que se vea apetitoso y profesional (efecto "food porn").
 
-5. Salida fotorrealista, muy alta resolución, apta para {context} y marketing.
+6. Salida fotorrealista, muy alta resolución, apta para {context} y marketing.
 """
         if transparent_background:
             system_instructions += """
-6. FONDO: La imagen debe quedar SIN FONDO (fondo transparente). El producto (con sus colores originales) y los efectos visuales (aros de luz, salpicadura, partículas, neones) deben mantenerse sobre transparencia; solo se elimina el fondo de escenario.
+7. FONDO: La imagen debe quedar SIN FONDO (fondo transparente). El producto (con sus colores originales y su texto tal cual) y los efectos visuales (aros de luz, salpicadura, partículas, neones) deben mantenerse sobre transparencia; solo se elimina el fondo de escenario.
 """
         else:
-            system_instructions += "\n6. Fondo limpio y profesional.\n"
+            system_instructions += "\n7. Fondo limpio y profesional.\n"
 
         user_part = user_prompt.strip(
         ) if user_prompt else "Haz que se vea increíble y profesional."
