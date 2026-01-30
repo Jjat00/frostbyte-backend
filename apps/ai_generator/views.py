@@ -155,10 +155,10 @@ class AIImageGenerationViewSet(viewsets.ModelViewSet):
             'image_url': product.image_url,
         })
 
-    @action(detail=True, methods=['get'], url_path='temp-image/(?P<image_type>[^/.]+)')
+    @action(detail=True, methods=['get'], url_path='temp-image/(?P<image_type>[^/.]+)', permission_classes=[])
     def serve_temp_image(self, request, pk=None, image_type=None):
-        """Sirve imagen temporal (solo para generaciones no guardadas)"""
-        generation = self.get_object()
+        """Sirve imagen temporal (público - las imágenes se eliminan en 24h)"""
+        generation = get_object_or_404(AIImageGeneration, pk=pk)
 
         if generation.is_saved_to_r2:
             # Redirigir a URL de R2
