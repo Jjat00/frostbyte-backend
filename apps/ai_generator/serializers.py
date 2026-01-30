@@ -3,6 +3,7 @@ from .models import AIImageGeneration
 
 
 class AIImageGenerationSerializer(serializers.ModelSerializer):
+    """Serializer para lectura de generaciones"""
     original_image_url = serializers.SerializerMethodField()
     reference_image_url = serializers.SerializerMethodField()
     generated_image_url = serializers.SerializerMethodField()
@@ -10,34 +11,45 @@ class AIImageGenerationSerializer(serializers.ModelSerializer):
     class Meta:
         model = AIImageGeneration
         fields = [
-            'id', 'original_image', 'reference_image',
+            'id',
             'original_image_url', 'reference_image_url', 'generated_image_url',
             'user_prompt', 'transparent_background',
-            'status', 'error_message', 'product', 'created_at',
+            'status', 'error_message', 'product',
+            'is_saved_to_r2', 'created_at', 'saved_at',
         ]
-        read_only_fields = ['id', 'status', 'error_message', 'created_at']
-        extra_kwargs = {
-            'original_image': {'write_only': True},
-            'reference_image': {'write_only': True, 'required': False},
-        }
+        read_only_fields = [
+            'id', 'status', 'error_message', 'created_at',
+            'is_saved_to_r2', 'saved_at',
+        ]
 
     def get_original_image_url(self, obj):
-        if obj.original_image:
+        url = obj.get_image_url('original')
+        if url and not url.startswith('http'):
             req = self.context.get('request')
-            return req.build_absolute_uri(obj.original_image.url) if req else obj.original_image.url
-        return None
+            return req.build_absolute_uri(url) if req else url
+        return url
 
     def get_reference_image_url(self, obj):
-        if obj.reference_image:
+        url = obj.get_image_url('reference')
+        if url and not url.startswith('http'):
             req = self.context.get('request')
-            return req.build_absolute_uri(obj.reference_image.url) if req else obj.reference_image.url
-        return None
+            return req.build_absolute_uri(url) if req else url
+        return url
 
     def get_generated_image_url(self, obj):
-        if obj.generated_image:
+        url = obj.get_image_url('generated')
+        if url and not url.startswith('http'):
             req = self.context.get('request')
-            return req.build_absolute_uri(obj.generated_image.url) if req else obj.generated_image.url
-        return None
+            return req.build_absolute_uri(url) if req else url
+        return url
+
+
+class AIImageGenerationCreateSerializer(serializers.Serializer):
+    """Serializer para creación de generaciones"""
+    original_image = serializers.ImageField(write_only=True)
+    reference_image = serializers.ImageField(write_only=True, required=False)
+    user_prompt = serializers.CharField(required=False, allow_blank=True, default='')
+    transparent_background = serializers.BooleanField(default=True)
 
 
 class SaveToProductSerializer(serializers.Serializer):
