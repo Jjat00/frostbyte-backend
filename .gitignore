@@ -10,3 +10,4 @@ wheels/
 .venv
 .env
 db.sqlite3
+ai_generations/

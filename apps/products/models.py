@@ -90,8 +90,20 @@ class ProductVariant(models.Model):
         return f"{self.product.name} - {self.name}"
 
     def save(self, *args, **kwargs):
-        # Generar SKU automáticamente si no se proporciona
+        # Generar SKU automáticamente si no se proporciona, garantizando unicidad
         if not self.sku:
-            base_sku = slugify(f"{self.product.name}-{self.name}").upper().replace("-", "")[:20]
-            self.sku = base_sku
+            base = slugify(f"{self.product.name}-{self.name}").upper().replace("-", "")[:42]
+            self.sku = base
+            # Si el SKU ya existe (otra variante o producto), añadir sufijo numérico
+            qs = ProductVariant.objects.filter(sku=self.sku)
+            if self.pk:
+                qs = qs.exclude(pk=self.pk)
+            if qs.exists():
+                counter = 1
+                while True:
+                    candidate = f"{base}_{counter}"[:50]
+                    if not ProductVariant.objects.filter(sku=candidate).exclude(pk=self.pk).exists():
+                        self.sku = candidate
+                        break
+                    counter += 1
         super().save(*args, **kwargs)
