@@ -148,6 +148,7 @@ class CategorySerializer(serializers.ModelSerializer):
             "description",
             "display_order",
             "is_active",
+            "show_extras",
             "products_count",
         ]
         read_only_fields = ["slug", "products_count"]
@@ -168,6 +169,7 @@ class CategoryCreateUpdateSerializer(serializers.ModelSerializer):
             "description",
             "display_order",
             "is_active",
+            "show_extras",
         ]
         read_only_fields = ["slug"]
 
@@ -186,5 +188,6 @@ class CategoryDetailSerializer(serializers.ModelSerializer):
             "description",
             "display_order",
             "is_active",
+            "show_extras",
             "products",
         ]
