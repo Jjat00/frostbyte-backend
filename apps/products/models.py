@@ -10,6 +10,7 @@ class Category(models.Model):
     description = models.TextField(blank=True, verbose_name="Descripción")
     display_order = models.PositiveIntegerField(default=0, verbose_name="Orden de visualización")
     is_active = models.BooleanField(default=True, verbose_name="Activo")
+    show_extras = models.BooleanField(default=True, verbose_name="Mostrar sección extra")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
