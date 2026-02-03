@@ -1,6 +1,6 @@
 # Frostbyte Backend
 
-API REST para gestión de restaurante construida con Django y Django REST Framework. Incluye autenticación JWT, WebSockets para juegos en tiempo real y generación de imágenes con IA.
+API REST para gestión de negocios de bebidas preparadas (granizados, frappés, cócteles), bares y restaurantes. Construida con Django y Django REST Framework. Incluye autenticación JWT, WebSockets para juegos en tiempo real y generación de imágenes con IA.
 
 ## Stack Tecnológico
 
@@ -79,7 +79,7 @@ frostbyte-backend/
 - Tracking de tiempos de reacción
 
 ### Generador IA (`/apps/ai_generator/`)
-- Integración con OpenAI DALL-E
+- Integración con OpenAI GPT Image 1.5
 - Límites diarios/mensuales
 - Almacenamiento en Cloudflare R2
 - Corrección de transparencia
