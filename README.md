@@ -80,9 +80,9 @@ frostbyte-backend/
 
 ### Generador IA (`/apps/ai_generator/`)
 - Integración con OpenAI GPT Image 1.5
-- Límites diarios/mensuales
-- Almacenamiento en Cloudflare R2
-- Corrección de transparencia
+- Almacenamiento temporal y persistencia en Cloudflare R2
+- Soporte para fondo transparente
+- Edición con imagen de referencia para aplicar estilos
 
 ## API Endpoints
 

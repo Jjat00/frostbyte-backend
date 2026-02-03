@@ -220,11 +220,5 @@ R2_PUBLIC_URL = os.getenv('R2_PUBLIC_URL', '')
 FILE_UPLOAD_MAX_SIZE = 5 * 1024 * 1024  # 5MB
 ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif']
 
-# OpenAI Configuration for Image Generation
+# OpenAI Configuration for Image Generation (GPT Image 1.5)
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')
-
-# Image Generation Limits
-IMAGE_GEN_DAILY_LIMIT = int(os.getenv('IMAGE_GEN_DAILY_LIMIT', '50'))
-IMAGE_GEN_MONTHLY_LIMIT = int(os.getenv('IMAGE_GEN_MONTHLY_LIMIT', '500'))
-IMAGE_GEN_COST_LIMIT_MONTHLY = float(
-    os.getenv('IMAGE_GEN_COST_LIMIT_MONTHLY', '50.0'))
