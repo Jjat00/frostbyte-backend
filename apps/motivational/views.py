@@ -4,12 +4,8 @@ from rest_framework.response import Response
 from rest_framework import status
 from openai import OpenAI
 from django.utils import timezone
-from django.core.cache import cache
 from apps.products.models import Product
 import os
-
-
-PHRASE_CACHE_TTL = 30 * 60  # 30 minutos
 
 
 def _generate_phrase():
@@ -51,25 +47,24 @@ def _generate_phrase():
 
         Productos activos de Frostbyte por categoría:
 {products_formatted}
-        Crea una frase motivacional o dato curioso histórico basada en la fecha actual
-        y invita a consumir uno de los productos activos de Frostbyte.
-        La frase debe ser breve y motivadora.
+
+        Estamos celebrando el Dia de Amor y Amistad en Frostbyte.
+        Crea una frase romantica, tierna o sobre la amistad que invite a celebrar
+        este dia especial consumiendo uno de los productos activos de Frostbyte.
+        La frase debe hacer alusion al amor, la amistad, compartir, brindar juntos,
+        o a celebrar con las personas que mas quieres.
         La frase debe ser en español colombiano.
-        La frase debe ser en tono juvenil.
-        La frase debe ser en tono casual.
-        La frase debe ser en tono cercano.
-        La frase debe ser en tono amigable.
-        La frase debe ser en tono relajado.
-        La frase debe ser en tono inspirador.
-        tienes que ser gracioso y divertido.
-        puedes usars humor pesado y grosero.
-        maximo 30 palabras. no mas de 30 palabras.
+        La frase debe ser en tono juvenil, casual, cercano y amigable.
+        Puedes ser gracioso, creativo y usar humor colombiano.
+        Puedes hacer juegos de palabras con los nombres de los productos y el amor/amistad.
+        Maximo 30 palabras. No mas de 30 palabras.
+        No uses hashtags ni emojis.
         """
 
     response = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
-            {"role": "system", "content": "Eres un experto Colombiano en dar datos curiosos e interesantes basados en la fecha actual y también un creador de frases motivacionales inspiradoras. Tus datos históricos son siempre precisos y verificables."},
+            {"role": "system", "content": "Eres un experto colombiano en crear frases creativas y tiernas sobre el amor y la amistad. Trabajas para Frostbyte, un bar de bebidas heladas. Tus frases son romanticas, divertidas y siempre invitan a celebrar con una buena bebida."},
             {"role": "user", "content": prompt},
         ],
         max_tokens=80,
@@ -94,12 +89,6 @@ def get_motivational_phrase(request):
     Cachea el resultado por 30 minutos para no bloquear el thread pool con llamadas a OpenAI.
     """
     try:
-        cache_key = "motivational_phrase"
-        cached = cache.get(cache_key)
-
-        if cached:
-            return Response(cached, status=status.HTTP_200_OK)
-
         result = _generate_phrase()
 
         if result is None:
@@ -107,8 +96,6 @@ def get_motivational_phrase(request):
                 {"error": "OpenAI API key no configurada"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
-
-        cache.set(cache_key, result, PHRASE_CACHE_TTL)
 
         return Response(result, status=status.HTTP_200_OK)
 
