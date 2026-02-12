@@ -58,14 +58,25 @@ class FinancialAnalyticsViewSet(viewsets.ViewSet):
         return start_of_last_month, end_of_last_month
 
     def _calculate_revenue(self, start_date, end_date):
-        """Calcula ingresos de items pagados excluyendo ordenes canceladas"""
+        """Calcula ingresos de items pagados excluyendo ordenes canceladas,
+        restando descuentos de ordenes completamente pagadas."""
         paid_items = OrderItem.objects.filter(
             is_paid=True,
             paid_at__gte=start_date,
             paid_at__lte=end_date
         ).exclude(order__status=Order.Status.CANCELLED)
 
-        return paid_items.aggregate(total=Sum('subtotal'))['total'] or 0
+        items_revenue = paid_items.aggregate(total=Sum('subtotal'))['total'] or 0
+
+        # Restar descuentos de ordenes completamente pagadas con descuento
+        paid_order_ids = paid_items.values_list('order_id', flat=True).distinct()
+        total_discounts = Order.objects.filter(
+            id__in=paid_order_ids,
+            is_paid=True,
+            discount__gt=0
+        ).aggregate(total=Sum('discount'))['total'] or 0
+
+        return items_revenue - total_discounts
 
     def _calculate_inventory_expenses(self, start_date, end_date):
         """Calcula gastos de inventario (ordenes de compra completadas).
