@@ -311,14 +311,19 @@ class OrderViewSet(viewsets.ModelViewSet):
         total_revenue = items_revenue - total_discounts
 
         # Estadísticas por método de pago basadas en ITEMS
+        # Prorratear descuentos proporcionalmente por método de pago
         by_payment_method = {}
         for method_code, method_name in Order.PaymentMethod.choices:
             method_stats = paid_items.filter(payment_method=method_code).aggregate(
                 total=Sum("subtotal"), count=Count("id")
             )
+            method_total = method_stats["total"] or 0
+            # Prorratear descuento proporcionalmente
+            if items_revenue > 0 and total_discounts > 0:
+                method_total = method_total - (total_discounts * method_total / items_revenue)
             by_payment_method[method_code] = {
                 "name": method_name,
-                "total": str(method_stats["total"] or 0),
+                "total": str(round(method_total, 2)),
                 "count": method_stats["count"] or 0,
             }
 
@@ -326,9 +331,12 @@ class OrderViewSet(viewsets.ModelViewSet):
         no_method_stats = paid_items.filter(payment_method="").aggregate(
             total=Sum("subtotal"), count=Count("id")
         )
+        other_total = no_method_stats["total"] or 0
+        if items_revenue > 0 and total_discounts > 0:
+            other_total = other_total - (total_discounts * other_total / items_revenue)
         by_payment_method["other"] = {
             "name": "Otro/Sin especificar",
-            "total": str(no_method_stats["total"] or 0),
+            "total": str(round(other_total, 2)),
             "count": no_method_stats["count"] or 0,
         }
 
