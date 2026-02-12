@@ -51,6 +51,13 @@ class OrderViewSet(viewsets.ModelViewSet):
             return OrderStatusUpdateSerializer
         return OrderDetailSerializer
 
+    def perform_update(self, serializer):
+        """Recalcular totales cuando se actualiza el descuento"""
+        instance = serializer.save()
+        if "discount" in serializer.validated_data:
+            instance.calculate_totals()
+            instance.save(update_fields=["subtotal", "total", "updated_at"])
+
     def get_queryset(self):
         queryset = super().get_queryset()
 
@@ -288,9 +295,20 @@ class OrderViewSet(viewsets.ModelViewSet):
             paid_at__lte=end_date
         ).exclude(order__status=Order.Status.CANCELLED)
 
-        # Total de ingresos = suma de items pagados en el período
-        total_revenue = paid_items.aggregate(
+        # Total de ingresos = suma de items pagados - descuentos de pedidos
+        items_revenue = paid_items.aggregate(
             total=Sum("subtotal"))["total"] or 0
+
+        # Restar descuentos de pedidos completamente pagados en el período
+        paid_order_ids = paid_items.values_list(
+            'order_id', flat=True).distinct()
+        total_discounts = Order.objects.filter(
+            id__in=paid_order_ids,
+            is_paid=True,
+            discount__gt=0
+        ).aggregate(total=Sum('discount'))['total'] or 0
+
+        total_revenue = items_revenue - total_discounts
 
         # Estadísticas por método de pago basadas en ITEMS
         by_payment_method = {}
@@ -473,6 +491,22 @@ class OrderViewSet(viewsets.ModelViewSet):
             date_str = item['date'].strftime('%Y-%m-%d')
             revenue_dict[date_str] = float(item['revenue'] or 0)
 
+        # Restar descuentos de pedidos completamente pagados, asociados al día del último pago
+        discounted_orders = Order.objects.filter(
+            id__in=paid_items.values_list('order_id', flat=True).distinct(),
+            is_paid=True,
+            discount__gt=0
+        ).exclude(status=Order.Status.CANCELLED)
+
+        for order in discounted_orders:
+            last_paid_at = OrderItem.objects.filter(
+                order_id=order.pk, is_paid=True
+            ).order_by('-paid_at').values_list('paid_at', flat=True).first()
+            if last_paid_at:
+                date_str = last_paid_at.astimezone(tz).strftime('%Y-%m-%d')
+                if date_str in revenue_dict:
+                    revenue_dict[date_str] -= float(order.discount)
+
         # Generar todos los días del rango, incluso sin datos
         data = []
         current_date = start_date.date()
@@ -628,6 +662,22 @@ class OrderViewSet(viewsets.ModelViewSet):
                 'count': item['count'] or 0
             }
 
+        # Restar descuentos asociados a la hora del último pago
+        discounted_orders = Order.objects.filter(
+            id__in=paid_items.values_list('order_id', flat=True).distinct(),
+            is_paid=True,
+            discount__gt=0
+        ).exclude(status=Order.Status.CANCELLED)
+
+        for order in discounted_orders:
+            last_paid_at = OrderItem.objects.filter(
+                order_id=order.pk, is_paid=True
+            ).order_by('-paid_at').values_list('paid_at', flat=True).first()
+            if last_paid_at:
+                hour = last_paid_at.astimezone(tz).hour
+                if hour in hour_dict:
+                    hour_dict[hour]['revenue'] -= float(order.discount)
+
         # Generar todas las horas del día (0-23)
         data = []
         for hour in range(24):
@@ -688,6 +738,25 @@ class OrderViewSet(viewsets.ModelViewSet):
                 'revenue': float(item['revenue'] or 0),
                 'count': item['count'] or 0
             }
+
+        # Restar descuentos asociados al día de la semana del último pago
+        discounted_orders = Order.objects.filter(
+            id__in=paid_items.values_list('order_id', flat=True).distinct(),
+            is_paid=True,
+            discount__gt=0
+        ).exclude(status=Order.Status.CANCELLED)
+
+        for order in discounted_orders:
+            last_paid_at = OrderItem.objects.filter(
+                order_id=order.pk, is_paid=True
+            ).order_by('-paid_at').values_list('paid_at', flat=True).first()
+            if last_paid_at:
+                # ExtractWeekDay de Django: 1=Domingo, 2=Lunes, ..., 7=Sábado
+                weekday = last_paid_at.astimezone(tz).isoweekday()
+                # isoweekday: 1=Lunes...7=Domingo → convertir a Django format
+                django_weekday = 1 if weekday == 7 else weekday + 1
+                if django_weekday in weekday_dict:
+                    weekday_dict[django_weekday]['revenue'] -= float(order.discount)
 
         # Nombres de los días en español (Django: 1=Domingo, 2=Lunes, ..., 7=Sábado)
         weekday_names = {

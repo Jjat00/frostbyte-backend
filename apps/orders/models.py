@@ -215,17 +215,18 @@ class Order(models.Model):
 
     @property
     def paid_total(self):
-        """Total pagado (suma de items pagados)"""
+        """Total pagado (capado al total del pedido para considerar descuentos)"""
         from django.db.models import Sum
         result = OrderItem.objects.filter(order_id=self.pk, is_paid=True).aggregate(
             total=Sum('subtotal')
         )
-        return result['total'] or Decimal("0.00")
+        raw_paid = result['total'] or Decimal("0.00")
+        return min(raw_paid, self.total)
 
     @property
     def pending_total(self):
         """Total pendiente por pagar"""
-        return self.total - self.paid_total
+        return max(Decimal("0.00"), self.total - self.paid_total)
 
     @property
     def paid_items_count(self):
