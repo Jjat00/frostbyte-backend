@@ -2,10 +2,13 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.views import APIView
 from django.shortcuts import get_object_or_404
 from django.http import FileResponse, Http404
+from django.conf import settings
+from openai import OpenAI
 from .models import AIImageGeneration
-from .serializers import AIImageGenerationSerializer, AIImageGenerationCreateSerializer, SaveToProductSerializer
+from .serializers import AIImageGenerationSerializer, AIImageGenerationCreateSerializer, SaveToProductSerializer, SuggestDescriptionSerializer
 from .tasks import generate_image_sync
 from .services.temp_storage import TempImageStorage
 from .services.r2_persistence import AIGenerationR2Service
@@ -202,3 +205,45 @@ class AIImageGenerationViewSet(viewsets.ModelViewSet):
         generation.delete()
 
         return Response({'success': True, 'message': 'Generación descartada'})
+
+
+class SuggestDescriptionView(APIView):
+    """Sugiere una descripción de producto usando OpenAI"""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = SuggestDescriptionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        product_name = serializer.validated_data['product_name']
+
+        try:
+            client = OpenAI(api_key=settings.OPENAI_API_KEY)
+            response = client.chat.completions.create(
+                model='gpt-4o-mini',
+                messages=[
+                    {
+                        'role': 'system',
+                        'content': (
+                            'Eres un experto en marketing gastronómico. '
+                            'Genera una descripción MUY corta y atractiva para un producto de restaurante. '
+                            'Máximo 1 oración de 10-15 palabras. '
+                            'Responde SOLO con la descripción, sin comillas ni explicaciones.'
+                        ),
+                    },
+                    {
+                        'role': 'user',
+                        'content': f'Genera una descripción para el producto: {product_name}',
+                    },
+                ],
+                max_tokens=60,
+                temperature=0.7,
+            )
+            description = response.choices[0].message.content.strip()
+            return Response({'description': description})
+        except Exception as e:
+            logger.error(f'Error al sugerir descripción: {e}')
+            return Response(
+                {'error': 'No se pudo generar la descripción'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )

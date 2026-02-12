@@ -52,6 +52,11 @@ class AIImageGenerationCreateSerializer(serializers.Serializer):
     transparent_background = serializers.BooleanField(default=True)
 
 
+class SuggestDescriptionSerializer(serializers.Serializer):
+    """Serializer para sugerencia de descripción con IA"""
+    product_name = serializers.CharField(max_length=255)
+
+
 class SaveToProductSerializer(serializers.Serializer):
     product_id = serializers.IntegerField()
 
