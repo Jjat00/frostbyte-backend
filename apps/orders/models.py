@@ -4,6 +4,8 @@ from django.dispatch import receiver
 from django.utils import timezone
 from decimal import Decimal
 import uuid
+import random
+import string
 
 from apps.products.models import ProductVariant
 
@@ -65,6 +67,14 @@ class Order(models.Model):
         CARD = "card", "Tarjeta"
         NEQUI = "nequi", "Nequi"
         DAVIPLATA = "daviplata", "Daviplata"
+
+    # Código de acceso para el cliente
+    access_code = models.CharField(
+        max_length=4,
+        blank=True,
+        verbose_name="Código de acceso",
+        help_text="Código de 4 caracteres para que el cliente consulte su pedido",
+    )
 
     # Identificador único del pedido
     order_number = models.CharField(
@@ -153,7 +163,26 @@ class Order(models.Model):
     def save(self, *args, **kwargs):
         if not self.order_number:
             self.order_number = self._generate_order_number()
+        if not self.access_code:
+            self.access_code = self._generate_access_code()
         super().save(*args, **kwargs)
+
+    @staticmethod
+    def _generate_access_code():
+        """Genera un código de acceso único de 4 dígitos numéricos entre pedidos visibles"""
+        from django.db.models import Q
+        # Códigos en uso: pedidos activos o entregados sin pagar
+        active_codes = set(
+            Order.objects.filter(
+                Q(status__in=[Order.Status.PENDING, Order.Status.PREPARING, Order.Status.READY])
+                | Q(status=Order.Status.DELIVERED, is_paid=False)
+            ).exclude(access_code="").values_list("access_code", flat=True)
+        )
+        for _ in range(100):
+            code = "".join(random.choices(string.digits, k=4))
+            if code not in active_codes:
+                return code
+        return uuid.uuid4().hex[:4].upper()
 
     def _generate_order_number(self):
         """Genera un número de pedido único basado en fecha y UUID"""

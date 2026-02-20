@@ -15,6 +15,7 @@ class OrderItemInline(admin.TabularInline):
 class OrderAdmin(admin.ModelAdmin):
     list_display = [
         "order_number",
+        "access_code",
         "customer_name",
         "status",
         "total",
@@ -25,13 +26,13 @@ class OrderAdmin(admin.ModelAdmin):
     ]
     list_filter = ["status", "is_paid", "payment_method", "created_at"]
     search_fields = ["order_number", "customer_name", "customer_phone"]
-    readonly_fields = ["order_number", "subtotal", "total", "created_at", "updated_at", "completed_at"]
+    readonly_fields = ["order_number", "access_code", "subtotal", "total", "created_at", "updated_at", "completed_at"]
     date_hierarchy = "created_at"
     ordering = ["-created_at"]
     inlines = [OrderItemInline]
 
     fieldsets = (
-        ("Pedido", {"fields": ("order_number", "status")}),
+        ("Pedido", {"fields": ("order_number", "access_code", "status")}),
         ("Cliente", {"fields": ("customer_name", "customer_phone", "customer_notes", "table_number")}),
         ("Pago", {"fields": ("payment_method", "is_paid")}),
         ("Totales", {"fields": ("subtotal", "discount", "total")}),
