@@ -93,6 +93,7 @@ class OrderListSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "order_number",
+            "access_code",
             "customer_name",
             "customer_phone",
             "status",
@@ -131,6 +132,7 @@ class OrderDetailSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "order_number",
+            "access_code",
             "customer_name",
             "customer_phone",
             "customer_notes",
@@ -183,6 +185,7 @@ class OrderCreateSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "order_number",
+            "access_code",
             "customer_name",
             "customer_phone",
             "customer_notes",
@@ -192,7 +195,7 @@ class OrderCreateSerializer(serializers.ModelSerializer):
             "table_number",
             "items",
         ]
-        read_only_fields = ["id", "order_number", "total"]
+        read_only_fields = ["id", "order_number", "access_code", "total"]
 
     def validate_table_number(self, value):
         if value is None:
@@ -269,3 +272,62 @@ class OrderStatusUpdateSerializer(serializers.Serializer):
     """Serializer para actualizar estado de pedido"""
 
     status = serializers.ChoiceField(choices=Order.Status.choices)
+
+
+class PublicOrderItemSerializer(serializers.ModelSerializer):
+    """Serializer público para items de pedido (sin info de pago)"""
+
+    product_name = serializers.CharField(
+        source="product_variant.product.name", read_only=True
+    )
+    variant_name = serializers.CharField(
+        source="product_variant.name", read_only=True
+    )
+    product_image = serializers.URLField(
+        source="product_variant.product.image_url", read_only=True
+    )
+    product_category = serializers.CharField(
+        source="product_variant.product.category.name", read_only=True
+    )
+
+    class Meta:
+        model = OrderItem
+        fields = [
+            "product_name",
+            "variant_name",
+            "product_image",
+            "product_category",
+            "quantity",
+            "unit_price",
+            "subtotal",
+            "is_delivered",
+        ]
+
+
+class PublicOrderDetailSerializer(serializers.ModelSerializer):
+    """Serializer público para detalle de pedido (sin info sensible)"""
+
+    status_display = serializers.CharField(
+        source="get_status_display", read_only=True
+    )
+    items = PublicOrderItemSerializer(many=True, read_only=True)
+    items_count = serializers.IntegerField(read_only=True)
+    delivered_items_count = serializers.IntegerField(read_only=True)
+    undelivered_items_count = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = Order
+        fields = [
+            "order_number",
+            "customer_name",
+            "status",
+            "status_display",
+            "total",
+            "discount",
+            "items",
+            "items_count",
+            "delivered_items_count",
+            "undelivered_items_count",
+            "table_number",
+            "created_at",
+        ]

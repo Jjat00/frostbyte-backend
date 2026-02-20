@@ -18,6 +18,7 @@ from .serializers import (
     OrderItemSerializer,
     AddItemToOrderSerializer,
     MarkItemPaidSerializer,
+    PublicOrderDetailSerializer,
 )
 
 
@@ -1027,3 +1028,83 @@ class PageVisitViewSet(viewsets.ViewSet):
             "pages": data,
             "total_visits": sum(p.visit_count for p in pages)
         })
+
+
+class PublicOrderViewSet(viewsets.ViewSet):
+    """
+    ViewSet público para que clientes consulten su pedido.
+    No requiere autenticación.
+    """
+    permission_classes = [AllowAny]
+
+    @action(detail=False, methods=["post"])
+    def verify(self, request):
+        """Verificar pedido con código de acceso y número de mesa"""
+        access_code = request.data.get("access_code", "").strip().upper()
+        table_number = request.data.get("table_number")
+
+        if not access_code or table_number is None:
+            return Response(
+                {"error": "access_code y table_number son requeridos"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            table_number = int(table_number)
+        except (ValueError, TypeError):
+            return Response(
+                {"error": "table_number debe ser un número"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        order = Order.objects.prefetch_related(
+            "items", "items__product_variant__product", "items__product_variant__product__category"
+        ).filter(
+            access_code=access_code,
+            table_number=table_number,
+            status__in=[Order.Status.PENDING, Order.Status.PREPARING, Order.Status.READY],
+        ).first()
+
+        if not order:
+            return Response(
+                {"error": "Código incorrecto o pedido no encontrado"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        serializer = PublicOrderDetailSerializer(order)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=["get"], url_path="popular-products")
+    def popular_products(self, request):
+        """Retorna top 6 productos más pedidos en los últimos 7 días"""
+        seven_days_ago = timezone.now() - timedelta(days=7)
+
+        top_products = (
+            OrderItem.objects.filter(
+                order__created_at__gte=seven_days_ago,
+            )
+            .exclude(order__status=Order.Status.CANCELLED)
+            .values(
+                "product_variant__product__id",
+                "product_variant__product__name",
+                "product_variant__product__image_url",
+                "product_variant__product__category__name",
+                "product_variant__name",
+                "product_variant__price",
+            )
+            .annotate(total_ordered=Count("id"))
+            .order_by("-total_ordered")[:6]
+        )
+
+        data = [
+            {
+                "product_name": item["product_variant__product__name"],
+                "variant_name": item["product_variant__name"],
+                "image_url": item["product_variant__product__image_url"],
+                "category": item["product_variant__product__category__name"],
+                "price": str(item["product_variant__price"]),
+            }
+            for item in top_products
+        ]
+
+        return Response(data)
