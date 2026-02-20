@@ -169,13 +169,15 @@ class Order(models.Model):
 
     @staticmethod
     def _generate_access_code():
-        """Genera un código de acceso único de 4 caracteres (A-Z, 0-9) entre pedidos activos"""
+        """Genera un código de acceso único de 4 caracteres (A-Z, 0-9) entre pedidos visibles"""
+        from django.db.models import Q
         chars = string.ascii_uppercase + string.digits
+        # Códigos en uso: pedidos activos o entregados sin pagar
         active_codes = set(
             Order.objects.filter(
-                status__in=[Order.Status.PENDING, Order.Status.PREPARING, Order.Status.READY],
-                is_paid=False,
-            ).values_list("access_code", flat=True)
+                Q(status__in=[Order.Status.PENDING, Order.Status.PREPARING, Order.Status.READY])
+                | Q(status=Order.Status.DELIVERED, is_paid=False)
+            ).exclude(access_code="").values_list("access_code", flat=True)
         )
         for _ in range(100):
             code = "".join(random.choices(chars, k=4))

@@ -3,7 +3,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from apps.accounts.permissions import IsAdminUser
-from django.db.models import Sum, Count
+from django.db.models import Sum, Count, Q
 from django.db.models.functions import TruncDate, ExtractHour, ExtractWeekDay
 from django.utils import timezone
 from datetime import timedelta
@@ -1057,12 +1057,17 @@ class PublicOrderViewSet(viewsets.ViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # Visible mientras esté activo O entregado pero sin pagar
         order = Order.objects.prefetch_related(
             "items", "items__product_variant__product", "items__product_variant__product__category"
         ).filter(
             access_code=access_code,
             table_number=table_number,
-            status__in=[Order.Status.PENDING, Order.Status.PREPARING, Order.Status.READY],
+        ).filter(
+            Q(status__in=[Order.Status.PENDING, Order.Status.PREPARING, Order.Status.READY])
+            | Q(status=Order.Status.DELIVERED, is_paid=False)
+        ).exclude(
+            status=Order.Status.CANCELLED,
         ).first()
 
         if not order:

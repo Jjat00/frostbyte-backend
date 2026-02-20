@@ -322,6 +322,7 @@ class PublicOrderDetailSerializer(serializers.ModelSerializer):
             "customer_name",
             "status",
             "status_display",
+            "is_paid",
             "total",
             "discount",
             "items",
