@@ -10,7 +10,7 @@ from django.db import transaction
 from apps.orders.models import Order
 from apps.accounts.permissions import IsEmployeeOrAdmin
 from .models import Table, GameRoom, GameParticipant, GameRound, GameRoundResult, GameUsage
-from .consumers import broadcast_room_update
+from .consumers import broadcast_room_update, broadcast_games_admin_update
 from .serializers import (
     TableSerializer,
     GameRoomListSerializer,
@@ -238,6 +238,7 @@ class GameRoomViewSet(viewsets.ModelViewSet):
             existing_room.extend_expiration()
             existing_room.save()
             broadcast_room_update(existing_room.id)
+            broadcast_games_admin_update()
             serializer = GameRoomDetailSerializer(existing_room)
             return Response(serializer.data, status=status.HTTP_200_OK)
 
@@ -259,6 +260,7 @@ class GameRoomViewSet(viewsets.ModelViewSet):
 
         serializer = GameRoomDetailSerializer(room)
         broadcast_room_update(room.id)
+        broadcast_games_admin_update()
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
     @action(detail=False, methods=["post"])
@@ -321,6 +323,7 @@ class GameRoomViewSet(viewsets.ModelViewSet):
         room.extend_expiration()
         room.save()
         broadcast_room_update(room.id)
+        broadcast_games_admin_update()
         serializer = GameRoomDetailSerializer(room)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
@@ -357,6 +360,7 @@ class GameRoomViewSet(viewsets.ModelViewSet):
         room.status = GameRoom.Status.CONFIGURING
         room.save()
         broadcast_room_update(room.id)
+        broadcast_games_admin_update()
         serializer_response = GameRoomDetailSerializer(room)
         return Response(serializer_response.data)
 
@@ -415,6 +419,7 @@ class GameRoomViewSet(viewsets.ModelViewSet):
         room.started_at = timezone.now()
         room.save()
         broadcast_room_update(room.id)
+        broadcast_games_admin_update()
         serializer = GameRoomDetailSerializer(room)
         return Response(serializer.data)
 
@@ -527,6 +532,7 @@ class GameRoomViewSet(viewsets.ModelViewSet):
                 register_game_usage(room)
             
             broadcast_room_update(room.id)
+            broadcast_games_admin_update()
 
         serializer_response = GameRoundResultSerializer(result)
         return Response(serializer_response.data, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
@@ -603,6 +609,7 @@ class GameRoomViewSet(viewsets.ModelViewSet):
             # La sala seguirá existiendo por si alguien quiere volver a unirse
 
             broadcast_room_update(room.id)
+            broadcast_games_admin_update()
             return Response(
                 {"message": "Has salido de la sala"},
                 status=status.HTTP_200_OK
@@ -645,6 +652,7 @@ class GameRoomViewSet(viewsets.ModelViewSet):
 
         room.save()
         broadcast_room_update(room.id)
+        broadcast_games_admin_update()
         serializer = GameRoomDetailSerializer(room)
         return Response(serializer.data)
 
@@ -672,6 +680,7 @@ class GameRoomViewSet(viewsets.ModelViewSet):
 
         # Notificar a todos los jugadores (aunque ya no estén en la sala, por si acaso)
         broadcast_room_update(room.id)
+        broadcast_games_admin_update()
 
         serializer = GameRoomDetailSerializer(room)
         return Response(serializer.data)
@@ -706,6 +715,7 @@ class GameRoomViewSet(viewsets.ModelViewSet):
 
             # Notificar
             broadcast_room_update(room.id)
+            broadcast_games_admin_update()
             count += 1
 
         mesa_label = "Barra" if table_number == 0 else f"Mesa {table_number}"

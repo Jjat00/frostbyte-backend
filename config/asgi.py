@@ -22,7 +22,13 @@ django_asgi_app = get_asgi_application()
 # Import routing after Django is set up
 # IMPORTANTE: Esta importación DEBE estar DESPUÉS de get_asgi_application()
 # porque routing.py importa consumers.py, que importa models.py, que necesita Django configurado
-from apps.games.routing import websocket_urlpatterns
+from apps.games.routing import websocket_urlpatterns as games_ws_urlpatterns
+from apps.orders.routing import websocket_urlpatterns as orders_ws_urlpatterns
+from apps.music.routing import websocket_urlpatterns as music_ws_urlpatterns
+
+# Combinar todas las rutas WebSocket
+websocket_urlpatterns = games_ws_urlpatterns + orders_ws_urlpatterns + music_ws_urlpatterns
+
 # Permitir todos los orígenes para WebSockets
 # Nota: AllowedHostsOriginValidator puede bloquear conexiones si el frontend
 # está en un dominio diferente al backend. Como ya tenemos CORS configurado

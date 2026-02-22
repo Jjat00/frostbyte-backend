@@ -9,6 +9,7 @@ from django.utils import timezone
 from datetime import timedelta
 
 from .models import Order, OrderItem, Table, PageVisit
+from .consumers import broadcast_orders_update
 from .serializers import (
     OrderListSerializer,
     OrderDetailSerializer,
@@ -52,12 +53,19 @@ class OrderViewSet(viewsets.ModelViewSet):
             return OrderStatusUpdateSerializer
         return OrderDetailSerializer
 
+    def perform_create(self, serializer):
+        """Crear pedido y notificar via WebSocket"""
+        instance = serializer.save()
+        broadcast_orders_update()
+        return instance
+
     def perform_update(self, serializer):
         """Recalcular totales cuando se actualiza el descuento"""
         instance = serializer.save()
         if "discount" in serializer.validated_data:
             instance.calculate_totals()
             instance.save(update_fields=["subtotal", "total", "updated_at"])
+        broadcast_orders_update()
 
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -121,6 +129,7 @@ class OrderViewSet(viewsets.ModelViewSet):
                 order.status = new_status
                 order.save()
 
+            broadcast_orders_update()
             return Response(OrderDetailSerializer(order).data)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -155,6 +164,7 @@ class OrderViewSet(viewsets.ModelViewSet):
             "items", "items__product_variant__product"
         ).get(pk=order.pk)
 
+        broadcast_orders_update()
         return Response(OrderDetailSerializer(order).data)
 
     @action(detail=True, methods=["post"])
@@ -169,6 +179,7 @@ class OrderViewSet(viewsets.ModelViewSet):
             )
 
         order.mark_as_cancelled()
+        broadcast_orders_update()
         return Response(OrderDetailSerializer(order).data)
 
     @action(detail=True, methods=["post"])
@@ -220,6 +231,7 @@ class OrderViewSet(viewsets.ModelViewSet):
                 "items", "items__product_variant__product"
             ).get(pk=order.pk)
 
+            broadcast_orders_update()
             return Response(OrderDetailSerializer(order).data)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -835,6 +847,7 @@ class OrderItemViewSet(viewsets.ModelViewSet):
             # Refrescar el item desde la base de datos
             item.refresh_from_db()
 
+            broadcast_orders_update()
             return Response(OrderItemSerializer(item).data)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -853,6 +866,7 @@ class OrderItemViewSet(viewsets.ModelViewSet):
         # Actualizar estado de pago del pedido (ya no está todo pagado)
         Order.objects.filter(pk=order.pk).update(is_paid=False)
 
+        broadcast_orders_update()
         return Response(OrderItemSerializer(item).data)
 
     @action(detail=True, methods=["post"])
@@ -869,6 +883,7 @@ class OrderItemViewSet(viewsets.ModelViewSet):
             # Actualizar estado de pago del pedido
             item.order.update_payment_status()
 
+            broadcast_orders_update()
             return Response(OrderItemSerializer(item).data)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -882,6 +897,7 @@ class OrderItemViewSet(viewsets.ModelViewSet):
         # Actualizar estado de entrega del pedido
         item.order.update_delivery_status()
 
+        broadcast_orders_update()
         return Response(OrderItemSerializer(item).data)
 
     @action(detail=True, methods=["post"])
@@ -899,6 +915,7 @@ class OrderItemViewSet(viewsets.ModelViewSet):
                 completed_at=None
             )
 
+        broadcast_orders_update()
         return Response(OrderItemSerializer(item).data)
 
 
