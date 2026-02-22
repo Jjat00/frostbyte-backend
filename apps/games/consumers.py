@@ -114,6 +114,54 @@ class GameRoomConsumer(AsyncWebsocketConsumer):
             }))
 
 
+class GamesAdminConsumer(AsyncWebsocketConsumer):
+    """Consumer WebSocket para el panel de administración de juegos"""
+
+    GROUP_NAME = 'games_admin_updates'
+
+    async def connect(self):
+        """Conectar al WebSocket"""
+        await self.channel_layer.group_add(
+            self.GROUP_NAME,
+            self.channel_name
+        )
+        await self.accept()
+
+    async def disconnect(self, close_code):
+        """Desconectar del WebSocket"""
+        await self.channel_layer.group_discard(
+            self.GROUP_NAME,
+            self.channel_name
+        )
+
+    async def receive(self, text_data):
+        """Recibir mensaje del cliente"""
+        try:
+            data = json.loads(text_data)
+            if data.get('type') == 'ping':
+                await self.send(text_data=json.dumps({'type': 'pong'}))
+        except json.JSONDecodeError:
+            pass
+
+    async def games_admin_changed(self, event):
+        """Notificar al cliente que los datos de admin cambiaron"""
+        await self.send(text_data=json.dumps({
+            'type': 'games_admin_changed'
+        }))
+
+
+def broadcast_games_admin_update():
+    """Helper para enviar notificación de cambio al panel admin de juegos"""
+    from channels.layers import get_channel_layer
+    from asgiref.sync import async_to_sync
+
+    channel_layer = get_channel_layer()
+    async_to_sync(channel_layer.group_send)(
+        GamesAdminConsumer.GROUP_NAME,
+        {'type': 'games_admin_changed'}
+    )
+
+
 def broadcast_room_update(room_id):
     """Función helper para enviar actualización desde las vistas"""
     from channels.layers import get_channel_layer

@@ -5,6 +5,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from django.db.models import Q
 
 from .models import SongRequest
+from .consumers import broadcast_music_update
 from .serializers import (
     SongRequestSerializer,
     SongRequestCreateSerializer,
@@ -43,6 +44,14 @@ class SongRequestViewSet(viewsets.ModelViewSet):
             return [AllowAny()]
         # Todas las demás acciones (update, destroy, update_status) requieren autenticación
         return [IsAuthenticated()]
+
+    def perform_create(self, serializer):
+        serializer.save()
+        broadcast_music_update()
+
+    def perform_destroy(self, instance):
+        instance.delete()
+        broadcast_music_update()
 
     def get_queryset(self):
         """Filtrar queryset según el usuario"""
@@ -83,6 +92,7 @@ class SongRequestViewSet(viewsets.ModelViewSet):
                 song_request.status = new_status
                 song_request.save()
 
+            broadcast_music_update()
             return Response(
                 SongRequestSerializer(song_request).data, status=status.HTTP_200_OK
             )
