@@ -6,6 +6,7 @@ from openai import OpenAI
 from django.utils import timezone
 from django.core.cache import cache
 from apps.products.models import Product
+from .models import RecommenderLog
 import os
 import json
 import random
@@ -212,6 +213,16 @@ Responde ÚNICAMENTE con JSON puro (sin markdown, sin backticks):
         if not product:
             return Response({"error": "No hay productos activos disponibles."}, status=status.HTTP_404_NOT_FOUND)
 
+        RecommenderLog.objects.create(
+            session_type="mood",
+            input_data={"mood": mood},
+            recommended_product_name=product.name,
+            recommended_product_slug=product.slug,
+            ai_reason=reason,
+            ip_address=request.META.get("HTTP_X_FORWARDED_FOR", "").split(",")[0].strip()
+                       or request.META.get("REMOTE_ADDR"),
+        )
+
         return Response(_serialize_product(product, reason), status=status.HTTP_200_OK)
 
     except Exception as e:
@@ -313,6 +324,16 @@ Responde ÚNICAMENTE con JSON puro (sin markdown, sin backticks):
 
         if not product:
             return Response({"error": "No hay productos activos disponibles."}, status=status.HTTP_404_NOT_FOUND)
+
+        RecommenderLog.objects.create(
+            session_type="quiz",
+            input_data={"temperature": temperature, "taste": taste, "alcohol": alcohol},
+            recommended_product_name=product.name,
+            recommended_product_slug=product.slug,
+            ai_reason=reason,
+            ip_address=request.META.get("HTTP_X_FORWARDED_FOR", "").split(",")[0].strip()
+                       or request.META.get("REMOTE_ADDR"),
+        )
 
         return Response(_serialize_product(product, reason), status=status.HTTP_200_OK)
 
