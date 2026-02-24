@@ -220,6 +220,42 @@ Responde ÚNICAMENTE con JSON puro (sin markdown, sin backticks):
 
 @api_view(["POST"])
 @permission_classes([AllowAny])
+def transcribe_audio(request):
+    """
+    Transcribe un archivo de audio a texto usando OpenAI Whisper.
+    Input: audio file via request.FILES['audio']
+    """
+    audio_file = request.FILES.get("audio")
+    if not audio_file:
+        return Response(
+            {"error": "Se requiere un archivo de audio."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        return Response(
+            {"error": "OpenAI API key no configurada"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+    try:
+        client = OpenAI(api_key=api_key)
+        transcription = client.audio.transcriptions.create(
+            model="whisper-1",
+            file=(audio_file.name, audio_file.read(), audio_file.content_type),
+        )
+        return Response({"text": transcription.text}, status=status.HTTP_200_OK)
+
+    except Exception as e:
+        return Response(
+            {"error": f"Error al transcribir audio: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
 def recommend_by_quiz(request):
     """
     Recomienda una bebida según preferencias del quiz.
