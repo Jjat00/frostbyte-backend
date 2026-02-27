@@ -40,6 +40,47 @@ frostbyte-backend/
 └── media/              # Archivos subidos
 ```
 
+## Features de IA Integrados
+
+Frostbyte incluye múltiples capacidades de IA usando **OpenAI API**, distribuidas en vistas públicas y privadas:
+
+### Backend - APIs de IA
+
+#### Públicas (Sin Autenticación)
+| Feature | Endpoint | Modelo | Descripción |
+|---------|----------|--------|-------------|
+| **Recomendación por Mood** | `POST /motivational/recommend-mood/` | GPT-4o-mini | Recomienda bebidas según el estado de ánimo del usuario ("tengo calor y quiero algo fuerte") |
+| **Recomendación por Quiz** | `POST /motivational/recommend-quiz/` | GPT-4o-mini | Recomienda bebidas basado en preferencias de temperatura, sabor y alcohol |
+| **Frase Motivacional Diaria** | `GET /motivational/phrase/` | GPT-4o-mini | Genera frase motivacional o dato histórico basado en la fecha (cacheada 30 min) |
+| **Transcripción de Audio** | `POST /motivational/transcribe/` | Whisper | Transcribe archivos de audio a texto en español |
+
+#### Privadas (Requiere Autenticación)
+| Feature | Endpoint | Modelo | Descripción |
+|---------|----------|--------|-------------|
+| **Generador de Imágenes** | `POST /ai/generations/` | GPT Image 1.5 | Genera imágenes profesionales de productos a partir de foto + prompt |
+| **Sugerencia de Descripción** | `POST /ai/suggest-description/` | GPT-4o-mini | Genera descripciones cortas y atractivas para productos |
+| **Galería de Generaciones** | `GET /ai/generations/` | - | Historial de imágenes generadas por el usuario |
+| **Persistencia a R2** | `POST /ai/generations/{id}/save_to_r2/` | - | Guarda imágenes generadas en Cloudflare R2 |
+| **Asignar a Producto** | `POST /ai/generations/{id}/save_to_product/` | - | Asigna imagen generada como foto principal del producto |
+
+### Frontend - Interfaces de IA
+
+#### Públicas (Vistas Digitales del Menú)
+- **Quiz Recomendador**: Interfaz interactiva en menú público para seleccionar preferencias
+- **Generador de Frases**: Widget que muestra frase motivacional actualizada diariamente
+- **Transcripción de Voz**: Opción para dictar estado de ánimo en lugar de escribir
+
+#### Privadas (Panel de Administración)
+- **AIImageGeneratorPage** (`/productos/generador-ia`):
+  - Carga imagen original + imagen de referencia (opcional)
+  - Editor de prompt con sugerencias preestablecidas
+  - Toggle para fondo transparente
+  - Galería con historial de generaciones
+  - Descarga, guardado a R2 y asignación a productos
+  - Muestra prompt utilizado y metadatos de generación
+
+---
+
 ## Módulos Principales
 
 ### Autenticación (`/apps/accounts/`)
@@ -79,10 +120,41 @@ frostbyte-backend/
 - Tracking de tiempos de reacción
 
 ### Generador IA (`/apps/ai_generator/`)
-- Integración con OpenAI GPT Image 1.5
-- Almacenamiento temporal y persistencia en Cloudflare R2
-- Soporte para fondo transparente
-- Edición con imagen de referencia para aplicar estilos
+**Generación Profesional de Imágenes de Productos con OpenAI**
+- **Modelo**: OpenAI GPT Image 1.5 (generación de imágenes desde descripción + imagen base)
+- **Flujo**:
+  1. Usuario carga imagen original (foto básica/celular)
+  2. Opcionalmente agrega imagen de referencia para aplicar estilo
+  3. Escribe prompt detallado o usa plantillas preestablecidas
+  4. IA procesa y genera imagen profesional
+  5. Opción de fondo transparente para overlays
+- **Almacenamiento**:
+  - Temporal: Archivos en servidor (se eliminan en 24h)
+  - Persistente: Cloudflare R2 para imágenes aprobadas
+- **Integración**: Asignación directa como imagen del producto en catálogo
+- **Soporte**: Prompt builder con sugerencias por categoría de bebida
+- **Sugerencias Automáticas**: Endpoint para generar descripciones de productos con GPT-4o-mini
+
+### Motivacional (`/apps/motivational/`)
+**Recomendaciones Personalizadas y Frases Inspiradoras con OpenAI**
+- **Frases Motivacionales**:
+  - Generadas diariamente con GPT-4o-mini
+  - Incluyen datos históricos/curiosidades según la fecha
+  - Cacheadas por 30 minutos
+  - Tono juvenil, casual y colombiano
+- **Recomendaciones por Mood** (Público):
+  - Usuario describe su estado de ánimo ("tengo frío y quiero algo dulce")
+  - IA recomienda bebida más adecuada
+  - Respuesta personalizada con razón en español colombiano
+- **Recomendaciones por Quiz** (Público):
+  - Quiz interactivo: temperatura, sabor, alcohol
+  - IA analiza preferencias y recomienda producto
+  - Logging de todas las recomendaciones para analytics
+- **Transcripción de Audio** (Público):
+  - Soporta entrada por voz usando Whisper
+  - Convierte audio a texto en español
+  - Integración con recomendaciones por mood
+- **Logging de Recomendaciones**: Almacena todas las interacciones para análisis
 
 ## API Endpoints
 
@@ -102,8 +174,15 @@ Base URL: `http://localhost:8000/api/v1/`
 | Inventory | `/inventory/recipes/` | Recetas |
 | Expenses | `/expenses/` | Gastos operacionales |
 | Games | `/games/rooms/` | Salas de juego |
-| AI | `/ai/images/generate/` | Generar imagen |
-| AI | `/ai/images/usage/` | Uso del servicio |
+| **AI - Imágenes** | **`POST /ai/generations/`** | **Generar imagen con IA (GPT Image 1.5)** |
+| **AI - Imágenes** | **`GET /ai/generations/`** | **Historial de generaciones** |
+| **AI - Imágenes** | **`POST /ai/generations/{id}/save_to_r2/`** | **Persistir imagen en Cloudflare R2** |
+| **AI - Imágenes** | **`POST /ai/generations/{id}/save_to_product/`** | **Asignar imagen a producto** |
+| **AI - Imágenes** | **`POST /ai/suggest-description/`** | **Sugerir descripción con IA (GPT-4o-mini)** |
+| **AI - Motivacional** | **`GET /motivational/phrase/`** | **Frase motivacional diaria (GPT-4o-mini)** |
+| **AI - Motivacional** | **`POST /motivational/recommend-mood/`** | **Recomendar por estado de ánimo (GPT-4o-mini)** |
+| **AI - Motivacional** | **`POST /motivational/recommend-quiz/`** | **Recomendar por preferencias (GPT-4o-mini)** |
+| **AI - Motivacional** | **`POST /motivational/transcribe/`** | **Transcribir audio a texto (Whisper)** |
 | Analytics | `/analytics/` | Reportes |
 
 ### WebSocket
@@ -155,14 +234,39 @@ Ver [.env.example](.env.example) para todas las variables de entorno disponibles
 
 ### Variables Principales
 
-| Variable | Descripción | Requerida |
-|----------|-------------|-----------|
-| `DATABASE_URL` | URL de conexión PostgreSQL | Sí |
-| `SECRET_KEY` | Clave secreta Django | Sí |
-| `DEBUG` | Modo debug | No |
-| `OPENAI_API_KEY` | API key de OpenAI | Para AI |
-| `R2_*` | Credenciales Cloudflare R2 | Para storage |
-| `REDIS_URL` | URL de Redis | Producción |
+| Variable | Descripción | Requerida | Uso |
+|----------|-------------|-----------|-----|
+| `DATABASE_URL` | URL de conexión PostgreSQL | Sí | Base de datos |
+| `SECRET_KEY` | Clave secreta Django | Sí | Seguridad |
+| `DEBUG` | Modo debug | No | Desarrollo |
+| **`OPENAI_API_KEY`** | **API key de OpenAI** | **Para IA** | **Generación de imágenes (GPT Image 1.5), frases motivacionales, recomendaciones, transcripción de audio y sugerencias de descripción** |
+| `R2_*` | Credenciales Cloudflare R2 | Para almacenamiento | Persistencia de imágenes generadas |
+| `REDIS_URL` | URL de Redis | Producción | Channel layers y caché |
+
+### Configuración de IA (OpenAI)
+
+Para habilitar todas las funcionalidades de IA en Frostbyte:
+
+1. **Obtener API Key**:
+   ```
+   https://platform.openai.com/api-keys
+   ```
+
+2. **Configurar Variable de Entorno**:
+   ```bash
+   OPENAI_API_KEY=sk-proj-xxxxxxxxxxxxxxxxxxxxxxxx
+   ```
+
+3. **Modelos Utilizados**:
+   - `gpt-4o-mini`: Recomendaciones, frases motivacionales, descripciones
+   - `gpt-image-1.5`: Generación de imágenes de productos
+   - `whisper-1`: Transcripción de audio
+
+4. **Límites y Costos**:
+   - Generación de imágenes: ~$0.04 por imagen
+   - Recomendaciones/frases: ~$0.0001 por request (GPT-4o-mini es económico)
+   - Transcripción: ~$0.006 por minuto
+   - Las frases motivacionales se cachean 30 minutos para economizar
 
 ## Desarrollo
 
