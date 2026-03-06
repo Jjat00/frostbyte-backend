@@ -78,7 +78,7 @@ def sync_song_request_statuses():
 def _sync_loop():
     """Loop que corre en background sincronizando estados"""
     global _sync_running
-    logger.info("Spotify sync: iniciado")
+    print("[Spotify Sync] Hilo de sincronizacion iniciado")
 
     # Esperar a que Django esté completamente listo
     time.sleep(3)
@@ -90,7 +90,7 @@ def _sync_loop():
             logger.debug(f"Spotify sync error: {e}")
         time.sleep(SYNC_INTERVAL)
 
-    logger.info("Spotify sync: detenido")
+    print("[Spotify Sync] Hilo de sincronizacion detenido")
 
 
 def start_sync():
@@ -103,6 +103,7 @@ def start_sync():
     _sync_running = True
     _sync_thread = threading.Thread(target=_sync_loop, daemon=True, name="spotify-sync")
     _sync_thread.start()
+    print("[Spotify Sync] Sincronizacion con Spotify activada")
 
 
 def stop_sync():
