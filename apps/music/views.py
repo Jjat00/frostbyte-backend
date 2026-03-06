@@ -21,6 +21,12 @@ from .services.spotify_client import (
     get_currently_playing,
     get_queue,
     is_connected,
+    pause_playback,
+    resume_playback,
+    skip_to_next,
+    skip_to_previous,
+    play_track,
+    set_volume,
     SpotifyNotConnectedError,
 )
 from .services.spotify_auth import (
@@ -192,6 +198,87 @@ class SongRequestViewSet(viewsets.ModelViewSet):
         """Verificar si Spotify está conectado"""
         connected = is_connected()
         return Response({"connected": connected})
+
+    @action(detail=False, methods=["post"], url_path="player/pause", permission_classes=[IsAuthenticated])
+    def player_pause(self, request):
+        """Pausar reproducción"""
+        try:
+            pause_playback()
+            return Response({"message": "Reproducción pausada"})
+        except SpotifyNotConnectedError:
+            return Response({"error": "Spotify no está conectado"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        except Exception as e:
+            logger.error(f"Error al pausar: {e}")
+            return Response({"error": "Error al pausar"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=False, methods=["post"], url_path="player/resume", permission_classes=[IsAuthenticated])
+    def player_resume(self, request):
+        """Reanudar reproducción"""
+        try:
+            resume_playback()
+            return Response({"message": "Reproducción reanudada"})
+        except SpotifyNotConnectedError:
+            return Response({"error": "Spotify no está conectado"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        except Exception as e:
+            logger.error(f"Error al reanudar: {e}")
+            return Response({"error": "Error al reanudar"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=False, methods=["post"], url_path="player/next", permission_classes=[IsAuthenticated])
+    def player_next(self, request):
+        """Saltar a la siguiente canción"""
+        try:
+            skip_to_next()
+            broadcast_music_update()
+            return Response({"message": "Siguiente canción"})
+        except SpotifyNotConnectedError:
+            return Response({"error": "Spotify no está conectado"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        except Exception as e:
+            logger.error(f"Error al saltar: {e}")
+            return Response({"error": "Error al saltar"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=False, methods=["post"], url_path="player/previous", permission_classes=[IsAuthenticated])
+    def player_previous(self, request):
+        """Volver a la canción anterior"""
+        try:
+            skip_to_previous()
+            broadcast_music_update()
+            return Response({"message": "Canción anterior"})
+        except SpotifyNotConnectedError:
+            return Response({"error": "Spotify no está conectado"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        except Exception as e:
+            logger.error(f"Error al retroceder: {e}")
+            return Response({"error": "Error al retroceder"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=False, methods=["post"], url_path="player/play-track", permission_classes=[IsAuthenticated])
+    def player_play_track(self, request):
+        """Reproducir un track específico inmediatamente"""
+        track_uri = request.data.get("track_uri")
+        if not track_uri:
+            return Response({"error": "track_uri es requerido"}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            play_track(track_uri)
+            broadcast_music_update()
+            return Response({"message": "Reproduciendo track"})
+        except SpotifyNotConnectedError:
+            return Response({"error": "Spotify no está conectado"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        except Exception as e:
+            logger.error(f"Error al reproducir track: {e}")
+            return Response({"error": "Error al reproducir"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=False, methods=["post"], url_path="player/volume", permission_classes=[IsAuthenticated])
+    def player_volume(self, request):
+        """Ajustar volumen (0-100)"""
+        volume = request.data.get("volume")
+        if volume is None or not (0 <= int(volume) <= 100):
+            return Response({"error": "volume debe ser entre 0 y 100"}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            set_volume(int(volume))
+            return Response({"message": f"Volumen ajustado a {volume}"})
+        except SpotifyNotConnectedError:
+            return Response({"error": "Spotify no está conectado"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        except Exception as e:
+            logger.error(f"Error al ajustar volumen: {e}")
+            return Response({"error": "Error al ajustar volumen"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 class SpotifyAuthView(APIView):

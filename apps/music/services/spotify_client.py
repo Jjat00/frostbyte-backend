@@ -75,6 +75,42 @@ def get_queue():
     return tracks
 
 
+def pause_playback():
+    """Pausa la reproducción"""
+    sp = _get_spotify_client()
+    sp.pause_playback()
+
+
+def resume_playback():
+    """Reanuda la reproducción"""
+    sp = _get_spotify_client()
+    sp.start_playback()
+
+
+def skip_to_next():
+    """Salta a la siguiente canción"""
+    sp = _get_spotify_client()
+    sp.next_track()
+
+
+def skip_to_previous():
+    """Vuelve a la canción anterior"""
+    sp = _get_spotify_client()
+    sp.previous_track()
+
+
+def play_track(track_uri):
+    """Reproduce un track específico inmediatamente"""
+    sp = _get_spotify_client()
+    sp.start_playback(uris=[track_uri])
+
+
+def set_volume(volume_percent):
+    """Ajusta el volumen (0-100)"""
+    sp = _get_spotify_client()
+    sp.volume(volume_percent)
+
+
 def is_connected():
     """Verifica si Spotify está conectado y activo"""
     try:
