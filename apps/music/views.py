@@ -195,14 +195,15 @@ class SongRequestViewSet(viewsets.ModelViewSet):
 
 
 class SpotifyAuthView(APIView):
-    """Vistas para el flujo OAuth de Spotify"""
+    """Inicia el flujo OAuth de Spotify redirigiendo al usuario"""
 
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]
 
     def get(self, request):
-        """Iniciar flujo de autorización - retorna URL de Spotify"""
+        """Redirige directamente a Spotify para autorizar"""
+        from django.shortcuts import redirect
         url = get_authorize_url()
-        return Response({"authorize_url": url})
+        return redirect(url)
 
 
 class SpotifyCallbackView(APIView):
