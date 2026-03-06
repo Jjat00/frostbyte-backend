@@ -87,6 +87,8 @@ class SongRequestViewSet(viewsets.ModelViewSet):
         broadcast_music_update()
 
     def get_queryset(self):
+        from django.db.models import Case, When, Value, IntegerField
+
         queryset = super().get_queryset()
 
         if not self.request.user.is_authenticated:
@@ -102,7 +104,19 @@ class SongRequestViewSet(viewsets.ModelViewSet):
             if status_filter:
                 queryset = queryset.filter(status=status_filter)
 
-        return queryset.order_by("-created_at")
+        # Ordenar: playing primero, luego queued/pending por orden de llegada, completadas/canceladas al final
+        return queryset.annotate(
+            status_order=Case(
+                When(status=SongRequest.Status.PLAYING, then=Value(0)),
+                When(status=SongRequest.Status.QUEUED, then=Value(1)),
+                When(status=SongRequest.Status.PENDING, then=Value(2)),
+                When(status=SongRequest.Status.FAILED, then=Value(3)),
+                When(status=SongRequest.Status.CANCELLED, then=Value(4)),
+                When(status=SongRequest.Status.COMPLETED, then=Value(5)),
+                default=Value(6),
+                output_field=IntegerField(),
+            )
+        ).order_by("status_order", "created_at")
 
     @action(detail=True, methods=["post"], permission_classes=[IsAuthenticated])
     def update_status(self, request, pk=None):
