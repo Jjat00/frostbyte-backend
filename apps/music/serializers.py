@@ -16,6 +16,9 @@ class SongRequestSerializer(serializers.ModelSerializer):
             "id",
             "song_name",
             "artist_name",
+            "spotify_track_uri",
+            "spotify_track_image",
+            "spotify_track_duration_ms",
             "status",
             "status_display",
             "notes",
@@ -27,24 +30,25 @@ class SongRequestSerializer(serializers.ModelSerializer):
 
 
 class SongRequestCreateSerializer(serializers.ModelSerializer):
-    """Serializer para crear solicitudes de canciones"""
+    """Serializer para crear solicitudes con integración Spotify"""
 
     class Meta:
         model = SongRequest
         fields = [
             "song_name",
             "artist_name",
+            "spotify_track_uri",
+            "spotify_track_image",
+            "spotify_track_duration_ms",
             "notes",
         ]
 
     def validate_song_name(self, value):
-        """Validar que el nombre de la canción no esté vacío"""
         if not value or not value.strip():
             raise serializers.ValidationError("El nombre de la canción es requerido")
         return value.strip()
 
     def validate_artist_name(self, value):
-        """Validar que el nombre del artista no esté vacío"""
         if not value or not value.strip():
             raise serializers.ValidationError("El nombre del artista es requerido")
         return value.strip()
@@ -54,4 +58,16 @@ class SongRequestStatusUpdateSerializer(serializers.Serializer):
     """Serializer para actualizar el estado de una solicitud"""
 
     status = serializers.ChoiceField(choices=SongRequest.Status.choices)
+
+
+class SpotifyTrackSerializer(serializers.Serializer):
+    """Serializer para resultados de búsqueda de Spotify"""
+
+    uri = serializers.CharField()
+    name = serializers.CharField()
+    artists = serializers.CharField()
+    album = serializers.CharField()
+    image = serializers.URLField(allow_blank=True)
+    duration_ms = serializers.IntegerField()
+    preview_url = serializers.URLField(allow_null=True, allow_blank=True)
 
