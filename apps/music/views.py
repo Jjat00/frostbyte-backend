@@ -279,6 +279,52 @@ class SongRequestViewSet(viewsets.ModelViewSet):
             logger.error(f"Error al reproducir track: {e}")
             return Response({"error": "Error al reproducir"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+    @action(detail=False, methods=["get"], url_path="lyrics")
+    def lyrics(self, request):
+        """Obtener letras sincronizadas de LRCLib para la canción actual o por parámetros"""
+        track_name = request.query_params.get("track_name", "")
+        artist_name = request.query_params.get("artist_name", "")
+        duration = request.query_params.get("duration")  # en segundos
+
+        if not track_name or not artist_name:
+            return Response(
+                {"error": "track_name y artist_name son requeridos"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            import requests as http_requests
+
+            params = {
+                "track_name": track_name,
+                "artist_name": artist_name,
+            }
+            if duration:
+                params["duration"] = int(duration)
+
+            resp = http_requests.get(
+                "https://lrclib.net/api/get",
+                params=params,
+                headers={"User-Agent": "Frostbyte/1.0"},
+                timeout=5,
+            )
+
+            if resp.status_code == 404:
+                return Response({"synced_lyrics": None, "plain_lyrics": None})
+
+            resp.raise_for_status()
+            data = resp.json()
+
+            return Response({
+                "synced_lyrics": data.get("syncedLyrics"),
+                "plain_lyrics": data.get("plainLyrics"),
+                "track_name": data.get("trackName"),
+                "artist_name": data.get("artistName"),
+            })
+        except Exception as e:
+            logger.debug(f"Error obteniendo letras: {e}")
+            return Response({"synced_lyrics": None, "plain_lyrics": None})
+
     @action(detail=False, methods=["post"], url_path="player/volume", permission_classes=[IsAuthenticated])
     def player_volume(self, request):
         """Ajustar volumen (0-100)"""
