@@ -6,3 +6,7 @@ class MusicConfig(AppConfig):
     name = "apps.music"
     verbose_name = "Música"
 
+    def ready(self):
+        from apps.music.services.spotify_sync import start_sync
+        start_sync()
+

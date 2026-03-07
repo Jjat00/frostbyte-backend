@@ -2,14 +2,45 @@ from django.db import models
 from django.utils import timezone
 
 
+class SpotifyToken(models.Model):
+    """Almacena los tokens de autenticación de Spotify para el local.
+    Solo debe existir un registro (singleton) ya que es una sola cuenta de Spotify."""
+
+    access_token = models.TextField()
+    refresh_token = models.TextField()
+    token_type = models.CharField(max_length=50, default="Bearer")
+    expires_at = models.DateTimeField()
+    scope = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Token de Spotify"
+        verbose_name_plural = "Tokens de Spotify"
+
+    def __str__(self):
+        return f"Spotify Token (expira: {self.expires_at})"
+
+    @property
+    def is_expired(self):
+        return timezone.now() >= self.expires_at
+
+    @classmethod
+    def get_active_token(cls):
+        """Obtiene el token activo (singleton)"""
+        return cls.objects.first()
+
+
 class SongRequest(models.Model):
     """Solicitud de canción de un cliente"""
 
     class Status(models.TextChoices):
         PENDING = "pending", "Pendiente"
+        QUEUED = "queued", "En cola"
         PLAYING = "playing", "Reproduciendo"
         COMPLETED = "completed", "Completada"
         CANCELLED = "cancelled", "Cancelada"
+        FAILED = "failed", "Fallida"
 
     song_name = models.CharField(
         max_length=200,
@@ -18,6 +49,21 @@ class SongRequest(models.Model):
     artist_name = models.CharField(
         max_length=200,
         verbose_name="Nombre del artista",
+    )
+    spotify_track_uri = models.CharField(
+        max_length=100,
+        blank=True,
+        verbose_name="URI de Spotify",
+        help_text="URI del track en Spotify (spotify:track:xxx)",
+    )
+    spotify_track_image = models.URLField(
+        blank=True,
+        verbose_name="Imagen del track",
+    )
+    spotify_track_duration_ms = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        verbose_name="Duración en ms",
     )
     status = models.CharField(
         max_length=20,
