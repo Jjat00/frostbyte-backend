@@ -59,18 +59,30 @@ def get_currently_playing():
 
 
 def get_queue():
-    """Obtiene la cola de reproducción actual"""
+    """Obtiene la cola completa de Spotify, marcando cuales son solicitudes de clientes."""
+    from apps.music.models import SongRequest
+
     sp = _get_spotify_client()
     queue_data = sp.queue()
+
+    queued_uris = set(
+        SongRequest.objects.filter(
+            status=SongRequest.Status.QUEUED,
+            spotify_track_uri__gt="",
+        ).values_list("spotify_track_uri", flat=True)
+    )
+
     tracks = []
     for item in queue_data.get("queue", []):
+        uri = item["uri"]
         tracks.append({
-            "uri": item["uri"],
+            "uri": uri,
             "name": item["name"],
             "artists": ", ".join(a["name"] for a in item["artists"]),
             "album": item["album"]["name"],
             "image": item["album"]["images"][0]["url"] if item["album"]["images"] else "",
             "duration_ms": item["duration_ms"],
+            "is_request": uri in queued_uris,
         })
     return tracks
 
@@ -88,8 +100,16 @@ def resume_playback():
 
 
 def skip_to_next():
-    """Salta a la siguiente canción"""
+    """Salta a la siguiente canción y marca la actual como completada"""
+    from apps.music.models import SongRequest
+
     sp = _get_spotify_client()
+
+    # Marcar la canción actual como completada
+    playing_requests = SongRequest.objects.filter(status=SongRequest.Status.PLAYING)
+    for req in playing_requests:
+        req.mark_as_completed()
+
     sp.next_track()
 
 
@@ -100,8 +120,28 @@ def skip_to_previous():
 
 
 def play_track(track_uri):
-    """Reproduce un track específico inmediatamente"""
+    """Reproduce un track inmediatamente sin tocar la cola."""
+    from apps.music.models import SongRequest
+
     sp = _get_spotify_client()
+
+    # Marcar la canción que estaba sonando como completada
+    for req in SongRequest.objects.filter(status=SongRequest.Status.PLAYING):
+        req.mark_as_completed()
+
+    # Marcar esta solicitud como playing
+    matching = (
+        SongRequest.objects.filter(
+            spotify_track_uri=track_uri,
+            status__in=[SongRequest.Status.QUEUED, SongRequest.Status.PENDING],
+        )
+        .order_by("created_at")
+        .first()
+    )
+    if matching:
+        matching.mark_as_playing()
+
+    # Reproducir inmediatamente. Las demás canciones siguen en la cola de Spotify.
     sp.start_playback(uris=[track_uri])
 
 

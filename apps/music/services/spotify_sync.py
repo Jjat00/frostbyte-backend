@@ -17,12 +17,15 @@ def sync_song_request_statuses():
     Sincroniza los estados de las solicitudes con lo que realmente suena en Spotify.
 
     Lógica:
-    - Si un track está sonando y coincide con una solicitud queued/pending → playing
-    - Si una solicitud estaba "playing" pero ya no es el track actual → completed
-    - Las completadas se ocultan automáticamente de la vista pública
+    1. Si una solicitud estaba "playing" pero ya no es el track actual → completed
+    2. Si hay un track sonando que coincide con una solicitud queued/pending → playing
+    3. Si no hay nada sonando (o Spotify está idle) y hay solicitudes queued → reproducir la siguiente
     """
     from apps.music.models import SongRequest, SpotifyToken
-    from apps.music.services.spotify_client import get_currently_playing, SpotifyNotConnectedError
+    from apps.music.services.spotify_client import (
+        get_currently_playing,
+        SpotifyNotConnectedError,
+    )
     from apps.music.consumers import broadcast_music_update
 
     token = SpotifyToken.get_active_token()
@@ -34,22 +37,21 @@ def sync_song_request_statuses():
     except SpotifyNotConnectedError:
         return
     except Exception as e:
-        logger.debug(f"Error obteniendo canción actual: {e}")
+        logger.debug(f"Error obteniendo cancion actual: {e}")
         return
 
     current_uri = current["uri"] if current and current.get("is_playing") else None
     changed = False
 
     # 1. Las que estaban "playing" pero ya no son la canción actual → completed
-    playing_requests = SongRequest.objects.filter(status=SongRequest.Status.PLAYING)
-    for req in playing_requests:
+    for req in SongRequest.objects.filter(status=SongRequest.Status.PLAYING):
         if req.spotify_track_uri != current_uri:
             req.status = SongRequest.Status.COMPLETED
             if not req.played_at:
                 req.played_at = timezone.now()
             req.save(update_fields=["status", "played_at", "updated_at"])
             changed = True
-            logger.info(f"Completada: {req.song_name} - {req.artist_name}")
+            logger.info(f"[Spotify Sync] Completada: {req.song_name} - {req.artist_name}")
 
     # 2. Si hay un track sonando, buscar si coincide con alguna solicitud queued/pending
     if current_uri:
@@ -66,7 +68,30 @@ def sync_song_request_statuses():
             pending_match.played_at = timezone.now()
             pending_match.save(update_fields=["status", "played_at", "updated_at"])
             changed = True
-            logger.info(f"Reproduciendo: {pending_match.song_name} - {pending_match.artist_name}")
+            logger.info(f"[Spotify Sync] Reproduciendo: {pending_match.song_name} - {pending_match.artist_name}")
+
+    # 3. Si no hay nada sonando y hay solicitudes en cola, reproducir la siguiente
+    if not current_uri:
+        next_queued = (
+            SongRequest.objects.filter(
+                status=SongRequest.Status.QUEUED,
+                spotify_track_uri__gt="",
+            )
+            .order_by("created_at")
+            .first()
+        )
+        if next_queued:
+            try:
+                from apps.music.services.spotify_client import _get_spotify_client
+                sp = _get_spotify_client()
+                sp.start_playback(uris=[next_queued.spotify_track_uri])
+                next_queued.status = SongRequest.Status.PLAYING
+                next_queued.played_at = timezone.now()
+                next_queued.save(update_fields=["status", "played_at", "updated_at"])
+                changed = True
+                logger.info(f"[Spotify Sync] Auto-reproduciendo siguiente: {next_queued.song_name}")
+            except Exception as e:
+                logger.debug(f"Error auto-reproduciendo: {e}")
 
     if changed:
         try:
@@ -78,7 +103,7 @@ def sync_song_request_statuses():
 def _sync_loop():
     """Loop que corre en background sincronizando estados"""
     global _sync_running
-    print("[Spotify Sync] Hilo de sincronizacion iniciado")
+    logger.info("[Spotify Sync] Hilo de sincronizacion iniciado")
 
     # Esperar a que Django esté completamente listo
     time.sleep(3)
@@ -90,7 +115,7 @@ def _sync_loop():
             logger.debug(f"Spotify sync error: {e}")
         time.sleep(SYNC_INTERVAL)
 
-    print("[Spotify Sync] Hilo de sincronizacion detenido")
+    logger.info("[Spotify Sync] Hilo de sincronizacion detenido")
 
 
 def start_sync():
@@ -103,7 +128,7 @@ def start_sync():
     _sync_running = True
     _sync_thread = threading.Thread(target=_sync_loop, daemon=True, name="spotify-sync")
     _sync_thread.start()
-    print("[Spotify Sync] Sincronizacion con Spotify activada")
+    logger.info("[Spotify Sync] Sincronizacion con Spotify activada")
 
 
 def stop_sync():
