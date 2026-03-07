@@ -124,6 +124,7 @@ Frostbyte incluye múltiples capacidades de IA usando **OpenAI API**, distribuid
 - **OAuth2**: Flujo Authorization Code con Spotify, tokens con auto-refresh
 - **Auto-play**: Cuando Spotify queda idle, reproduce la siguiente solicitud en cola
 - **Cola completa**: El admin ve toda la cola de Spotify, con indicador de cuáles son solicitudes de clientes
+- **Letras sincronizadas**: Obtiene letras con timestamps de LRCLib, matching por artista + nombre + duración
 - **Dependencia**: `spotipy` (SDK Python para Spotify Web API)
 - **Requiere**: Cuenta Spotify Premium para controles de playback
 
@@ -199,6 +200,7 @@ Base URL: `http://localhost:8000/api/v1/`
 | Music | `/song-requests/player_previous/` | Canción anterior |
 | Music | `/song-requests/player_play_track/` | Reproducir canción específica |
 | Music | `/song-requests/player_volume/` | Ajustar volumen |
+| Music | `/song-requests/lyrics/` | Letras sincronizadas via LRCLib |
 | Spotify Auth | `/spotify/auth/` | Iniciar OAuth con Spotify |
 | Spotify Auth | `/spotify/callback/` | Callback OAuth Spotify |
 | Spotify Auth | `/spotify/disconnect/` | Desconectar Spotify |
