@@ -14,6 +14,7 @@ API REST para gestión de negocios de bebidas preparadas (granizados, frappés, 
 | Redis | - | Channel layers (producción) |
 | OpenAI | 2.15.0 | Generación de imágenes |
 | Cloudflare R2 | - | Almacenamiento de archivos |
+| Spotipy | 2.26+ | SDK Python para Spotify Web API |
 | Gunicorn + Daphne | - | Servidores de producción |
 
 ## Arquitectura
@@ -113,6 +114,19 @@ Frostbyte incluye múltiples capacidades de IA usando **OpenAI API**, distribuid
 - Categorías con iconos
 - Límites presupuestarios
 
+### Música y Spotify (`/apps/music/`)
+**Sistema de solicitudes de canciones con integración a Spotify**
+- **Solicitudes de clientes**: Buscan y piden canciones desde el menú digital
+- **Cola automática**: Las canciones se agregan automáticamente a la cola de Spotify del local
+- **Sincronización en tiempo real**: Hilo background sincroniza estados cada 5s con Spotify
+- **Controles de playback**: El admin controla play, pause, skip, volumen desde el panel
+- **WebSocket**: Actualizaciones en tiempo real para clientes y admin via Django Channels
+- **OAuth2**: Flujo Authorization Code con Spotify, tokens con auto-refresh
+- **Auto-play**: Cuando Spotify queda idle, reproduce la siguiente solicitud en cola
+- **Cola completa**: El admin ve toda la cola de Spotify, con indicador de cuáles son solicitudes de clientes
+- **Dependencia**: `spotipy` (SDK Python para Spotify Web API)
+- **Requiere**: Cuenta Spotify Premium para controles de playback
+
 ### Juegos (`/apps/games/`)
 - "Duelo Frostbyte" - Juego de reacción multijugador
 - WebSocket con Django Channels
@@ -174,6 +188,20 @@ Base URL: `http://localhost:8000/api/v1/`
 | Inventory | `/inventory/recipes/` | Recetas |
 | Expenses | `/expenses/` | Gastos operacionales |
 | Games | `/games/rooms/` | Salas de juego |
+| Music | `/song-requests/` | CRUD solicitudes de canciones |
+| Music | `/song-requests/search/` | Buscar canciones en Spotify |
+| Music | `/song-requests/now_playing/` | Canción reproduciéndose |
+| Music | `/song-requests/queue_status/` | Cola de Spotify completa |
+| Music | `/song-requests/spotify_status/` | Estado de conexión Spotify |
+| Music | `/song-requests/player_pause/` | Pausar reproducción |
+| Music | `/song-requests/player_resume/` | Reanudar reproducción |
+| Music | `/song-requests/player_next/` | Siguiente canción |
+| Music | `/song-requests/player_previous/` | Canción anterior |
+| Music | `/song-requests/player_play_track/` | Reproducir canción específica |
+| Music | `/song-requests/player_volume/` | Ajustar volumen |
+| Spotify Auth | `/spotify/auth/` | Iniciar OAuth con Spotify |
+| Spotify Auth | `/spotify/callback/` | Callback OAuth Spotify |
+| Spotify Auth | `/spotify/disconnect/` | Desconectar Spotify |
 | **AI - Imágenes** | **`POST /ai/generations/`** | **Generar imagen con IA (GPT Image 1.5)** |
 | **AI - Imágenes** | **`GET /ai/generations/`** | **Historial de generaciones** |
 | **AI - Imágenes** | **`POST /ai/generations/{id}/save_to_r2/`** | **Persistir imagen en Cloudflare R2** |
@@ -188,6 +216,7 @@ Base URL: `http://localhost:8000/api/v1/`
 ### WebSocket
 ```
 ws://localhost:8000/ws/games/rooms/{room_id}/
+ws://localhost:8000/ws/music/
 ```
 
 ## Instalación
@@ -242,6 +271,10 @@ Ver [.env.example](.env.example) para todas las variables de entorno disponibles
 | **`OPENAI_API_KEY`** | **API key de OpenAI** | **Para IA** | **Generación de imágenes (GPT Image 1.5), frases motivacionales, recomendaciones, transcripción de audio y sugerencias de descripción** |
 | `R2_*` | Credenciales Cloudflare R2 | Para almacenamiento | Persistencia de imágenes generadas |
 | `REDIS_URL` | URL de Redis | Producción | Channel layers y caché |
+| `SPOTIFY_CLIENT_ID` | Client ID de Spotify Developer | Para música | Integración Spotify |
+| `SPOTIFY_CLIENT_SECRET` | Client Secret de Spotify Developer | Para música | Integración Spotify |
+| `SPOTIFY_REDIRECT_URI` | URL de callback OAuth Spotify | Para música | Debe coincidir con Spotify Dashboard |
+| `FRONTEND_URL` | URL del frontend | Para música | Redirección post-OAuth |
 
 ### Configuración de IA (OpenAI)
 
@@ -331,3 +364,5 @@ python manage.py test
 - `OperationalExpense` - Gastos
 - `GameRoom` - Salas de juego
 - `AIImageGeneration` - Imágenes generadas
+- `SongRequest` - Solicitudes de canciones (con estados: pending, queued, playing, completed, cancelled, failed)
+- `SpotifyToken` - Token OAuth de Spotify (singleton, auto-refresh)
