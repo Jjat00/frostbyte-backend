@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import RecommenderLog
+from .models import RecommenderLog, Dedication
 
 
 @admin.register(RecommenderLog)
@@ -40,3 +40,18 @@ class RecommenderLogAdmin(admin.ModelAdmin):
 
     def has_change_permission(self, request, obj=None):
         return False
+
+
+@admin.register(Dedication)
+class DedicationAdmin(admin.ModelAdmin):
+    list_display = ("created_at", "author_name", "honoree_name", "message_preview", "is_approved")
+    list_filter = ("is_approved", "created_at")
+    search_fields = ("author_name", "honoree_name", "message")
+    list_editable = ("is_approved",)
+    date_hierarchy = "created_at"
+    ordering = ["-created_at"]
+
+    def message_preview(self, obj):
+        return obj.message[:80] + "..." if len(obj.message) > 80 else obj.message
+
+    message_preview.short_description = "Mensaje"

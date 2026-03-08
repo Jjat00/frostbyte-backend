@@ -1,4 +1,40 @@
 from django.db import models
+from django.core.validators import MinLengthValidator, MaxLengthValidator
+
+
+class Dedication(models.Model):
+    """Dedicatoria del Día de la Mujer — los clientes dejan mensajes para mujeres especiales."""
+
+    author_name = models.CharField(
+        max_length=60,
+        blank=True,
+        verbose_name="De parte de",
+    )
+    honoree_name = models.CharField(
+        max_length=60,
+        blank=True,
+        verbose_name="Para",
+    )
+    message = models.CharField(
+        max_length=200,
+        validators=[MinLengthValidator(5)],
+        verbose_name="Mensaje",
+    )
+    is_approved = models.BooleanField(default=True, verbose_name="Aprobada")
+    ip_address = models.GenericIPAddressField(
+        null=True, blank=True, verbose_name="IP del cliente"
+    )
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="Fecha")
+
+    class Meta:
+        verbose_name = "Dedicatoria 8M"
+        verbose_name_plural = "Dedicatorias 8M"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        para = f" para {self.honoree_name}" if self.honoree_name else ""
+        de = f" de {self.author_name}" if self.author_name else ""
+        return f"{self.message[:50]}{para}{de}"
 
 
 class RecommenderLog(models.Model):

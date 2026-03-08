@@ -1,15 +1,24 @@
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework import status
+from rest_framework.throttling import AnonRateThrottle
 from openai import OpenAI
 from django.utils import timezone
 from django.core.cache import cache
 from apps.products.models import Product
-from .models import RecommenderLog
+from .models import RecommenderLog, Dedication
+from .serializers import DedicationCreateSerializer, DedicationListSerializer
 import os
 import json
 import random
+import base64
+from google import genai
+from google.genai import types
+
+
+class DedicationCreateThrottle(AnonRateThrottle):
+    rate = "10/hour"
 
 
 PHRASE_CACHE_TTL = 30 * 60  # 30 minutos
@@ -444,3 +453,270 @@ Responde ÚNICAMENTE con JSON puro (sin markdown, sin backticks):
 
     except Exception as e:
         return Response({"error": f"Error al generar recomendación: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def generate_8m_phrase(request):
+    """
+    Genera una frase inspiradora para el Día de la Mujer usando Gemini.
+    El usuario puede luego editarla antes de generar la tarjeta.
+
+    Input (JSON):
+      - woman_name (optional): nombre de la mujer para personalizar la frase
+
+    Output:
+      { "phrase": "..." }
+    """
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        return Response(
+            {"error": "GEMINI_API_KEY no configurada."},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+    woman_name = (request.data.get("woman_name") or "").strip()
+
+    prompt = (
+        "Genera UNA frase inspiradora, emotiva y bonita para celebrar el Día Internacional de la Mujer (8 de Marzo). "
+        "La frase debe hablar sobre la fuerza, belleza, valentía o esencia de las mujeres. "
+        "Debe ser en español colombiano, tono cercano, elegante y emotivo. "
+        "Máximo 25 palabras. NO uses hashtags. NO uses comillas. "
+        "Sé creativa, cada frase debe ser ÚNICA y diferente."
+    )
+
+    if woman_name:
+        prompt += f'\nPersonaliza la frase mencionando el nombre "{woman_name}" de forma natural.'
+
+    try:
+        client = genai.Client(api_key=api_key)
+
+        response = client.models.generate_content(
+            model="gemini-3.1-flash-lite-preview",
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                thinking_config=types.ThinkingConfig(thinking_level="MINIMAL"),
+                response_modalities=["TEXT"],
+            ),
+        )
+
+        phrase = response.text.strip().strip('"').strip("'").strip("\u201c").strip("\u201d")
+
+        return Response({"phrase": phrase}, status=status.HTTP_200_OK)
+
+    except Exception as e:
+        return Response(
+            {"error": f"Error al generar frase: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def generate_8m_image(request):
+    """
+    Genera una imagen de tarjeta para el Día Internacional de la Mujer (8M)
+    usando Google Gemini con la foto de la cliente incorporada al diseño.
+
+    Input (multipart/form-data):
+      - image       (required) : foto de la persona a incluir en el diseño
+      - phrase      (optional) : frase personalizada para la tarjeta
+      - woman_name  (optional) : nombre de la mujer homenajeada
+      - from_name   (optional) : nombre de quien envía ("de parte de...")
+
+    Output:
+      {
+        "image_base64": "<base64 string>",
+        "mime_type": "image/png",
+        "phrase_used": "<frase incluida en la tarjeta>"
+      }
+    """
+    # --- Validar imagen ---
+    image_file = request.FILES.get("image")
+    if not image_file:
+        return Response(
+            {"error": "El campo 'image' es requerido."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    allowed_types = ["image/jpeg", "image/png", "image/webp"]
+    if image_file.content_type not in allowed_types:
+        return Response(
+            {"error": "Tipo de archivo no soportado. Usa JPEG, PNG o WebP."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # --- Validar API key ---
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        return Response(
+            {"error": "GEMINI_API_KEY no configurada."},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+    # --- Parámetros opcionales ---
+    phrase = (request.data.get("phrase") or "").strip()
+    woman_name = (request.data.get("woman_name") or "").strip()
+    from_name = (request.data.get("from_name") or "").strip()
+
+    # Frase por defecto si no se proporcionó
+    phrase_used = phrase if phrase else (
+        "Hoy y siempre, tu fuerza ilumina el mundo. ¡Feliz Día de la Mujer!"
+    )
+
+    # --- Construir prompt en español ---
+    prompt_parts = [
+        "Diseñar una card estética (aesthetic) para el Día de la Mujer.",
+        "",
+        "FOTO ADJUNTA:",
+        "- Usar la foto adjunta EXACTAMENTE IGUAL, sin modificarla, sin cambiar colores, "
+        "sin aplicar filtros directamente sobre la foto.",
+        "- Solo agregar un marco decorativo alrededor de la foto que combine con la imagen.",
+        "- La foto debe ser el elemento central y protagónico de la card.",
+        "",
+        "ESTILO VISUAL:",
+        "- ANALIZA los colores predominantes de la foto adjunta (ropa, fondo, accesorios, tono de piel).",
+        "- El COLOR PRINCIPAL / COLOR DE FONDO de toda la tarjeta debe derivarse directamente de los colores "
+        "predominantes de la foto. Por ejemplo: si la persona viste de azul, el fondo y color principal debe ser "
+        "un azul suave; si viste de rojo, tonos rojos/coral suaves; si hay verde, tonos verde menta, etc.",
+        "- Usa esos mismos colores como base para TODA la paleta de la tarjeta: fondo, marco, adornos, flores, "
+        "destellos, tipografía decorativa — TODO debe armonizar con los colores de la foto.",
+        "- Si la foto tiene tonos cálidos, usa decoraciones cálidas. Si tiene tonos fríos, usa decoraciones frías.",
+        "- NO uses rosa/lila por defecto. El color lo DICTA la foto.",
+        "- Estilo aesthetic tipo filtro de Instagram.",
+        "- Luz cálida, textura sutil, sombras suaves.",
+        "- Elementos delicados: flores minimalistas, destellos suaves, líneas elegantes.",
+        "- Los adornos y accesorios decorativos deben verse como una extensión natural de la foto, no impuestos.",
+        "- Composición limpia y armoniosa.",
+        "- Formato cuadrado estilo post de Instagram (1:1), alta calidad.",
+        "- Diseño femenino, aesthetic moderno, bonito y elegante.",
+        "",
+        "TEXTO A INCLUIR EN LA TARJETA:",
+        '- Texto principal: "Feliz Día de la Mujer"',
+        f'- Frase inspiradora (destácala con tipografía elegante): "{phrase_used}"',
+    ]
+
+    if woman_name:
+        prompt_parts.append(
+            f'- Nombre de la homenajeada (tipografía elegante, zona visible): "{woman_name}"'
+        )
+
+    if from_name:
+        prompt_parts.append(
+            f'- Mensaje de remitente (texto más pequeño, parte inferior): "De parte de: {from_name}"'
+        )
+
+    prompt_parts += [
+        '- Marca sutil "Frostbyte" en una esquina (pequeño, discreto, no invasivo).',
+        "",
+        "IMPORTANTE: El resultado debe verse moderno, bonito, elegante y digno de redes sociales. "
+        "La foto de la persona NO debe ser alterada ni filtrada, solo enmarcada dentro del diseño.",
+    ]
+
+    full_prompt = "\n".join(prompt_parts)
+
+    try:
+        image_bytes = image_file.read()
+        image_mime = image_file.content_type
+
+        client = genai.Client(api_key=api_key)
+
+        contents = [
+            types.Content(
+                role="user",
+                parts=[
+                    types.Part.from_bytes(data=image_bytes, mime_type=image_mime),
+                    types.Part.from_text(text=full_prompt),
+                ],
+            )
+        ]
+
+        generate_content_config = types.GenerateContentConfig(
+            thinking_config=types.ThinkingConfig(thinking_level="MINIMAL"),
+            image_config=types.ImageConfig(
+                aspect_ratio="1:1",
+                image_size="1K",
+            ),
+            response_modalities=["IMAGE"],
+        )
+
+        generated_image_data = None
+        generated_mime_type = "image/png"
+
+        for chunk in client.models.generate_content_stream(
+            model="gemini-3.1-flash-image-preview",
+            contents=contents,
+            config=generate_content_config,
+        ):
+            if chunk.parts:
+                for part in chunk.parts:
+                    if part.inline_data and part.inline_data.data:
+                        generated_image_data = part.inline_data.data
+                        generated_mime_type = part.inline_data.mime_type or "image/png"
+                        break
+            if generated_image_data:
+                break
+
+        if not generated_image_data:
+            return Response(
+                {"error": "Gemini no devolvió una imagen. Intenta con otra foto."},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        # inline_data.data llega como bytes en google-genai >= 1.0
+        if isinstance(generated_image_data, (bytes, bytearray)):
+            image_base64 = base64.b64encode(generated_image_data).decode("utf-8")
+        else:
+            # Versiones que devuelven el dato ya codificado en base64 como string
+            image_base64 = generated_image_data
+
+        return Response(
+            {
+                "image_base64": image_base64,
+                "mime_type": generated_mime_type,
+                "phrase_used": phrase_used,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    except Exception as e:
+        return Response(
+            {"error": f"Error al generar imagen: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+# ─── Dedicatorias 8M ─────────────────────────────────────────────────
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def list_dedications(request):
+    """Lista las dedicatorias aprobadas para el muro animado."""
+    dedications = Dedication.objects.filter(is_approved=True)[:100]
+    serializer = DedicationListSerializer(dedications, many=True)
+    return Response(
+        {"count": len(serializer.data), "results": serializer.data},
+        status=status.HTTP_200_OK,
+    )
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+@throttle_classes([DedicationCreateThrottle])
+def create_dedication(request):
+    """Crea una nueva dedicatoria para el muro del 8M."""
+    serializer = DedicationCreateSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    ip = (
+        request.META.get("HTTP_X_FORWARDED_FOR", "").split(",")[0].strip()
+        or request.META.get("REMOTE_ADDR")
+    )
+    serializer.save(ip_address=ip)
+
+    return Response(
+        {"message": "Tu dedicatoria fue enviada con exito."},
+        status=status.HTTP_201_CREATED,
+    )
