@@ -13,6 +13,111 @@ import random
 
 
 PHRASE_CACHE_TTL = 30 * 60  # 30 minutos
+WOMENS_DAY_CACHE_TTL = 5 * 60  # 5 minutos para que rote más seguido
+
+
+def _generate_womens_day_phrase():
+    """
+    Genera una frase inspiradora para el Día Internacional de la Mujer usando OpenAI.
+    """
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        return None
+
+    client = OpenAI(api_key=api_key)
+
+    active_products = Product.objects.filter(
+        is_active=True, category__is_active=True
+    ).select_related("category").order_by("category__display_order", "name")
+
+    products_by_category = {}
+    for product in active_products:
+        category_name = product.category.name
+        if category_name not in products_by_category:
+            products_by_category[category_name] = []
+        products_by_category[category_name].append(product.name)
+
+    products_formatted = "\n".join(
+        f"- {category}: {', '.join(products)}"
+        for category, products in products_by_category.items()
+    )
+
+    prompt = f"""Hoy es 8 de marzo, Día Internacional de la Mujer.
+
+Productos activos de Frostbyte por categoría:
+{products_formatted}
+
+Crea un mensaje inspirador y especial para celebrar el Día Internacional de la Mujer.
+El mensaje debe:
+- Celebrar la fuerza, creatividad e impacto de las mujeres
+- Ser inspirador, respetuoso y moderno
+- Mencionar sutilmente algún producto de Frostbyte como invitación a celebrar
+- Estar en español colombiano
+- Tono cercano, elegante y emotivo
+- Máximo 35 palabras
+- NO usar hashtags
+- Ser DIFERENTE cada vez que se genera, usa creatividad y variación"""
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {
+                "role": "system",
+                "content": "Eres un escritor colombiano creativo especializado en mensajes "
+                           "inspiradores para mujeres. Cada mensaje que creas es único, "
+                           "emotivo y celebra la grandeza femenina. Nunca repites frases."
+            },
+            {"role": "user", "content": prompt},
+        ],
+        max_tokens=100,
+        temperature=1.0,
+        timeout=10,
+    )
+
+    frase = response.choices[0].message.content.strip()
+    # Limpiar comillas si la IA las agrega
+    frase = frase.strip('"').strip("'").strip("\u201c").strip("\u201d")
+
+    return {
+        "phrase": frase,
+        "date": "2026-03-08",
+        "theme": "8M",
+    }
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def get_womens_day_phrase(request):
+    """
+    Genera una frase inspiradora para el Día de la Mujer.
+    Cache de 5 minutos para que rote frecuentemente.
+    El parámetro ?nocache=1 fuerza una frase nueva.
+    """
+    try:
+        nocache = request.query_params.get("nocache", "0") == "1"
+        cache_key = "womens_day_phrase"
+
+        if not nocache:
+            cached = cache.get(cache_key)
+            if cached:
+                return Response(cached, status=status.HTTP_200_OK)
+
+        result = _generate_womens_day_phrase()
+
+        if result is None:
+            return Response(
+                {"error": "OpenAI API key no configurada"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        cache.set(cache_key, result, WOMENS_DAY_CACHE_TTL)
+        return Response(result, status=status.HTTP_200_OK)
+
+    except Exception as e:
+        return Response(
+            {"error": f"Error al generar frase: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
 
 
 def _generate_phrase():
