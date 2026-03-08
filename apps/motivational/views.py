@@ -4,15 +4,11 @@ from rest_framework.response import Response
 from rest_framework import status
 from openai import OpenAI
 from django.utils import timezone
-from django.core.cache import cache
 from apps.products.models import Product
 from .models import RecommenderLog
 import os
 import json
 import random
-
-
-PHRASE_CACHE_TTL = 30 * 60  # 30 minutos
 
 
 def _generate_phrase():
@@ -94,15 +90,9 @@ def _generate_phrase():
 def get_motivational_phrase(request):
     """
     Genera una frase motivacional o dato curioso histórico usando OpenAI basada en la fecha actual.
-    Cachea el resultado por 30 minutos para no bloquear el thread pool con llamadas a OpenAI.
+    Genera una frase nueva en cada petición.
     """
     try:
-        cache_key = "motivational_phrase"
-        cached = cache.get(cache_key)
-
-        if cached:
-            return Response(cached, status=status.HTTP_200_OK)
-
         result = _generate_phrase()
 
         if result is None:
@@ -110,8 +100,6 @@ def get_motivational_phrase(request):
                 {"error": "OpenAI API key no configurada"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
-
-        cache.set(cache_key, result, PHRASE_CACHE_TTL)
 
         return Response(result, status=status.HTTP_200_OK)
 
