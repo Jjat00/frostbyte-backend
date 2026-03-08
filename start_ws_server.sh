@@ -13,5 +13,5 @@ echo ""
 echo "Para detener el servidor, presiona Ctrl+C"
 echo ""
 
-daphne -b 0.0.0.0 -p 8000 --application-close-timeout 120 --request-timeout 120 config.asgi:application
+daphne -b 0.0.0.0 -p 8000 --application-close-timeout 120 -t 120 config.asgi:application
 
