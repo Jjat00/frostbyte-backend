@@ -30,6 +30,8 @@ urlpatterns = [
     path('api/v1/analytics/', include('apps.analytics.urls')),
     # AI Generator
     path('api/v1/ai/', include('apps.ai_generator.urls')),
+    # Impostor Game
+    path('api/v1/impostor/', include('apps.impostor.urls')),
 ]
 
 # Servir archivos media en desarrollo
