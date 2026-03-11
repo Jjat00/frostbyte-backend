@@ -64,6 +64,7 @@ INSTALLED_APPS = [
     'apps.expenses',
     'apps.analytics',
     'apps.ai_generator',
+    'apps.impostor',
 ]
 
 # Custom User Model
