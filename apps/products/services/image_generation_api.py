@@ -39,7 +39,33 @@ from .openai_image_service import (
     ImageGenerationUsageTracker,
     FoodCategoryDescriptors,
 )
+from .gemini_image_service import (
+    GeminiImageService,
+    GeminiImageConfig,
+    GeminiImageModel,
+    GeminiAspectRatio,
+    GeminiImageSize,
+)
 from .r2_upload import R2UploadService, R2UploadError
+
+
+# =============================================================================
+# PROVIDER CONSTANTS
+# =============================================================================
+
+PROVIDER_OPENAI = 'openai'
+PROVIDER_GEMINI = 'gemini'
+
+# All available models mapped to their provider
+MODEL_PROVIDER_MAP = {
+    # OpenAI models
+    'gpt-image-1.5': PROVIDER_OPENAI,
+    'gpt-image-1': PROVIDER_OPENAI,
+    'gpt-image-1-mini': PROVIDER_OPENAI,
+    # Gemini models
+    'gemini-3-pro-image-preview': PROVIDER_GEMINI,
+    'gemini-3.1-flash-image-preview': PROVIDER_GEMINI,
+}
 
 logger = logging.getLogger(__name__)
 
@@ -87,11 +113,15 @@ class ImageGenerationRequestSerializer(serializers.Serializer):
     # Configuration options
     model = serializers.ChoiceField(
         choices=[
+            # Gemini models (default)
+            ('gemini-3-pro-image-preview', 'Gemini 3 Pro Image (Best Quality)'),
+            ('gemini-3.1-flash-image-preview', 'Gemini 3.1 Flash Image (Fast)'),
+            # OpenAI models
             ('gpt-image-1.5', 'GPT Image 1.5 (Best Quality)'),
             ('gpt-image-1', 'GPT Image 1 (Standard)'),
             ('gpt-image-1-mini', 'GPT Image 1 Mini (Fast/Cheap)'),
         ],
-        default='gpt-image-1.5',
+        default='gemini-3-pro-image-preview',
         required=False
     )
     quality = serializers.ChoiceField(
@@ -113,6 +143,32 @@ class ImageGenerationRequestSerializer(serializers.Serializer):
         ],
         default='1024x1024',
         required=False
+    )
+    # Gemini-specific: aspect ratio (used instead of size for Gemini)
+    aspect_ratio = serializers.ChoiceField(
+        choices=[
+            ('1:1', 'Square (1:1)'),
+            ('4:3', 'Landscape (4:3)'),
+            ('16:9', 'Wide (16:9)'),
+            ('3:2', 'Landscape (3:2)'),
+            ('2:3', 'Portrait (2:3)'),
+            ('3:4', 'Portrait (3:4)'),
+        ],
+        default='1:1',
+        required=False,
+        help_text="Aspect ratio for Gemini models (ignored for OpenAI)"
+    )
+    # Gemini-specific: image size
+    image_size = serializers.ChoiceField(
+        choices=[
+            ('512', 'Small (512px)'),
+            ('1K', 'Medium (1K)'),
+            ('2K', 'Large (2K)'),
+            ('4K', 'Extra Large (4K)'),
+        ],
+        default='2K',
+        required=False,
+        help_text="Image size for Gemini models (ignored for OpenAI)"
     )
     transparent_background = serializers.BooleanField(
         default=True,
@@ -201,11 +257,13 @@ class RegenerationRequestSerializer(serializers.Serializer):
     # Optional config overrides
     model = serializers.ChoiceField(
         choices=[
+            ('gemini-3-pro-image-preview', 'Gemini 3 Pro Image'),
+            ('gemini-3.1-flash-image-preview', 'Gemini 3.1 Flash Image'),
             ('gpt-image-1.5', 'GPT Image 1.5'),
             ('gpt-image-1', 'GPT Image 1'),
             ('gpt-image-1-mini', 'GPT Image 1 Mini'),
         ],
-        default='gpt-image-1.5',
+        default='gemini-3-pro-image-preview',
         required=False
     )
     quality = serializers.ChoiceField(
@@ -296,16 +354,6 @@ class ImageGenerationView(APIView):
                 status=status.HTTP_429_TOO_MANY_REQUESTS
             )
 
-        # Build configuration
-        config = ImageGenerationConfig(
-            model=ImageModel(data['model']),
-            size=ImageSize(data['size']),
-            quality=ImageQuality(data['quality']),
-            output_format=OutputFormat(data['output_format']),
-            transparent_background=data['transparent_background'],
-            use_cache=not data['skip_cache']
-        )
-
         # Decode images if provided
         original_image = None
         reference_image = None
@@ -322,30 +370,65 @@ class ImageGenerationView(APIView):
             category_info = FoodCategoryDescriptors.get_category_info(data['category_slug'])
             white_elements = category_info.get('common_white_elements', [])
 
-        # Initialize service and generate
+        # Determine provider based on selected model
+        selected_model = data['model']
+        provider = MODEL_PROVIDER_MAP.get(selected_model, PROVIDER_GEMINI)
+
         try:
-            service = OpenAIImageService()
-
-            # Check content policy first
-            full_prompt = f"{data['product_name']}: {data['product_description']}"
-            is_safe, moderation_message = service.check_content_policy(full_prompt)
-
-            if not is_safe:
-                return Response(
-                    {"success": False, "error_message": moderation_message},
-                    status=status.HTTP_400_BAD_REQUEST
+            if provider == PROVIDER_GEMINI:
+                # Use Gemini service
+                gemini_config = GeminiImageConfig(
+                    model=GeminiImageModel(selected_model),
+                    aspect_ratio=GeminiAspectRatio(data.get('aspect_ratio', '1:1')),
+                    image_size=GeminiImageSize(data.get('image_size', '2K')),
+                    output_format=data['output_format'],
+                    use_cache=not data['skip_cache']
                 )
 
-            result = service.generate_menu_image(
-                product_name=data['product_name'],
-                product_description=data['product_description'],
-                original_image=original_image,
-                reference_image=reference_image,
-                style_description=data.get('style_description'),
-                additional_instructions=data.get('additional_instructions', ''),
-                white_elements=white_elements,
-                config=config
-            )
+                service = GeminiImageService()
+                result = service.generate_menu_image(
+                    product_name=data['product_name'],
+                    product_description=data['product_description'],
+                    original_image=original_image,
+                    reference_image=reference_image,
+                    style_description=data.get('style_description'),
+                    additional_instructions=data.get('additional_instructions', ''),
+                    white_elements=white_elements,
+                    config=gemini_config
+                )
+            else:
+                # Use OpenAI service
+                openai_config = ImageGenerationConfig(
+                    model=ImageModel(selected_model),
+                    size=ImageSize(data['size']),
+                    quality=ImageQuality(data['quality']),
+                    output_format=OutputFormat(data['output_format']),
+                    transparent_background=data['transparent_background'],
+                    use_cache=not data['skip_cache']
+                )
+
+                service = OpenAIImageService()
+
+                # Check content policy first (OpenAI only)
+                full_prompt = f"{data['product_name']}: {data['product_description']}"
+                is_safe, moderation_message = service.check_content_policy(full_prompt)
+
+                if not is_safe:
+                    return Response(
+                        {"success": False, "error_message": moderation_message},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
+                result = service.generate_menu_image(
+                    product_name=data['product_name'],
+                    product_description=data['product_description'],
+                    original_image=original_image,
+                    reference_image=reference_image,
+                    style_description=data.get('style_description'),
+                    additional_instructions=data.get('additional_instructions', ''),
+                    white_elements=white_elements,
+                    config=openai_config
+                )
 
         except ValueError as e:
             return Response(
@@ -429,17 +512,27 @@ class ImagePreviewView(APIView):
         data = serializer.validated_data
 
         try:
-            service = OpenAIImageService()
+            # Use Gemini Flash for previews by default (fast + cost-effective)
+            service = GeminiImageService()
             result = service.generate_preview(
                 product_name=data['product_name'],
                 brief_description=data['brief_description'],
                 category_slug=data.get('category_slug', '')
             )
-        except ValueError as e:
-            return Response(
-                {"success": False, "error_message": str(e)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+        except (ValueError, ImportError):
+            # Fallback to OpenAI if Gemini is not available
+            try:
+                service = OpenAIImageService()
+                result = service.generate_preview(
+                    product_name=data['product_name'],
+                    brief_description=data['brief_description'],
+                    category_slug=data.get('category_slug', '')
+                )
+            except ValueError as e:
+                return Response(
+                    {"success": False, "error_message": str(e)},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
 
         if not result.success:
             return Response(
@@ -494,20 +587,34 @@ class ImageRegenerationView(APIView):
         # Decode previous image
         previous_image = base64.b64decode(data['previous_image_base64'])
 
-        config = ImageGenerationConfig(
-            model=ImageModel(data['model']),
-            quality=ImageQuality(data['quality']),
-            transparent_background=True
-        )
+        selected_model = data['model']
+        provider = MODEL_PROVIDER_MAP.get(selected_model, PROVIDER_GEMINI)
 
         try:
-            service = OpenAIImageService()
-            result = service.regenerate_with_feedback(
-                previous_image=previous_image,
-                feedback=data['feedback'],
-                original_prompt=data['original_prompt'],
-                config=config
-            )
+            if provider == PROVIDER_GEMINI:
+                gemini_config = GeminiImageConfig(
+                    model=GeminiImageModel(selected_model),
+                )
+                service = GeminiImageService()
+                result = service.regenerate_with_feedback(
+                    previous_image=previous_image,
+                    feedback=data['feedback'],
+                    original_prompt=data['original_prompt'],
+                    config=gemini_config
+                )
+            else:
+                openai_config = ImageGenerationConfig(
+                    model=ImageModel(selected_model),
+                    quality=ImageQuality(data['quality']),
+                    transparent_background=True
+                )
+                service = OpenAIImageService()
+                result = service.regenerate_with_feedback(
+                    previous_image=previous_image,
+                    feedback=data['feedback'],
+                    original_prompt=data['original_prompt'],
+                    config=openai_config
+                )
         except ValueError as e:
             return Response(
                 {"success": False, "error_message": str(e)},
@@ -652,18 +759,42 @@ class ImageGenerationWithFilesView(APIView):
             category_info = FoodCategoryDescriptors.get_category_info(category_slug)
             white_elements = category_info.get('common_white_elements', [])
 
+        # Determine provider from model selection (default to Gemini Pro)
+        selected_model = request.data.get('model', 'gemini-3-pro-image-preview')
+        provider = MODEL_PROVIDER_MAP.get(selected_model, PROVIDER_GEMINI)
+
         # Generate
         try:
-            service = OpenAIImageService()
-            result = service.generate_menu_image(
-                product_name=product_name,
-                product_description=product_description,
-                original_image=original_data,
-                reference_image=reference_data,
-                style_description=style_description,
-                additional_instructions=additional_instructions,
-                white_elements=white_elements
-            )
+            if provider == PROVIDER_GEMINI:
+                aspect_ratio = request.data.get('aspect_ratio', '1:1')
+                image_size = request.data.get('image_size', '2K')
+                gemini_config = GeminiImageConfig(
+                    model=GeminiImageModel(selected_model),
+                    aspect_ratio=GeminiAspectRatio(aspect_ratio),
+                    image_size=GeminiImageSize(image_size),
+                )
+                service = GeminiImageService()
+                result = service.generate_menu_image(
+                    product_name=product_name,
+                    product_description=product_description,
+                    original_image=original_data,
+                    reference_image=reference_data,
+                    style_description=style_description,
+                    additional_instructions=additional_instructions,
+                    white_elements=white_elements,
+                    config=gemini_config
+                )
+            else:
+                service = OpenAIImageService()
+                result = service.generate_menu_image(
+                    product_name=product_name,
+                    product_description=product_description,
+                    original_image=original_data,
+                    reference_image=reference_data,
+                    style_description=style_description,
+                    additional_instructions=additional_instructions,
+                    white_elements=white_elements
+                )
         except ValueError as e:
             return Response(
                 {"success": False, "error_message": str(e)},
