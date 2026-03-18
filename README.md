@@ -12,7 +12,9 @@ API REST para gestión de negocios de bebidas preparadas (granizados, frappés, 
 | Django Channels | 4.3.2 | WebSocket support |
 | PostgreSQL | - | Base de datos |
 | Redis | - | Channel layers (producción) |
-| OpenAI | 2.15.0 | Generación de imágenes |
+| OpenAI | 2.15.0 | Generación de imágenes (GPT Image 1.5) |
+| Google GenAI | 1.68.0 | Generación de imágenes (Gemini Pro/Flash) |
+| rembg | 2.0.73 | Remoción de fondo con IA (para Gemini) |
 | Cloudflare R2 | - | Almacenamiento de archivos |
 | Spotipy | 2.26+ | SDK Python para Spotify Web API |
 | Gunicorn + Daphne | - | Servidores de producción |
@@ -58,7 +60,7 @@ Frostbyte incluye múltiples capacidades de IA usando **OpenAI API**, distribuid
 #### Privadas (Requiere Autenticación)
 | Feature | Endpoint | Modelo | Descripción |
 |---------|----------|--------|-------------|
-| **Generador de Imágenes** | `POST /ai/generations/` | GPT Image 1.5 | Genera imágenes profesionales de productos a partir de foto + prompt |
+| **Generador de Imágenes** | `POST /ai/generations/` | Gemini Pro Image / GPT Image 1.5 | Genera imágenes profesionales de productos a partir de foto + prompt (modelo seleccionable) |
 | **Sugerencia de Descripción** | `POST /ai/suggest-description/` | GPT-4o-mini | Genera descripciones cortas y atractivas para productos |
 | **Galería de Generaciones** | `GET /ai/generations/` | - | Historial de imágenes generadas por el usuario |
 | **Persistencia a R2** | `POST /ai/generations/{id}/save_to_r2/` | - | Guarda imágenes generadas en Cloudflare R2 |
@@ -135,14 +137,18 @@ Frostbyte incluye múltiples capacidades de IA usando **OpenAI API**, distribuid
 - Tracking de tiempos de reacción
 
 ### Generador IA (`/apps/ai_generator/`)
-**Generación Profesional de Imágenes de Productos con OpenAI**
-- **Modelo**: OpenAI GPT Image 1.5 (generación de imágenes desde descripción + imagen base)
+**Generación Profesional de Imágenes de Productos con IA (Gemini / OpenAI)**
+- **Modelos disponibles** (seleccionables desde el frontend):
+  - `gemini-3-pro-image-preview` - Google Gemini Pro Image (default, mejor calidad)
+  - `gemini-3.1-flash-image-preview` - Google Gemini Flash Image (rápido)
+  - `gpt-image-1.5` - OpenAI GPT Image 1.5 (transparencia nativa)
 - **Flujo**:
   1. Usuario carga imagen original (foto básica/celular)
   2. Opcionalmente agrega imagen de referencia para aplicar estilo
-  3. Escribe prompt detallado o usa plantillas preestablecidas
-  4. IA procesa y genera imagen profesional
-  5. Opción de fondo transparente para overlays
+  3. Selecciona modelo de IA (Gemini Pro por defecto)
+  4. Escribe prompt detallado o usa plantillas preestablecidas
+  5. IA procesa y genera imagen profesional
+  6. Opción de fondo transparente (OpenAI: nativo, Gemini: rembg post-procesado)
 - **Almacenamiento**:
   - Temporal: Archivos en servidor (se eliminan en 24h)
   - Persistente: Cloudflare R2 para imágenes aprobadas
@@ -204,7 +210,7 @@ Base URL: `http://localhost:8000/api/v1/`
 | Spotify Auth | `/spotify/auth/` | Iniciar OAuth con Spotify |
 | Spotify Auth | `/spotify/callback/` | Callback OAuth Spotify |
 | Spotify Auth | `/spotify/disconnect/` | Desconectar Spotify |
-| **AI - Imágenes** | **`POST /ai/generations/`** | **Generar imagen con IA (GPT Image 1.5)** |
+| **AI - Imágenes** | **`POST /ai/generations/`** | **Generar imagen con IA (Gemini Pro / Flash / GPT Image 1.5)** |
 | **AI - Imágenes** | **`GET /ai/generations/`** | **Historial de generaciones** |
 | **AI - Imágenes** | **`POST /ai/generations/{id}/save_to_r2/`** | **Persistir imagen en Cloudflare R2** |
 | **AI - Imágenes** | **`POST /ai/generations/{id}/save_to_product/`** | **Asignar imagen a producto** |
@@ -271,6 +277,7 @@ Ver [.env.example](.env.example) para todas las variables de entorno disponibles
 | `SECRET_KEY` | Clave secreta Django | Sí | Seguridad |
 | `DEBUG` | Modo debug | No | Desarrollo |
 | **`OPENAI_API_KEY`** | **API key de OpenAI** | **Para IA** | **Generación de imágenes (GPT Image 1.5), frases motivacionales, recomendaciones, transcripción de audio y sugerencias de descripción** |
+| **`GEMINI_API_KEY`** | **API key de Google Gemini** | **Para IA** | **Generación de imágenes con Gemini (proveedor por defecto)** |
 | `R2_*` | Credenciales Cloudflare R2 | Para almacenamiento | Persistencia de imágenes generadas |
 | `REDIS_URL` | URL de Redis | Producción | Channel layers y caché |
 | `SPOTIFY_CLIENT_ID` | Client ID de Spotify Developer | Para música | Integración Spotify |
@@ -278,28 +285,32 @@ Ver [.env.example](.env.example) para todas las variables de entorno disponibles
 | `SPOTIFY_REDIRECT_URI` | URL de callback OAuth Spotify | Para música | Debe coincidir con Spotify Dashboard |
 | `FRONTEND_URL` | URL del frontend | Para música | Redirección post-OAuth |
 
-### Configuración de IA (OpenAI)
+### Configuración de IA
 
 Para habilitar todas las funcionalidades de IA en Frostbyte:
 
-1. **Obtener API Key**:
-   ```
-   https://platform.openai.com/api-keys
-   ```
+1. **Obtener API Keys**:
+   - OpenAI: `https://platform.openai.com/api-keys`
+   - Google Gemini: `https://aistudio.google.com/apikey`
 
-2. **Configurar Variable de Entorno**:
+2. **Configurar Variables de Entorno**:
    ```bash
    OPENAI_API_KEY=sk-proj-xxxxxxxxxxxxxxxxxxxxxxxx
+   GEMINI_API_KEY=AIzaSyXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
    ```
 
 3. **Modelos Utilizados**:
+   - `gemini-3-pro-image-preview`: Generación de imágenes (default, mejor calidad)
+   - `gemini-3.1-flash-image-preview`: Generación de imágenes (rápido)
+   - `gpt-image-1.5`: Generación de imágenes (transparencia nativa)
    - `gpt-4o-mini`: Recomendaciones, frases motivacionales, descripciones
-   - `gpt-image-1.5`: Generación de imágenes de productos
    - `whisper-1`: Transcripción de audio
 
 4. **Límites y Costos**:
-   - Generación de imágenes: ~$0.04 por imagen
-   - Recomendaciones/frases: ~$0.0001 por request (GPT-4o-mini es económico)
+   - Generación con Gemini Pro: ~$0.04 por imagen
+   - Generación con Gemini Flash: ~$0.02 por imagen
+   - Generación con OpenAI GPT Image 1.5: ~$0.04 por imagen
+   - Recomendaciones/frases: ~$0.0001 por request (GPT-4o-mini)
    - Transcripción: ~$0.006 por minuto
    - Las frases motivacionales se cachean 30 minutos para economizar
 

@@ -6,6 +6,7 @@ from django.utils import timezone
 from django.db.models import Count, Avg, Q
 
 from apps.accounts.permissions import IsEmployeeOrAdmin
+from .services.word_generator import generate_words
 from .models import (
     WordCategory,
     Word,
@@ -192,6 +193,29 @@ class ImpostorSessionViewSet(viewsets.ModelViewSet):
 
         response_serializer = ImpostorGameSessionDetailSerializer(session)
         return Response(response_serializer.data)
+
+    @action(detail=False, methods=["post"], url_path="generate-words")
+    def generate_ai_words(self, request):
+        """Generar palabras con IA para una categoria"""
+        category_name = request.data.get("category_name", "")
+        count = min(int(request.data.get("count", 5)), 10)
+        exclude_words = request.data.get("exclude_words", [])
+
+        if not category_name:
+            return Response(
+                {"error": "category_name es requerido"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        words = generate_words(category_name, count, exclude_words)
+
+        if words is None:
+            return Response(
+                {"error": "No se pudieron generar palabras"},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        return Response({"words": words, "category": category_name})
 
     @action(detail=False, methods=["get"], url_path="stats-dashboard")
     def stats_dashboard(self, request):

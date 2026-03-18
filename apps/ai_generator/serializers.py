@@ -13,7 +13,7 @@ class AIImageGenerationSerializer(serializers.ModelSerializer):
         fields = [
             'id',
             'original_image_url', 'reference_image_url', 'generated_image_url',
-            'user_prompt', 'transparent_background',
+            'user_prompt', 'transparent_background', 'ai_model',
             'status', 'error_message', 'product',
             'is_saved_to_r2', 'created_at', 'saved_at',
         ]
@@ -45,11 +45,20 @@ class AIImageGenerationSerializer(serializers.ModelSerializer):
 
 
 class AIImageGenerationCreateSerializer(serializers.Serializer):
-    """Serializer para creación de generaciones"""
+    """Serializer para creacion de generaciones"""
     original_image = serializers.ImageField(write_only=True)
     reference_image = serializers.ImageField(write_only=True, required=False)
     user_prompt = serializers.CharField(required=False, allow_blank=True, default='')
     transparent_background = serializers.BooleanField(default=True)
+    ai_model = serializers.ChoiceField(
+        choices=[
+            ('gemini-3-pro-image-preview', 'Gemini 3 Pro Image'),
+            ('gemini-3.1-flash-image-preview', 'Gemini 3.1 Flash Image'),
+            ('gpt-image-1.5', 'GPT Image 1.5'),
+        ],
+        default='gemini-3-pro-image-preview',
+        required=False,
+    )
 
 
 class SuggestDescriptionSerializer(serializers.Serializer):

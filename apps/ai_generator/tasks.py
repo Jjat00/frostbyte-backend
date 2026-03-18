@@ -5,9 +5,20 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# Models that use Gemini provider
+GEMINI_MODELS = {'gemini-3-pro-image-preview', 'gemini-3.1-flash-image-preview'}
+
+
+def _get_generator(model_name: str):
+    """Returns the appropriate image generator based on model name."""
+    if model_name in GEMINI_MODELS:
+        from .gemini_integration import GeminiImageGenerator
+        return GeminiImageGenerator(model=model_name)
+    return OpenAIImageGenerator()
+
 
 def generate_image_sync(generation_id):
-    """Genera imagen con OpenAI de forma síncrona usando archivos temporales"""
+    """Genera imagen de forma sincrona usando el proveedor seleccionado"""
     try:
         generation = AIImageGeneration.objects.get(id=generation_id)
     except AIImageGeneration.DoesNotExist:
@@ -18,8 +29,11 @@ def generate_image_sync(generation_id):
     generation.save()
 
     try:
-        generator = OpenAIImageGenerator()
+        model_name = generation.ai_model or 'gemini-3-pro-image-preview'
+        generator = _get_generator(model_name)
         temp_storage = TempImageStorage()
+
+        logger.info(f"Generation {generation_id} using model: {model_name}")
 
         result = generator.generate_professional_menu_image(
             original_image_path=generation.temp_original_path,

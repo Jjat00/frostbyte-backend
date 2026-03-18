@@ -34,6 +34,11 @@ class AIImageGeneration(models.Model):
     # Parámetros
     user_prompt = models.TextField(blank=True)
     transparent_background = models.BooleanField(default=True)
+    ai_model = models.CharField(
+        max_length=50,
+        default='gemini-3-pro-image-preview',
+        help_text='Modelo de IA usado para la generacion'
+    )
 
     # Estado
     status = models.CharField(
