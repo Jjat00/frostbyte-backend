@@ -64,6 +64,31 @@ class SongRequestViewSet(viewsets.ModelViewSet):
             return [AllowAny()]
         return [IsAuthenticated()]
 
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        # Rechazar si la misma cancion ya esta en cola o reproduciendose
+        track_uri = serializer.validated_data.get("spotify_track_uri")
+        if track_uri:
+            duplicate = SongRequest.objects.filter(
+                spotify_track_uri=track_uri,
+                status__in=[
+                    SongRequest.Status.PENDING,
+                    SongRequest.Status.QUEUED,
+                    SongRequest.Status.PLAYING,
+                ],
+            ).exists()
+            if duplicate:
+                return Response(
+                    {"error": "Esta cancion ya esta en la cola o reproduciendose."},
+                    status=status.HTTP_409_CONFLICT,
+                )
+
+        self.perform_create(serializer)
+        headers = self.get_success_headers(serializer.data)
+        return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+
     def perform_create(self, serializer):
         song_request = serializer.save()
 
