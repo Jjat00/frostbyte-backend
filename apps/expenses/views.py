@@ -137,16 +137,7 @@ class OperationalExpenseViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'])
     def stats(self, request):
         """Estadisticas de gastos"""
-        start_date = request.query_params.get('start_date')
-        end_date = request.query_params.get('end_date')
-
-        if start_date and end_date:
-            expenses = self.get_queryset().filter(
-                expense_date__range=[start_date, end_date]
-            )
-        else:
-            date_filter = request.query_params.get('date', 'month')
-            expenses = self._filter_by_date(self.get_queryset(), date_filter)
+        expenses = self.get_queryset()
 
         # Totales
         total_paid = expenses.filter(status='paid').aggregate(
