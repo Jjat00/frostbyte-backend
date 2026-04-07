@@ -176,7 +176,7 @@ class OperationalExpenseViewSet(viewsets.ModelViewSet):
             }
 
         return Response({
-            'period': date_filter,
+            'period': request.query_params.get('start_date', 'month'),
             'total_paid': str(total_paid),
             'total_pending': str(total_pending),
             'expenses_count': expenses.count(),
