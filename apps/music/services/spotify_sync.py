@@ -2,6 +2,7 @@ import logging
 import threading
 import time
 
+from django.db import close_old_connections
 from django.utils import timezone
 
 logger = logging.getLogger(__name__)
@@ -110,9 +111,12 @@ def _sync_loop():
 
     while _sync_running:
         try:
+            close_old_connections()
             sync_song_request_statuses()
         except Exception as e:
             logger.debug(f"Spotify sync error: {e}")
+        finally:
+            close_old_connections()
         time.sleep(SYNC_INTERVAL)
 
     logger.info("[Spotify Sync] Hilo de sincronizacion detenido")
