@@ -2,31 +2,6 @@ from django.db import models
 from django.utils.text import slugify
 
 
-class RecipeCategory(models.Model):
-    """Categoría de recetas (Granizados, Frappés, Técnicas base, etc.)"""
-
-    name = models.CharField(max_length=100, verbose_name="Nombre")
-    slug = models.SlugField(unique=True, blank=True)
-    description = models.TextField(blank=True, verbose_name="Descripción")
-    display_order = models.PositiveIntegerField(default=0, verbose_name="Orden de visualización")
-    is_active = models.BooleanField(default=True, verbose_name="Activo")
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        verbose_name = "Categoría de recetario"
-        verbose_name_plural = "Categorías de recetario"
-        ordering = ["display_order", "name"]
-
-    def __str__(self):
-        return self.name
-
-    def save(self, *args, **kwargs):
-        if not self.slug:
-            self.slug = slugify(self.name)
-        super().save(*args, **kwargs)
-
-
 class RecipeBook(models.Model):
     """Recetario: guía de preparación paso a paso para bebidas"""
 
@@ -39,11 +14,11 @@ class RecipeBook(models.Model):
     slug = models.SlugField(unique=True, blank=True)
     description = models.TextField(blank=True, verbose_name="Descripción")
     category = models.ForeignKey(
-        RecipeCategory,
+        "products.Category",
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        related_name="recipes",
+        related_name="recipe_books",
         verbose_name="Categoría",
     )
     product = models.ForeignKey(

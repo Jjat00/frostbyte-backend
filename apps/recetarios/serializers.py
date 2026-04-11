@@ -1,45 +1,10 @@
 from rest_framework import serializers
 from .models import (
-    RecipeCategory,
     RecipeBook,
     RecipeBookStep,
     RecipeBookIngredient,
     RecipeBookImage,
 )
-
-
-class RecipeCategorySerializer(serializers.ModelSerializer):
-    recipes_count = serializers.SerializerMethodField()
-
-    class Meta:
-        model = RecipeCategory
-        fields = [
-            "id",
-            "name",
-            "slug",
-            "description",
-            "display_order",
-            "is_active",
-            "recipes_count",
-        ]
-        read_only_fields = ["slug"]
-
-    def get_recipes_count(self, obj):
-        return obj.recipes.filter(is_active=True).count()
-
-
-class RecipeCategoryCreateUpdateSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = RecipeCategory
-        fields = [
-            "id",
-            "name",
-            "slug",
-            "description",
-            "display_order",
-            "is_active",
-        ]
-        read_only_fields = ["slug"]
 
 
 # --- Nested serializers (read-only) ---

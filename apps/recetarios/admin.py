@@ -1,6 +1,5 @@
 from django.contrib import admin
 from .models import (
-    RecipeCategory,
     RecipeBook,
     RecipeBookStep,
     RecipeBookIngredient,
@@ -24,20 +23,6 @@ class RecipeBookImageInline(admin.TabularInline):
     model = RecipeBookImage
     extra = 1
     fields = ["image_url", "caption", "display_order"]
-
-
-@admin.register(RecipeCategory)
-class RecipeCategoryAdmin(admin.ModelAdmin):
-    list_display = ["name", "slug", "display_order", "is_active", "recipes_count"]
-    list_filter = ["is_active"]
-    search_fields = ["name", "description"]
-    prepopulated_fields = {"slug": ("name",)}
-    ordering = ["display_order", "name"]
-
-    def recipes_count(self, obj):
-        return obj.recipes.count()
-
-    recipes_count.short_description = "Recetas"
 
 
 @admin.register(RecipeBook)
