@@ -923,6 +923,19 @@ class TableViewSet(viewsets.ViewSet):
     """ViewSet para tracking de visitas a mesas"""
     permission_classes = [AllowAny]
 
+    def list(self, request):
+        """Lista todas las mesas activas"""
+        tables = Table.objects.filter(is_active=True).order_by("table_number")
+        data = [
+            {
+                "id": table.id,
+                "table_number": table.table_number,
+                "table_name": table.table_name,
+            }
+            for table in tables
+        ]
+        return Response(data)
+
     @action(detail=False, methods=["post"], url_path="register-visit")
     def register_visit(self, request):
         """Registra una visita a una mesa"""
