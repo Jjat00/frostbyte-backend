@@ -32,6 +32,8 @@ urlpatterns = [
     path('api/v1/ai/', include('apps.ai_generator.urls')),
     # Impostor Game
     path('api/v1/impostor/', include('apps.impostor.urls')),
+    # Recetarios
+    path('api/v1/recetarios/', include('apps.recetarios.urls')),
 ]
 
 # Servir archivos media en desarrollo

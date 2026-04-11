@@ -44,6 +44,22 @@ class IsAdminOrReadOnly(permissions.BasePermission):
         return bool(request.user and request.user.is_authenticated and request.user.is_admin)
 
 
+class IsEmployeeOrAdminWithAdminWrite(permissions.BasePermission):
+    """
+    Authenticated employees+admins can read.
+    Only admins can write (create/update/delete).
+
+    Use this for internal content like recipe books that
+    employees need to view but only admins can manage.
+    """
+    def has_permission(self, request, view):
+        if not (request.user and request.user.is_authenticated):
+            return False
+        if request.method in permissions.SAFE_METHODS:
+            return True
+        return request.user.is_admin
+
+
 class IsAuthenticatedOrReadOnly(permissions.BasePermission):
     """
     Public read access, write access for any authenticated user.
