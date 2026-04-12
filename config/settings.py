@@ -66,6 +66,7 @@ INSTALLED_APPS = [
     'apps.ai_generator',
     'apps.impostor',
     'apps.recetarios',
+    'apps.youtube',
 ]
 
 # Custom User Model
@@ -234,3 +235,6 @@ GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '')
 SPOTIFY_CLIENT_ID = os.getenv('SPOTIFY_CLIENT_ID', '')
 SPOTIFY_CLIENT_SECRET = os.getenv('SPOTIFY_CLIENT_SECRET', '')
 SPOTIFY_REDIRECT_URI = os.getenv('SPOTIFY_REDIRECT_URI', 'http://localhost:8000/api/v1/spotify/callback/')
+
+# YouTube Configuration
+YOUTUBE_API_KEY = os.getenv('YOUTUBE_API_KEY', '')
