@@ -7,13 +7,14 @@ from rest_framework.response import Response
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.views import APIView
 
-from .models import SongRequest
+from .models import SongRequest, MusicSettings
 from .consumers import broadcast_music_update
 from .serializers import (
     SongRequestSerializer,
     SongRequestCreateSerializer,
     SongRequestStatusUpdateSerializer,
     SpotifyTrackSerializer,
+    MusicSettingsSerializer,
 )
 from .services.spotify_client import (
     search_tracks,
@@ -424,4 +425,25 @@ class SpotifyDisconnectView(APIView):
         from .models import SpotifyToken
         SpotifyToken.objects.all().delete()
         return Response({"message": "Spotify desconectado"})
+
+
+class MusicSettingsView(APIView):
+    """Configuracion del modulo de musica (fuente activa)"""
+
+    def get_permissions(self):
+        if self.request.method == "GET":
+            return [AllowAny()]
+        return [IsAuthenticated()]
+
+    def get(self, request):
+        settings = MusicSettings.get_settings()
+        return Response(MusicSettingsSerializer(settings).data)
+
+    def patch(self, request):
+        settings = MusicSettings.get_settings()
+        serializer = MusicSettingsSerializer(settings, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        broadcast_music_update()
+        return Response(serializer.data)
 

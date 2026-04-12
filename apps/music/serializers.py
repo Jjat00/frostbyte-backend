@@ -1,5 +1,14 @@
 from rest_framework import serializers
-from .models import SongRequest
+from .models import SongRequest, MusicSettings
+
+
+class MusicSettingsSerializer(serializers.ModelSerializer):
+    """Serializer para la configuracion de musica"""
+
+    class Meta:
+        model = MusicSettings
+        fields = ["source", "updated_at"]
+        read_only_fields = ["updated_at"]
 
 
 class SongRequestSerializer(serializers.ModelSerializer):

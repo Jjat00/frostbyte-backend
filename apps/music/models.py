@@ -31,6 +31,37 @@ class SpotifyToken(models.Model):
         return cls.objects.first()
 
 
+class MusicSettings(models.Model):
+    """Configuracion global del modulo de musica (singleton).
+    Determina que fuente de musica usan los clientes (Spotify o YouTube)."""
+
+    class Source(models.TextChoices):
+        SPOTIFY = "spotify", "Spotify"
+        YOUTUBE = "youtube", "YouTube"
+
+    source = models.CharField(
+        max_length=20,
+        choices=Source.choices,
+        default=Source.YOUTUBE,
+        verbose_name="Fuente de musica",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Configuracion de musica"
+        verbose_name_plural = "Configuracion de musica"
+
+    def __str__(self):
+        return f"Fuente activa: {self.get_source_display()}"
+
+    @classmethod
+    def get_settings(cls):
+        """Obtiene o crea la configuracion unica (singleton)"""
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
+
+
 class SongRequest(models.Model):
     """Solicitud de canción de un cliente"""
 
