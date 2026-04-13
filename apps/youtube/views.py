@@ -208,24 +208,49 @@ class VideoRequestViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=["get"], url_path="recommendations")
     def recommendations(self, request):
-        """Recomendaciones de videos.
-        Si hay historial, busca similares al ultimo video reproducido.
-        Si no, muestra videos musicales populares (trending)."""
+        """Recomendaciones de videos basadas en lo que esta sonando actualmente
+        (incluye Mix automatico via TVState) o en el historial reciente.
+        Si no hay nada, muestra videos musicales populares (trending)."""
         try:
-            last = VideoRequest.objects.filter(
-                status=VideoRequest.Status.COMPLETED,
-                played_at__isnull=False,
-            ).order_by("-played_at").first()
+            # Prioridad de semilla:
+            # 1. Video actualmente reproduciendose (VideoRequest PLAYING)
+            # 2. Estado reportado por la TV (puede ser del Mix)
+            # 3. Ultimo video completado
+            seed_title = None
+            seed_channel = None
+            seed_video_id = None
 
-            if last and last.title:
-                # Usar el titulo del ultimo video como semilla
-                # Si tiene un canal conocido, incluirlo para mejores resultados
-                query = last.title
-                if last.channel_name:
-                    query = f"{last.title} {last.channel_name}"
+            current = VideoRequest.objects.filter(
+                status=VideoRequest.Status.PLAYING
+            ).first()
+            if current and current.title:
+                seed_title = current.title
+                seed_channel = current.channel_name
+                seed_video_id = current.video_id
+            else:
+                state = TVState.get_state()
+                if state.video_id and state.title:
+                    seed_title = state.title
+                    seed_channel = state.channel_name
+                    seed_video_id = state.video_id
+                else:
+                    last = VideoRequest.objects.filter(
+                        status=VideoRequest.Status.COMPLETED,
+                        played_at__isnull=False,
+                    ).order_by("-played_at").first()
+                    if last and last.title:
+                        seed_title = last.title
+                        seed_channel = last.channel_name
+                        seed_video_id = last.video_id
+
+            if seed_title:
+                # Usar solo el canal como query si existe, es mas efectivo
+                # para mantenerse en el mismo genero/artista
+                query = seed_channel if seed_channel else seed_title
                 videos = search_videos(query, limit=15)
-                # Filtrar el mismo video del resultado
-                videos = [v for v in videos if v["video_id"] != last.video_id]
+                # Filtrar el video semilla del resultado
+                if seed_video_id:
+                    videos = [v for v in videos if v["video_id"] != seed_video_id]
             else:
                 # Sin historial: videos musicales populares
                 videos = get_trending_music(limit=15)
