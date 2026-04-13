@@ -1,5 +1,11 @@
 from django.contrib import admin
-from .models import VideoRequest
+from .models import VideoRequest, TVState
+
+
+@admin.register(TVState)
+class TVStateAdmin(admin.ModelAdmin):
+    list_display = ["video_id", "title", "is_mix", "updated_at"]
+    readonly_fields = ["updated_at"]
 
 
 @admin.register(VideoRequest)

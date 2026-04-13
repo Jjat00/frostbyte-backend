@@ -5,7 +5,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny, IsAuthenticated
 
-from .models import VideoRequest
+from .models import VideoRequest, TVState
 from .consumers import (
     broadcast_youtube_update,
     broadcast_youtube_play,
@@ -176,18 +176,35 @@ class VideoRequestViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=["get"], url_path="now-playing")
     def now_playing(self, request):
-        """Obtener el video que se esta reproduciendo actualmente"""
+        """Obtener el video que se esta reproduciendo actualmente.
+        Si no hay un VideoRequest en estado PLAYING, devuelve el estado
+        reportado por la pantalla TV (que puede ser un video del Mix)."""
         current = VideoRequest.objects.filter(
             status=VideoRequest.Status.PLAYING
         ).first()
 
-        if not current:
-            return Response(
-                {"message": "No hay ningun video reproduciendose"},
-                status=status.HTTP_204_NO_CONTENT,
-            )
+        if current:
+            return Response(VideoRequestSerializer(current).data)
 
-        return Response(VideoRequestSerializer(current).data)
+        # Fallback: estado reportado por la TV (incluye videos del Mix)
+        state = TVState.get_state()
+        if state.video_id:
+            return Response({
+                "id": None,
+                "title": state.title,
+                "channel_name": state.channel_name,
+                "video_id": state.video_id,
+                "thumbnail": state.thumbnail,
+                "duration": "",
+                "status": "playing",
+                "status_display": "Reproduciendo",
+                "is_mix": state.is_mix,
+            })
+
+        return Response(
+            {"message": "No hay ningun video reproduciendose"},
+            status=status.HTTP_204_NO_CONTENT,
+        )
 
     @action(detail=False, methods=["get"], url_path="recommendations")
     def recommendations(self, request):

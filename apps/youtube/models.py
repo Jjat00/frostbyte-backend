@@ -2,6 +2,33 @@ from django.db import models
 from django.utils import timezone
 
 
+class TVState(models.Model):
+    """Estado actual de la pantalla TV (singleton).
+    La TV reporta via WebSocket que video esta sonando actualmente,
+    incluyendo videos del Mix automatico que no estan en VideoRequest."""
+
+    video_id = models.CharField(max_length=20, blank=True)
+    title = models.CharField(max_length=300, blank=True)
+    channel_name = models.CharField(max_length=200, blank=True)
+    thumbnail = models.URLField(blank=True)
+    is_mix = models.BooleanField(default=False, help_text="True si viene del Mix automatico")
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Estado TV YouTube"
+        verbose_name_plural = "Estado TV YouTube"
+
+    def __str__(self):
+        if not self.video_id:
+            return "TV inactiva"
+        return f"{self.title} ({'mix' if self.is_mix else 'cola'})"
+
+    @classmethod
+    def get_state(cls):
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
+
+
 class VideoRequest(models.Model):
     """Solicitud de video de YouTube de un cliente"""
 

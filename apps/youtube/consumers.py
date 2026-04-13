@@ -29,6 +29,39 @@ class YouTubeConsumer(AsyncWebsocketConsumer):
             if msg_type == 'ping':
                 await self.send(text_data=json.dumps({'type': 'pong'}))
 
+            elif msg_type == 'tv_playing':
+                # La pantalla TV reporta que video esta sonando actualmente
+                # (incluyendo videos del Mix automatico)
+                from .models import TVState
+                from asgiref.sync import sync_to_async
+
+                video_id = data.get('video_id', '')
+                title = data.get('title', '')
+                channel_name = data.get('channel_name', '')
+                is_mix = bool(data.get('is_mix', False))
+                thumbnail = (
+                    data.get('thumbnail')
+                    or (f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg" if video_id else '')
+                )
+
+                @sync_to_async
+                def save_state():
+                    state = TVState.get_state()
+                    state.video_id = video_id
+                    state.title = title
+                    state.channel_name = channel_name
+                    state.thumbnail = thumbnail
+                    state.is_mix = is_mix
+                    state.save()
+
+                await save_state()
+
+                # Notificar a todos los clientes (publico, admin, etc.)
+                await self.channel_layer.group_send(
+                    self.GROUP_NAME,
+                    {'type': 'youtube_changed'}
+                )
+
             elif msg_type == 'video_ended':
                 # La pantalla TV notifica que el video termino
                 video_id = data.get('video_id')
