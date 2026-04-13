@@ -326,11 +326,18 @@ class VideoRequestViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=["post"], url_path="player/next", permission_classes=[IsAuthenticated])
     def player_next(self, request):
-        """Saltar al siguiente video en la cola"""
+        """Saltar al siguiente video en la cola.
+        Si no hay siguiente, limpiar TVState para que la pantalla transicione
+        a modo Mix automatico."""
         # Marcar el actual como completado
-        VideoRequest.objects.filter(
-            status=VideoRequest.Status.PLAYING
-        ).update(status=VideoRequest.Status.COMPLETED)
+        from django.utils import timezone
+
+        playing = list(VideoRequest.objects.filter(status=VideoRequest.Status.PLAYING))
+        for vr in playing:
+            vr.status = VideoRequest.Status.COMPLETED
+            if not vr.played_at:
+                vr.played_at = timezone.now()
+            vr.save(update_fields=["status", "played_at", "updated_at"])
 
         # Obtener el siguiente en cola
         next_video = VideoRequest.objects.filter(
@@ -340,9 +347,19 @@ class VideoRequestViewSet(viewsets.ModelViewSet):
         if next_video:
             next_video.mark_as_playing()
             broadcast_youtube_play(next_video.video_id, next_video.title)
+        else:
+            # Sin proximos en cola: limpiar TVState para que la pantalla
+            # detecte que no hay nada sonando y entre en modo Mix
+            state = TVState.get_state()
+            state.video_id = ""
+            state.title = ""
+            state.channel_name = ""
+            state.thumbnail = ""
+            state.is_mix = False
+            state.save()
 
         broadcast_youtube_update()
-        return Response({"message": "Siguiente video"})
+        return Response({"message": "Siguiente video", "has_next": bool(next_video)})
 
     @action(detail=False, methods=["post"], url_path="player/pause", permission_classes=[IsAuthenticated])
     def player_pause(self, request):
