@@ -17,7 +17,7 @@ from .serializers import (
     VideoRequestStatusUpdateSerializer,
     YouTubeVideoSerializer,
 )
-from .services.youtube_client import search_videos, YouTubeAPIError
+from .services.youtube_client import search_videos, get_trending_music, YouTubeAPIError
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +46,16 @@ class VideoRequestViewSet(viewsets.ModelViewSet):
         return VideoRequestSerializer
 
     def get_permissions(self):
-        if self.action in ["create", "list", "retrieve", "search", "now_playing", "queue"]:
+        if self.action in [
+            "create",
+            "list",
+            "retrieve",
+            "search",
+            "now_playing",
+            "queue",
+            "last_played",
+            "recommendations",
+        ]:
             return [AllowAny()]
         return [IsAuthenticated()]
 
@@ -179,6 +188,60 @@ class VideoRequestViewSet(viewsets.ModelViewSet):
             )
 
         return Response(VideoRequestSerializer(current).data)
+
+    @action(detail=False, methods=["get"], url_path="recommendations")
+    def recommendations(self, request):
+        """Recomendaciones de videos.
+        Si hay historial, busca similares al ultimo video reproducido.
+        Si no, muestra videos musicales populares (trending)."""
+        try:
+            last = VideoRequest.objects.filter(
+                status=VideoRequest.Status.COMPLETED,
+                played_at__isnull=False,
+            ).order_by("-played_at").first()
+
+            if last and last.title:
+                # Usar el titulo del ultimo video como semilla
+                # Si tiene un canal conocido, incluirlo para mejores resultados
+                query = last.title
+                if last.channel_name:
+                    query = f"{last.title} {last.channel_name}"
+                videos = search_videos(query, limit=15)
+                # Filtrar el mismo video del resultado
+                videos = [v for v in videos if v["video_id"] != last.video_id]
+            else:
+                # Sin historial: videos musicales populares
+                videos = get_trending_music(limit=15)
+
+            serializer = YouTubeVideoSerializer(videos, many=True)
+            return Response(serializer.data)
+        except YouTubeAPIError as e:
+            return Response(
+                {"error": str(e)},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        except Exception as e:
+            logger.error(f"Error obteniendo recomendaciones: {e}")
+            return Response(
+                {"error": "Error al obtener recomendaciones"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+    @action(detail=False, methods=["get"], url_path="last-played")
+    def last_played(self, request):
+        """Ultimo video reproducido (para iniciar Mix cuando la cola esta vacia)"""
+        last = VideoRequest.objects.filter(
+            status=VideoRequest.Status.COMPLETED,
+            played_at__isnull=False,
+        ).order_by("-played_at").first()
+
+        if not last:
+            return Response(
+                {"message": "No hay videos previos"},
+                status=status.HTTP_204_NO_CONTENT,
+            )
+
+        return Response(VideoRequestSerializer(last).data)
 
     @action(detail=False, methods=["get"], url_path="queue")
     def queue(self, request):

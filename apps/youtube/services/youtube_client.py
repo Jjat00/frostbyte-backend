@@ -85,3 +85,46 @@ def search_videos(query, limit=10):
         })
 
     return results
+
+
+def get_trending_music(limit=15, region="CO"):
+    """Obtener videos musicales populares (trending) para iniciar la playlist"""
+    api_key = _get_api_key()
+
+    resp = requests.get(
+        "https://www.googleapis.com/youtube/v3/videos",
+        params={
+            "part": "snippet,contentDetails",
+            "chart": "mostPopular",
+            "videoCategoryId": "10",  # Music
+            "regionCode": region,
+            "maxResults": limit,
+            "key": api_key,
+        },
+        timeout=10,
+    )
+
+    if resp.status_code != 200:
+        logger.error(f"YouTube trending error: {resp.status_code} - {resp.text}")
+        raise YouTubeAPIError("Error al obtener videos populares")
+
+    items = resp.json().get("items", [])
+    results = []
+    for item in items:
+        snippet = item.get("snippet", {})
+        thumbnails = snippet.get("thumbnails", {})
+        thumbnail = (
+            thumbnails.get("high", {}).get("url")
+            or thumbnails.get("medium", {}).get("url")
+            or thumbnails.get("default", {}).get("url", "")
+        )
+
+        results.append({
+            "video_id": item["id"],
+            "title": html.unescape(snippet.get("title", "")),
+            "channel_name": html.unescape(snippet.get("channelTitle", "")),
+            "thumbnail": thumbnail,
+            "duration": item.get("contentDetails", {}).get("duration", ""),
+        })
+
+    return results
