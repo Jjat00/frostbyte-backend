@@ -1,5 +1,11 @@
 from django.contrib import admin
-from .models import SongRequest, SpotifyToken
+from .models import SongRequest, SpotifyToken, MusicSettings
+
+
+@admin.register(MusicSettings)
+class MusicSettingsAdmin(admin.ModelAdmin):
+    list_display = ["source", "updated_at"]
+    readonly_fields = ["created_at", "updated_at"]
 
 
 @admin.register(SongRequest)

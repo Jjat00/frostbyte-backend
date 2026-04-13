@@ -25,9 +25,10 @@ django_asgi_app = get_asgi_application()
 from apps.games.routing import websocket_urlpatterns as games_ws_urlpatterns
 from apps.orders.routing import websocket_urlpatterns as orders_ws_urlpatterns
 from apps.music.routing import websocket_urlpatterns as music_ws_urlpatterns
+from apps.youtube.routing import websocket_urlpatterns as youtube_ws_urlpatterns
 
 # Combinar todas las rutas WebSocket
-websocket_urlpatterns = games_ws_urlpatterns + orders_ws_urlpatterns + music_ws_urlpatterns
+websocket_urlpatterns = games_ws_urlpatterns + orders_ws_urlpatterns + music_ws_urlpatterns + youtube_ws_urlpatterns
 
 # Permitir todos los orígenes para WebSockets
 # Nota: AllowedHostsOriginValidator puede bloquear conexiones si el frontend
