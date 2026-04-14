@@ -214,6 +214,23 @@ else:
         },
     }
 
+# Cache configuration (Redis en prod, LocMem en dev)
+# Usado principalmente para cachear respuestas de APIs externas (YouTube)
+if REDIS_URL:
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+            'LOCATION': REDIS_URL,
+        },
+    }
+else:
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+            'LOCATION': 'frostbyte-cache',
+        },
+    }
+
 # Cloudflare R2 Configuration
 R2_ACCOUNT_ID = os.getenv('R2_ACCOUNT_ID', '')
 R2_ACCESS_KEY_ID = os.getenv('R2_ACCESS_KEY_ID', '')

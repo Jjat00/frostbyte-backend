@@ -17,7 +17,12 @@ from .serializers import (
     VideoRequestStatusUpdateSerializer,
     YouTubeVideoSerializer,
 )
-from .services.youtube_client import search_videos, get_trending_music, YouTubeAPIError
+from .services.youtube_client import (
+    search_videos,
+    get_trending_music,
+    YouTubeAPIError,
+    YouTubeQuotaExceededError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -162,6 +167,11 @@ class VideoRequestViewSet(viewsets.ModelViewSet):
             videos = search_videos(query, limit=10)
             serializer = YouTubeVideoSerializer(videos, many=True)
             return Response(serializer.data)
+        except YouTubeQuotaExceededError:
+            return Response(
+                {"error": "La busqueda esta temporalmente no disponible. Intenta mas tarde.", "code": "quota_exceeded"},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
         except YouTubeAPIError as e:
             return Response(
                 {"error": str(e)},
@@ -257,6 +267,9 @@ class VideoRequestViewSet(viewsets.ModelViewSet):
 
             serializer = YouTubeVideoSerializer(videos, many=True)
             return Response(serializer.data)
+        except YouTubeQuotaExceededError:
+            # Recomendaciones sin API: devolver lista vacia en vez de error
+            return Response([])
         except YouTubeAPIError as e:
             return Response(
                 {"error": str(e)},
