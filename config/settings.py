@@ -214,6 +214,23 @@ else:
         },
     }
 
+# Cache configuration (Redis en prod, LocMem en dev)
+# Usado principalmente para cachear respuestas de APIs externas (YouTube)
+if REDIS_URL:
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+            'LOCATION': REDIS_URL,
+        },
+    }
+else:
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+            'LOCATION': 'frostbyte-cache',
+        },
+    }
+
 # Cloudflare R2 Configuration
 R2_ACCOUNT_ID = os.getenv('R2_ACCOUNT_ID', '')
 R2_ACCESS_KEY_ID = os.getenv('R2_ACCESS_KEY_ID', '')
@@ -238,3 +255,5 @@ SPOTIFY_REDIRECT_URI = os.getenv('SPOTIFY_REDIRECT_URI', 'http://localhost:8000/
 
 # YouTube Configuration
 YOUTUBE_API_KEY = os.getenv('YOUTUBE_API_KEY', '')
+# Limite diario de unidades de cuota (free tier = 10000)
+YOUTUBE_QUOTA_LIMIT = int(os.getenv('YOUTUBE_QUOTA_LIMIT', '10000'))
