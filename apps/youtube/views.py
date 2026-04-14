@@ -21,6 +21,7 @@ from .services.youtube_client import (
     search_videos,
     get_trending_music,
     get_quota_usage,
+    reset_quota_counter,
     YouTubeAPIError,
     YouTubeQuotaExceededError,
 )
@@ -220,6 +221,14 @@ class VideoRequestViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=["get"], url_path="quota-status", permission_classes=[IsAuthenticated])
     def quota_status(self, request):
         """Estado estimado de uso de cuota del dia (solo admin/staff)"""
+        return Response(get_quota_usage())
+
+    @action(detail=False, methods=["post"], url_path="quota-reset", permission_classes=[IsAuthenticated])
+    def quota_reset(self, request):
+        """Resetear el contador local de cuota. Util cuando quedo mal marcado
+        (ej: se marco como agotado en otra zona horaria). No altera la cuota
+        real de YouTube, que se maneja del lado de Google."""
+        reset_quota_counter()
         return Response(get_quota_usage())
 
     @action(detail=False, methods=["get"], url_path="recommendations")

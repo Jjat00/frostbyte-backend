@@ -1,7 +1,8 @@
 import hashlib
 import html
 import logging
-from datetime import date
+from datetime import datetime
+from zoneinfo import ZoneInfo
 import requests
 from django.conf import settings
 from django.core.cache import cache
@@ -22,7 +23,12 @@ QUOTA_DAILY_LIMIT = int(getattr(settings, "YOUTUBE_QUOTA_LIMIT", 10000) or 10000
 
 
 def _quota_key():
-    return f"youtube_quota:{date.today().isoformat()}"
+    # Usar fecha Pacific porque YouTube resetea la cuota a medianoche PT.
+    # Si usamos la fecha del servidor (UTC), el contador rolaria en una ventana
+    # diferente a la de YouTube y un "marcado como agotado" sobrevive al reset
+    # real, haciendo que el proximo dia arranque en 10000 en vez de 0.
+    pacific_now = datetime.now(tz=ZoneInfo("America/Los_Angeles"))
+    return f"youtube_quota:{pacific_now.date().isoformat()}"
 
 
 def _track_quota(units):
@@ -35,7 +41,7 @@ def _track_quota(units):
 
 
 def get_quota_usage():
-    """Uso estimado de cuota del dia"""
+    """Uso estimado de cuota del dia (Pacific, alineado con YouTube)"""
     used = cache.get(_quota_key(), 0)
     return {
         "used": used,
@@ -43,6 +49,11 @@ def get_quota_usage():
         "remaining": max(0, QUOTA_DAILY_LIMIT - used),
         "percentage": round(min(100, (used / QUOTA_DAILY_LIMIT) * 100), 1),
     }
+
+
+def reset_quota_counter():
+    """Resetear el contador local del dia (solo afecta la UI, no altera la cuota real de YouTube)"""
+    cache.delete(_quota_key())
 
 
 class YouTubeAPIError(Exception):
