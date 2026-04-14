@@ -17,6 +17,7 @@ API REST para gestión de negocios de bebidas preparadas (granizados, frappés, 
 | rembg | 2.0.73 | Remoción de fondo con IA (para Gemini) |
 | Cloudflare R2 | - | Almacenamiento de archivos |
 | Spotipy | 2.26+ | SDK Python para Spotify Web API |
+| YouTube Data API v3 | - | Búsqueda y datos de videos de YouTube |
 | Gunicorn + Daphne | - | Servidores de producción |
 
 ## Arquitectura
@@ -32,7 +33,8 @@ frostbyte-backend/
 │   ├── games/          # Salas de juego WebSocket
 │   ├── analytics/      # Reportes y dashboards
 │   ├── ai_generator/   # Generación de imágenes IA
-│   ├── music/          # Solicitudes de música
+│   ├── music/          # Solicitudes de música (Spotify + configuración)
+│   ├── youtube/        # Solicitudes de video / reproductor TV
 │   ├── feedback/       # Feedback de clientes
 │   └── motivational/   # Frases motivacionales
 ├── config/
@@ -116,19 +118,29 @@ Frostbyte incluye múltiples capacidades de IA usando **OpenAI API**, distribuid
 - Categorías con iconos
 - Límites presupuestarios
 
-### Música y Spotify (`/apps/music/`)
-**Sistema de solicitudes de canciones con integración a Spotify**
+### Música (`/apps/music/` + `/apps/youtube/`)
+**Sistema dual de solicitudes musicales. El admin elige la fuente activa (Spotify o YouTube, default YouTube) desde `MusicSettings`; los clientes sólo ven la que esté activa.**
+
+#### Spotify (`/apps/music/`)
 - **Solicitudes de clientes**: Buscan y piden canciones desde el menú digital
 - **Cola automática**: Las canciones se agregan automáticamente a la cola de Spotify del local
 - **Sincronización en tiempo real**: Hilo background sincroniza estados cada 5s con Spotify
-- **Controles de playback**: El admin controla play, pause, skip, volumen desde el panel
-- **WebSocket**: Actualizaciones en tiempo real para clientes y admin via Django Channels
+- **Controles de playback**: play, pause, skip, volumen desde el panel admin
 - **OAuth2**: Flujo Authorization Code con Spotify, tokens con auto-refresh
-- **Auto-play**: Cuando Spotify queda idle, reproduce la siguiente solicitud en cola
-- **Cola completa**: El admin ve toda la cola de Spotify, con indicador de cuáles son solicitudes de clientes
-- **Letras sincronizadas**: Obtiene letras con timestamps de LRCLib, matching por artista + nombre + duración
-- **Dependencia**: `spotipy` (SDK Python para Spotify Web API)
-- **Requiere**: Cuenta Spotify Premium para controles de playback
+- **Cola completa**: El admin ve toda la cola de Spotify, con indicador de cuáles son solicitudes
+- **Letras sincronizadas**: LRCLib, matching por artista + nombre + duración
+- **Dependencia**: `spotipy` · **Requiere**: Cuenta Spotify Premium
+
+#### YouTube (`/apps/youtube/`)
+- **Solicitudes y cola**: Los clientes buscan videos y los agregan; se reproducen en secuencia
+- **Pantalla TV (`/youtube-tv`)**: Página pública que se abre en un navegador conectado a la TV del local. Usa la IFrame Player API para reproducir los videos a pantalla completa
+- **Auto-Mix**: Cuando la cola está vacía, la TV carga automáticamente un Mix de YouTube (`RD<videoId>`) basado en el último video reproducido, de modo que **siempre haya algo sonando**
+- **TVState**: La pantalla reporta vía WebSocket qué video está sonando (incluso videos del Mix que no están en la DB). La vista pública "PIDE TU VIDEO" refleja en tiempo real lo que suena en la TV
+- **Recomendaciones**: Endpoint `/recommendations` que devuelve videos similares usando el último video como semilla (o trending de música si no hay historial). Se cachean para ahorrar cuota
+- **Controles**: play, pause, resume, skip desde el panel admin (se propagan a la TV vía WebSocket)
+- **Cache inteligente**: Búsquedas cacheadas 24h y trending 48h (Redis en prod, LocMem en dev). Si la cuota se agota, sirve el cache "stale" por 7 días como fallback
+- **Tracking de cuota**: Cada llamada a la API suma su costo (100 para `search.list`, 1 para `videos.list`). Endpoint `/quota-status` expone el consumo del día. Reseteo diario a medianoche Pacífico (03:00 Colombia)
+- **MusicSettings**: Singleton `{ source: 'spotify' | 'youtube' }` expuesto en `/music-settings/` (GET público, PATCH admin). El admin toggle desde el panel cambia qué componente ven los clientes
 
 ### Juegos (`/apps/games/`)
 - "Duelo Frostbyte" - Juego de reacción multijugador
@@ -210,6 +222,18 @@ Base URL: `http://localhost:8000/api/v1/`
 | Spotify Auth | `/spotify/auth/` | Iniciar OAuth con Spotify |
 | Spotify Auth | `/spotify/callback/` | Callback OAuth Spotify |
 | Spotify Auth | `/spotify/disconnect/` | Desconectar Spotify |
+| Music Settings | `/music-settings/` | Fuente activa (Spotify/YouTube). GET público, PATCH admin |
+| YouTube | `/video-requests/` | CRUD solicitudes de video |
+| YouTube | `/video-requests/search/` | Buscar en YouTube (cacheado 24h) |
+| YouTube | `/video-requests/recommendations/` | Recomendaciones basadas en historial o trending |
+| YouTube | `/video-requests/now-playing/` | Video actual (VideoRequest PLAYING o TVState) |
+| YouTube | `/video-requests/last-played/` | Último video completado (semilla para el Mix) |
+| YouTube | `/video-requests/queue/` | Cola pendiente |
+| YouTube | `/video-requests/quota-status/` | Estado de cuota YouTube API (admin) |
+| YouTube | `/video-requests/player/play/` | Reproducir video específico |
+| YouTube | `/video-requests/player/next/` | Saltar al siguiente (o limpiar para Mix) |
+| YouTube | `/video-requests/player/pause/` | Pausar reproducción en TV |
+| YouTube | `/video-requests/player/resume/` | Reanudar reproducción en TV |
 | **AI - Imágenes** | **`POST /ai/generations/`** | **Generar imagen con IA (Gemini Pro / Flash / GPT Image 1.5)** |
 | **AI - Imágenes** | **`GET /ai/generations/`** | **Historial de generaciones** |
 | **AI - Imágenes** | **`POST /ai/generations/{id}/save_to_r2/`** | **Persistir imagen en Cloudflare R2** |
@@ -225,7 +249,18 @@ Base URL: `http://localhost:8000/api/v1/`
 ```
 ws://localhost:8000/ws/games/rooms/{room_id}/
 ws://localhost:8000/ws/music/
+ws://localhost:8000/ws/youtube/
 ```
+
+**Mensajes en `/ws/youtube/`:**
+- Entrantes (desde clientes):
+  - `{type: 'ping'}` → responde `pong`
+  - `{type: 'tv_playing', video_id, title, channel_name, is_mix}` - La TV reporta qué está sonando
+  - `{type: 'video_ended', video_id}` - La TV notifica fin de video
+- Salientes (broadcast a todos):
+  - `{type: 'youtube_changed'}` - Invalida queries en todos los clientes
+  - `{type: 'play_video', video_id, title}` - Instrucción a la TV de reproducir un video
+  - `{type: 'player_control', action}` - pause/resume
 
 ## Instalación
 
@@ -284,6 +319,8 @@ Ver [.env.example](.env.example) para todas las variables de entorno disponibles
 | `SPOTIFY_CLIENT_SECRET` | Client Secret de Spotify Developer | Para música | Integración Spotify |
 | `SPOTIFY_REDIRECT_URI` | URL de callback OAuth Spotify | Para música | Debe coincidir con Spotify Dashboard |
 | `FRONTEND_URL` | URL del frontend | Para música | Redirección post-OAuth |
+| **`YOUTUBE_API_KEY`** | **API key de YouTube Data API v3** | **Para módulo YouTube** | **Búsqueda, trending, recomendaciones** |
+| `YOUTUBE_QUOTA_LIMIT` | Límite diario de unidades (default 10000) | No | Tracking de cuota en admin |
 
 ### Configuración de IA
 
@@ -313,6 +350,44 @@ Para habilitar todas las funcionalidades de IA en Frostbyte:
    - Recomendaciones/frases: ~$0.0001 por request (GPT-4o-mini)
    - Transcripción: ~$0.006 por minuto
    - Las frases motivacionales se cachean 30 minutos para economizar
+
+### Configuración de YouTube Data API v3
+
+Paso a paso para obtener la API key:
+
+1. **Crear/seleccionar proyecto en Google Cloud Console**
+   - Ir a https://console.cloud.google.com/
+   - Selector de proyectos arriba → "New Project" (o usar uno existente)
+
+2. **Habilitar YouTube Data API v3**
+   - Menú lateral → **APIs & Services → Library**
+   - Buscar "YouTube Data API v3" → Click en el resultado → **Enable**
+
+3. **Crear API Key**
+   - **APIs & Services → Credentials**
+   - **+ CREATE CREDENTIALS → API key**
+   - Copiar la clave generada (formato `AIzaSy...`)
+
+4. **Restringir la API key (recomendado)**
+   - Click en la key recién creada → "Edit API key"
+   - **API restrictions**: seleccionar **Restrict key** → marcar **YouTube Data API v3** → Save
+
+5. **Agregar al `.env`**
+   ```bash
+   YOUTUBE_API_KEY=AIzaSy...
+   ```
+
+**Cuota y costos**:
+- Free tier: **10.000 unidades/día** (se renueva a medianoche hora Pacífico = 03:00 Colombia)
+- `search.list` = **100 unidades** por llamada (la más costosa)
+- `videos.list` = **1 unidad** por llamada (trending, detalles, duraciones)
+- Una búsqueda en la app = 101 unidades (search + detalles de duración)
+- **Optimizaciones implementadas**:
+  - Cache de búsquedas 24h y trending 48h en Redis/LocMem
+  - Cache "stale" por 7 días como fallback si se excede la cuota
+  - Debounce de 1s y mínimo 3 caracteres en el frontend
+  - Las recomendaciones comparten cache con búsquedas (usando canal como query)
+- **Pedir aumento de cuota** (gratis): Google Cloud Console → APIs & Services → YouTube Data API v3 → Quotas → Request quota increase (llenar formulario, se aprueba en 1-3 días)
 
 ## Desarrollo
 
@@ -377,5 +452,8 @@ python manage.py test
 - `OperationalExpense` - Gastos
 - `GameRoom` - Salas de juego
 - `AIImageGeneration` - Imágenes generadas
-- `SongRequest` - Solicitudes de canciones (con estados: pending, queued, playing, completed, cancelled, failed)
+- `SongRequest` - Solicitudes de canciones Spotify (estados: pending, queued, playing, completed, cancelled, failed)
 - `SpotifyToken` - Token OAuth de Spotify (singleton, auto-refresh)
+- `MusicSettings` - Singleton con la fuente activa (spotify | youtube, default youtube)
+- `VideoRequest` - Solicitudes de videos YouTube (estados: pending, queued, playing, completed, cancelled)
+- `TVState` - Singleton con el estado actual de la pantalla TV (incluye videos del Mix)
