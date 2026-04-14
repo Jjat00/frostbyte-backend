@@ -255,3 +255,5 @@ SPOTIFY_REDIRECT_URI = os.getenv('SPOTIFY_REDIRECT_URI', 'http://localhost:8000/
 
 # YouTube Configuration
 YOUTUBE_API_KEY = os.getenv('YOUTUBE_API_KEY', '')
+# Limite diario de unidades de cuota (free tier = 10000)
+YOUTUBE_QUOTA_LIMIT = int(os.getenv('YOUTUBE_QUOTA_LIMIT', '10000'))

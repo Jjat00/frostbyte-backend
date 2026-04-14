@@ -20,6 +20,7 @@ from .serializers import (
 from .services.youtube_client import (
     search_videos,
     get_trending_music,
+    get_quota_usage,
     YouTubeAPIError,
     YouTubeQuotaExceededError,
 )
@@ -215,6 +216,11 @@ class VideoRequestViewSet(viewsets.ModelViewSet):
             {"message": "No hay ningun video reproduciendose"},
             status=status.HTTP_204_NO_CONTENT,
         )
+
+    @action(detail=False, methods=["get"], url_path="quota-status", permission_classes=[IsAuthenticated])
+    def quota_status(self, request):
+        """Estado estimado de uso de cuota del dia (solo admin/staff)"""
+        return Response(get_quota_usage())
 
     @action(detail=False, methods=["get"], url_path="recommendations")
     def recommendations(self, request):
