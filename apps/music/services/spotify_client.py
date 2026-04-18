@@ -14,13 +14,11 @@ logger = logging.getLogger(__name__)
 # los reutilizan en vez de golpear Spotify en cada request.
 _cache_lock = threading.Lock()
 _playback_cache = {"data": None, "fetched_at": 0.0}
-_connected_cache = {"value": False, "fetched_at": 0.0}
 
 # Timestamp (epoch) hasta el cual NO se debe llamar a Spotify por rate limit.
 _rate_limited_until = 0.0
 
 PLAYBACK_CACHE_TTL = 4.0  # seg - los endpoints reutilizan el playback reciente
-CONNECTED_CACHE_TTL = 30.0  # seg
 
 # Si Spotify devuelve 429 pero no podemos leer el header Retry-After
 # (caso comun cuando spotipy convierte urllib3.RetryError en SpotifyException
@@ -273,32 +271,15 @@ def set_volume(volume_percent):
 
 
 def is_connected():
-    """Verifica si Spotify está conectado y activo, con cache."""
-    now = time.time()
-    with _cache_lock:
-        cached_value = _connected_cache["value"]
-        age = now - _connected_cache["fetched_at"]
+    """Verifica si Spotify está conectado.
 
-    if age < CONNECTED_CACHE_TTL:
-        return cached_value
+    Se basa en la existencia de un token en la DB en vez de hacer una llamada
+    a Spotify. Esto evita gastar quota en un endpoint que se consulta cada vez
+    que se abre la vista, y evita falsos negativos cuando Spotify nos tiene
+    rate-limited (el token sigue siendo valido aunque no podamos consultar).
+    Los errores reales de autenticacion (token revocado) se manifestaran en
+    los endpoints que si usan la API, y el refresh fallara alli.
+    """
+    from apps.music.models import SpotifyToken
 
-    if is_rate_limited():
-        # No hagas una nueva llamada solo para comprobar, mantener el ultimo estado.
-        return cached_value
-
-    try:
-        sp = _get_spotify_client()
-        _call(sp.current_user)
-        value = True
-    except SpotifyRateLimitedError:
-        # Rate-limit no significa desconectado: preservar valor previo.
-        return cached_value
-    except SpotifyNotConnectedError:
-        value = False
-    except Exception:
-        value = False
-
-    with _cache_lock:
-        _connected_cache["value"] = value
-        _connected_cache["fetched_at"] = time.time()
-    return value
+    return SpotifyToken.get_active_token() is not None
