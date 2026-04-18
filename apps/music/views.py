@@ -29,6 +29,7 @@ from .services.spotify_client import (
     play_track,
     set_volume,
     SpotifyNotConnectedError,
+    SpotifyRateLimitedError,
 )
 from .services.spotify_auth import (
     get_authorize_url,
@@ -101,6 +102,9 @@ class SongRequestViewSet(viewsets.ModelViewSet):
                 song_request.save(update_fields=["status", "updated_at"])
             except SpotifyNotConnectedError:
                 logger.warning("Spotify no conectado, la solicitud queda pendiente")
+            except SpotifyRateLimitedError:
+                # Queda en PENDING para que se encole luego cuando pase el cooldown.
+                logger.warning("Spotify rate-limited, solicitud queda pendiente")
             except Exception as e:
                 logger.error(f"Error al encolar en Spotify: {e}")
                 song_request.status = SongRequest.Status.FAILED
@@ -188,6 +192,11 @@ class SongRequestViewSet(viewsets.ModelViewSet):
                 {"error": "Spotify no está conectado"},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
+        except SpotifyRateLimitedError:
+            return Response(
+                {"error": "Spotify ocupado, intenta de nuevo en unos segundos"},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
         except Exception as e:
             logger.error(f"Error buscando en Spotify: {e}")
             return Response(
@@ -226,6 +235,9 @@ class SongRequestViewSet(viewsets.ModelViewSet):
                 {"error": "Spotify no está conectado"},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
+        except SpotifyRateLimitedError:
+            # Durante un rate-limit, devolver cola vacia para que el UI no rompa.
+            return Response({"queue": []}, status=status.HTTP_200_OK)
         except Exception as e:
             logger.error(f"Error obteniendo cola: {e}")
             return Response(
@@ -247,6 +259,8 @@ class SongRequestViewSet(viewsets.ModelViewSet):
             return Response({"message": "Reproducción pausada"})
         except SpotifyNotConnectedError:
             return Response({"error": "Spotify no está conectado"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        except SpotifyRateLimitedError:
+            return Response({"error": "Spotify ocupado, intenta en unos segundos"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
         except Exception as e:
             logger.error(f"Error al pausar: {e}")
             return Response({"error": "Error al pausar"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -259,6 +273,8 @@ class SongRequestViewSet(viewsets.ModelViewSet):
             return Response({"message": "Reproducción reanudada"})
         except SpotifyNotConnectedError:
             return Response({"error": "Spotify no está conectado"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        except SpotifyRateLimitedError:
+            return Response({"error": "Spotify ocupado, intenta en unos segundos"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
         except Exception as e:
             logger.error(f"Error al reanudar: {e}")
             return Response({"error": "Error al reanudar"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -272,6 +288,8 @@ class SongRequestViewSet(viewsets.ModelViewSet):
             return Response({"message": "Siguiente canción"})
         except SpotifyNotConnectedError:
             return Response({"error": "Spotify no está conectado"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        except SpotifyRateLimitedError:
+            return Response({"error": "Spotify ocupado, intenta en unos segundos"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
         except Exception as e:
             logger.error(f"Error al saltar: {e}")
             return Response({"error": "Error al saltar"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -285,6 +303,8 @@ class SongRequestViewSet(viewsets.ModelViewSet):
             return Response({"message": "Canción anterior"})
         except SpotifyNotConnectedError:
             return Response({"error": "Spotify no está conectado"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        except SpotifyRateLimitedError:
+            return Response({"error": "Spotify ocupado, intenta en unos segundos"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
         except Exception as e:
             logger.error(f"Error al retroceder: {e}")
             return Response({"error": "Error al retroceder"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -301,6 +321,8 @@ class SongRequestViewSet(viewsets.ModelViewSet):
             return Response({"message": "Reproduciendo track"})
         except SpotifyNotConnectedError:
             return Response({"error": "Spotify no está conectado"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        except SpotifyRateLimitedError:
+            return Response({"error": "Spotify ocupado, intenta en unos segundos"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
         except Exception as e:
             logger.error(f"Error al reproducir track: {e}")
             return Response({"error": "Error al reproducir"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -362,6 +384,8 @@ class SongRequestViewSet(viewsets.ModelViewSet):
             return Response({"message": f"Volumen ajustado a {volume}"})
         except SpotifyNotConnectedError:
             return Response({"error": "Spotify no está conectado"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        except SpotifyRateLimitedError:
+            return Response({"error": "Spotify ocupado, intenta en unos segundos"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
         except Exception as e:
             logger.error(f"Error al ajustar volumen: {e}")
             return Response({"error": "Error al ajustar volumen"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
