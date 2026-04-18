@@ -22,6 +22,12 @@ _rate_limited_until = 0.0
 PLAYBACK_CACHE_TTL = 4.0  # seg - los endpoints reutilizan el playback reciente
 CONNECTED_CACHE_TTL = 30.0  # seg
 
+# Si Spotify devuelve 429 pero no podemos leer el header Retry-After
+# (caso comun cuando spotipy convierte urllib3.RetryError en SpotifyException
+# con headers=None), asumimos este cooldown por defecto.
+DEFAULT_RATE_LIMIT_COOLDOWN = 60  # seg
+MAX_RATE_LIMIT_COOLDOWN = 300  # seg - cap defensivo ante Retry-After de horas
+
 
 def _get_spotify_client():
     """Crea un cliente de Spotify autenticado.
@@ -53,12 +59,18 @@ class SpotifyRateLimitedError(Exception):
         super().__init__(f"Spotify rate limited. Retry after {retry_after}s")
 
 
-def _note_rate_limit(retry_after: int):
-    """Marca un cooldown global para que nadie llame a Spotify hasta que pase."""
+def _note_rate_limit(retry_after):
+    """Marca un cooldown global para que nadie llame a Spotify hasta que pase.
+
+    retry_after puede ser None cuando spotipy no pudo leer el header. En ese
+    caso usamos un default conservador para no reintentar en loop.
+    """
     global _rate_limited_until
-    # Cap defensivo: nunca dormir mas de 5 min aunque Spotify pida horas.
-    # Si sigue devolviendo 429 tras 5 min, volveremos a respetarlo.
-    capped = min(max(retry_after, 1), 300)
+    if retry_after is None or retry_after <= 0:
+        effective = DEFAULT_RATE_LIMIT_COOLDOWN
+    else:
+        effective = max(retry_after, DEFAULT_RATE_LIMIT_COOLDOWN)
+    capped = min(effective, MAX_RATE_LIMIT_COOLDOWN)
     _rate_limited_until = max(_rate_limited_until, time.time() + capped)
 
 
@@ -73,17 +85,19 @@ def seconds_until_allowed() -> float:
 def _handle_spotify_exception(exc: SpotifyException):
     """Convierte SpotifyException 429 en SpotifyRateLimitedError y registra cooldown."""
     if exc.http_status == 429:
-        retry_after = 1
+        retry_after = None
         headers = getattr(exc, "headers", None) or {}
+        raw = headers.get("Retry-After") if headers else None
         try:
-            retry_after = int(headers.get("Retry-After", 1))
+            retry_after = int(raw) if raw is not None else None
         except (TypeError, ValueError):
-            retry_after = 1
+            retry_after = None
         _note_rate_limit(retry_after)
         logger.warning(
-            f"[Spotify] Rate limited. Retry-After={retry_after}s (capped to 300s)"
+            f"[Spotify] Rate limited. Retry-After={retry_after} "
+            f"(cooldown {int(seconds_until_allowed())}s)"
         )
-        raise SpotifyRateLimitedError(retry_after) from exc
+        raise SpotifyRateLimitedError(retry_after or DEFAULT_RATE_LIMIT_COOLDOWN) from exc
     raise
 
 
@@ -269,12 +283,18 @@ def is_connected():
         return cached_value
 
     if is_rate_limited():
+        # No hagas una nueva llamada solo para comprobar, mantener el ultimo estado.
         return cached_value
 
     try:
         sp = _get_spotify_client()
         _call(sp.current_user)
         value = True
+    except SpotifyRateLimitedError:
+        # Rate-limit no significa desconectado: preservar valor previo.
+        return cached_value
+    except SpotifyNotConnectedError:
+        value = False
     except Exception:
         value = False
 
