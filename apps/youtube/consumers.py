@@ -63,15 +63,19 @@ class YouTubeConsumer(AsyncWebsocketConsumer):
                 )
 
             elif msg_type == 'video_ended':
-                # La pantalla TV notifica que el video termino
+                # La pantalla TV notifica que el video termino.
+                # 1) Marcar el video actual como completado.
+                # 2) Elegir el siguiente de la cola y avisar a la TV con play_video
+                #    (sin requerir que la TV este autenticada).
+                # 3) Si no hay siguiente, limpiar TVState para que el frontend
+                #    detecte cola vacia y transicione al Mix automatico.
                 video_id = data.get('video_id')
                 if video_id:
-                    from .models import VideoRequest
+                    from .models import VideoRequest, TVState
                     from asgiref.sync import sync_to_async
 
-                    # Marcar como completado
                     @sync_to_async
-                    def complete_video():
+                    def advance_queue():
                         try:
                             vr = VideoRequest.objects.filter(
                                 video_id=video_id,
@@ -82,9 +86,47 @@ class YouTubeConsumer(AsyncWebsocketConsumer):
                         except Exception:
                             pass
 
-                    await complete_video()
+                        next_video = (
+                            VideoRequest.objects.filter(
+                                status__in=[
+                                    VideoRequest.Status.QUEUED,
+                                    VideoRequest.Status.PENDING,
+                                ]
+                            )
+                            .order_by("created_at")
+                            .first()
+                        )
 
-                    # Notificar a todos que hay cambios
+                        if next_video:
+                            next_video.mark_as_playing()
+                            return {
+                                "video_id": next_video.video_id,
+                                "title": next_video.title,
+                            }
+
+                        # Cola vacia: limpiar TVState para que la TV transicione al Mix
+                        state = TVState.get_state()
+                        state.video_id = ""
+                        state.title = ""
+                        state.channel_name = ""
+                        state.thumbnail = ""
+                        state.is_mix = False
+                        state.save()
+                        return None
+
+                    next_payload = await advance_queue()
+
+                    if next_payload:
+                        await self.channel_layer.group_send(
+                            self.GROUP_NAME,
+                            {
+                                'type': 'youtube_play',
+                                'video_id': next_payload['video_id'],
+                                'title': next_payload['title'],
+                            },
+                        )
+
+                    # Notificar a todos que hay cambios (cola, now-playing, etc.)
                     await self.channel_layer.group_send(
                         self.GROUP_NAME,
                         {'type': 'youtube_changed'}
