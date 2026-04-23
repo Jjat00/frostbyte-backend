@@ -8,11 +8,20 @@ logger = logging.getLogger(__name__)
 
 
 class OpenAIImageGenerator:
-    """Generador de imágenes profesionales usando OpenAI GPT Image 1.5"""
+    """Generador de imágenes profesionales usando los modelos GPT Image de OpenAI"""
 
-    def __init__(self):
+    DEFAULT_MODEL = 'gpt-image-1.5'
+    SUPPORTED_MODELS = {'gpt-image-1.5', 'gpt-image-2'}
+
+    def __init__(self, model: Optional[str] = None):
         self.client = OpenAI(api_key=settings.OPENAI_API_KEY)
-        self.model = 'gpt-image-1.5'
+        resolved = model or self.DEFAULT_MODEL
+        if resolved not in self.SUPPORTED_MODELS:
+            logger.warning(
+                f"Modelo OpenAI '{resolved}' no reconocido; usando {self.DEFAULT_MODEL}"
+            )
+            resolved = self.DEFAULT_MODEL
+        self.model = resolved
 
     def build_prompt(self, user_prompt: str, has_reference: bool, transparent_background: bool) -> str:
         """Construye prompt para edición profesional de imágenes de menú"""

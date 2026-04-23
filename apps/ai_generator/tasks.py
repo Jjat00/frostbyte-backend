@@ -8,12 +8,18 @@ logger = logging.getLogger(__name__)
 # Models that use Gemini provider
 GEMINI_MODELS = {'gemini-3-pro-image-preview', 'gemini-3.1-flash-image-preview'}
 
+# Models that use OpenAI provider
+OPENAI_MODELS = {'gpt-image-1.5', 'gpt-image-2'}
+
 
 def _get_generator(model_name: str):
     """Returns the appropriate image generator based on model name."""
     if model_name in GEMINI_MODELS:
         from .gemini_integration import GeminiImageGenerator
         return GeminiImageGenerator(model=model_name)
+    if model_name in OPENAI_MODELS:
+        return OpenAIImageGenerator(model=model_name)
+    # Fallback: OpenAI con su modelo por defecto
     return OpenAIImageGenerator()
 
 
