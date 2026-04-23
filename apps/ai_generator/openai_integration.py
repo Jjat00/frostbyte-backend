@@ -1,10 +1,14 @@
 import base64
+import os
 from openai import OpenAI
 from typing import Optional, Dict
 from django.conf import settings
 import logging
 
 logger = logging.getLogger(__name__)
+
+_MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
+BRAND_BACKGROUND_PATH = os.path.join(_MODULE_DIR, 'assets', 'fondo_frostbyte.png')
 
 
 class OpenAIImageGenerator:
@@ -26,7 +30,13 @@ class OpenAIImageGenerator:
             resolved = self.DEFAULT_MODEL
         self.model = resolved
 
-    def build_prompt(self, user_prompt: str, has_reference: bool, transparent_background: bool) -> str:
+    def build_prompt(
+        self,
+        user_prompt: str,
+        has_reference: bool,
+        transparent_background: bool,
+        has_brand_background: bool = False,
+    ) -> str:
         """Construye prompt para edición profesional de imágenes de menú"""
 
         if has_reference:
@@ -63,6 +73,24 @@ Preserve:
 
         if transparent_background:
             prompt += "BACKGROUND: Transparent/removed - clean edges around product.\n"
+        elif has_brand_background:
+            bg_index = "THIRD" if has_reference else "SECOND"
+            prompt += (
+                f"BACKGROUND: Use the {bg_index} image as the Frostbyte brand "
+                "backdrop. Compose this as a professional product photograph "
+                "shot with a 50mm lens at f/2.8:\n"
+                "- Place the product centered and sharply in focus\n"
+                "- Apply a natural depth-of-field blur (bokeh) to the brand "
+                "backdrop so the product pops while the backdrop stays "
+                "recognizable as Frostbyte\n"
+                "- Match the product lighting to the backdrop ambient light "
+                "(color temperature, highlights, soft shadows under the "
+                "product)\n"
+                "- Preserve the backdrop's Frostbyte branding, colors, and "
+                "overall composition; do not replace or distort it\n"
+                "- Add a subtle contact shadow under the product so it looks "
+                "physically placed, not pasted\n"
+            )
         else:
             prompt += "BACKGROUND: Professional, elegant, complementing the product.\n"
 
@@ -88,10 +116,17 @@ Preserve:
                 "se generará con fondo normal."
             )
 
+        # Usar el fondo de marca Frostbyte cuando no se pide transparencia
+        use_brand_background = (
+            not effective_transparent
+            and os.path.exists(BRAND_BACKGROUND_PATH)
+        )
+
         full_prompt = self.build_prompt(
             user_prompt=user_prompt,
             has_reference=reference_image_path is not None,
             transparent_background=effective_transparent,
+            has_brand_background=use_brand_background,
         )
 
         logger.info(f"Generating image with {self.model}")
@@ -105,7 +140,12 @@ Preserve:
             if reference_image_path:
                 f_ref = open(reference_image_path, "rb")
                 files_to_close.append(f_ref)
-                image_list = [f_orig, f_ref]
+                image_list.append(f_ref)
+
+            if use_brand_background:
+                f_bg = open(BRAND_BACKGROUND_PATH, "rb")
+                files_to_close.append(f_bg)
+                image_list.append(f_bg)
 
             edit_kwargs = {
                 "model": self.model,

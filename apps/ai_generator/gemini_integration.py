@@ -12,8 +12,12 @@ from django.conf import settings
 from PIL import Image
 from io import BytesIO
 import logging
+import os
 
 logger = logging.getLogger(__name__)
+
+_MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
+BRAND_BACKGROUND_PATH = os.path.join(_MODULE_DIR, 'assets', 'fondo_frostbyte.png')
 
 
 class GeminiImageGenerator:
@@ -34,7 +38,13 @@ class GeminiImageGenerator:
         self.client = genai.Client(api_key=api_key)
         self.model = self.MODEL_CHOICES.get(model, model)
 
-    def build_prompt(self, user_prompt: str, has_reference: bool, transparent_background: bool) -> str:
+    def build_prompt(
+        self,
+        user_prompt: str,
+        has_reference: bool,
+        transparent_background: bool,
+        has_brand_background: bool = False,
+    ) -> str:
         """Construye prompt para edicion profesional de imagenes de menu"""
 
         if has_reference:
@@ -69,6 +79,24 @@ Preserve:
 
         if transparent_background:
             prompt += "BACKGROUND: Use a plain, solid, single-color background (preferably white or light gray). Keep the product cleanly separated from the background with sharp, well-defined edges. No gradients, no textures, no props on the background.\n"
+        elif has_brand_background:
+            bg_index = "THIRD" if has_reference else "SECOND"
+            prompt += (
+                f"BACKGROUND: Use the {bg_index} image as the Frostbyte brand "
+                "backdrop. Compose this as a professional product photograph "
+                "shot with a 50mm lens at f/2.8:\n"
+                "- Place the product centered and sharply in focus\n"
+                "- Apply a natural depth-of-field blur (bokeh) to the brand "
+                "backdrop so the product pops while the backdrop stays "
+                "recognizable as Frostbyte\n"
+                "- Match the product lighting to the backdrop ambient light "
+                "(color temperature, highlights, soft shadows under the "
+                "product)\n"
+                "- Preserve the backdrop's Frostbyte branding, colors, and "
+                "overall composition; do not replace or distort it\n"
+                "- Add a subtle contact shadow under the product so it looks "
+                "physically placed, not pasted\n"
+            )
         else:
             prompt += "BACKGROUND: Professional, elegant, complementing the product.\n"
 
@@ -86,10 +114,17 @@ Preserve:
     ) -> Dict:
         """Genera imagen profesional usando Gemini generate_content con modalidad IMAGE"""
 
+        # Usar el fondo de marca Frostbyte cuando no se pide transparencia
+        use_brand_background = (
+            not transparent_background
+            and os.path.exists(BRAND_BACKGROUND_PATH)
+        )
+
         full_prompt = self.build_prompt(
             user_prompt=user_prompt,
             has_reference=reference_image_path is not None,
             transparent_background=transparent_background,
+            has_brand_background=use_brand_background,
         )
 
         logger.info(f"Generating image with Gemini model: {self.model}")
@@ -110,6 +145,15 @@ Preserve:
                 reference_data = f.read()
             reference_mime = self._detect_mime_type(reference_data)
             contents.append(types.Part.from_bytes(data=reference_data, mime_type=reference_mime))
+
+        # Add Frostbyte brand background when applicable
+        if use_brand_background:
+            with open(BRAND_BACKGROUND_PATH, "rb") as f:
+                brand_bg_data = f.read()
+            brand_bg_mime = self._detect_mime_type(brand_bg_data)
+            contents.append(
+                types.Part.from_bytes(data=brand_bg_data, mime_type=brand_bg_mime)
+            )
 
         # Add text prompt
         contents.append(full_prompt)
