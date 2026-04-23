@@ -12,6 +12,9 @@ class OpenAIImageGenerator:
 
     DEFAULT_MODEL = 'gpt-image-1.5'
     SUPPORTED_MODELS = {'gpt-image-1.5', 'gpt-image-2'}
+    # Modelos que aceptan background="transparent" en images.edit.
+    # gpt-image-2 rechaza ese valor con HTTP 400.
+    TRANSPARENT_SUPPORTED_MODELS = {'gpt-image-1.5'}
 
     def __init__(self, model: Optional[str] = None):
         self.client = OpenAI(api_key=settings.OPENAI_API_KEY)
@@ -77,10 +80,18 @@ Preserve:
     ) -> Dict:
         """Genera imagen profesional usando OpenAI images.edit"""
 
+        supports_transparent = self.model in self.TRANSPARENT_SUPPORTED_MODELS
+        effective_transparent = transparent_background and supports_transparent
+        if transparent_background and not supports_transparent:
+            logger.info(
+                f"Modelo {self.model} no soporta background=transparent; "
+                "se generará con fondo normal."
+            )
+
         full_prompt = self.build_prompt(
             user_prompt=user_prompt,
             has_reference=reference_image_path is not None,
-            transparent_background=transparent_background,
+            transparent_background=effective_transparent,
         )
 
         logger.info(f"Generating image with {self.model}")
@@ -96,15 +107,19 @@ Preserve:
                 files_to_close.append(f_ref)
                 image_list = [f_orig, f_ref]
 
-            response = self.client.images.edit(
-                model=self.model,
-                image=image_list,
-                prompt=full_prompt,
-                size="1024x1024",
-                quality="high",
-                n=1,
-                background="transparent" if transparent_background else "auto",
-            )
+            edit_kwargs = {
+                "model": self.model,
+                "image": image_list,
+                "prompt": full_prompt,
+                "size": "1024x1024",
+                "quality": "high",
+                "n": 1,
+            }
+            if supports_transparent:
+                edit_kwargs["background"] = (
+                    "transparent" if effective_transparent else "auto"
+                )
+            response = self.client.images.edit(**edit_kwargs)
         finally:
             for f in files_to_close:
                 f.close()
