@@ -300,12 +300,14 @@ class OrderViewSet(viewsets.ModelViewSet):
 
         total_orders = orders.count()
 
-        # Items pagados en el período por fecha de pago (igual que analytics)
-        # Esto asegura consistencia con el dashboard financiero
+        # Items pagados de pedidos creados en el período.
+        # La venta se atribuye a la fecha de creación del pedido, no a la de pago,
+        # para que un pedido tomado a las 11pm y pagado pasada medianoche
+        # cuente en el día en que se generó.
         paid_items = OrderItem.objects.filter(
             is_paid=True,
-            paid_at__gte=start_date,
-            paid_at__lte=end_date
+            order__created_at__gte=start_date,
+            order__created_at__lte=end_date
         ).exclude(order__status=Order.Status.CANCELLED)
 
         # Total de ingresos = suma de items pagados - descuentos de pedidos
@@ -484,22 +486,21 @@ class OrderViewSet(viewsets.ModelViewSet):
         start_date, end_date = self._get_date_range(
             date_filter, start_date_param, end_date_param)
 
-        # Obtener items pagados en el rango de fechas por paid_at (igual que analytics)
-        # Esto asegura consistencia con el dashboard financiero
+        # Items pagados de pedidos creados en el rango (atribución por fecha de pedido).
         paid_items = OrderItem.objects.filter(
             is_paid=True,
-            paid_at__gte=start_date,
-            paid_at__lte=end_date
+            order__created_at__gte=start_date,
+            order__created_at__lte=end_date
         ).exclude(order__status=Order.Status.CANCELLED)
 
         # Obtener la zona horaria configurada
         tz = zoneinfo.ZoneInfo('America/Bogota')
 
-        # Agrupar por día usando la fecha de pago en la zona horaria correcta
+        # Agrupar por día usando la fecha de creación del pedido en la zona horaria correcta
         revenue_by_day = (
             paid_items
             .annotate(
-                date=TruncDate('paid_at', tzinfo=tz)
+                date=TruncDate('order__created_at', tzinfo=tz)
             )
             .values('date')
             .annotate(revenue=Sum('subtotal'))
@@ -589,12 +590,11 @@ class OrderViewSet(viewsets.ModelViewSet):
         start_date, end_date = self._get_date_range(
             date_filter, start_date_param, end_date_param)
 
-        # Obtener items pagados en el rango de fechas por paid_at (igual que analytics)
-        # Esto asegura consistencia con el dashboard financiero
+        # Items pagados de pedidos creados en el rango (atribución por fecha de pedido).
         paid_items = OrderItem.objects.filter(
             is_paid=True,
-            paid_at__gte=start_date,
-            paid_at__lte=end_date
+            order__created_at__gte=start_date,
+            order__created_at__lte=end_date
         ).exclude(order__status=Order.Status.CANCELLED)
 
         # Agrupar por producto y variante
@@ -656,17 +656,17 @@ class OrderViewSet(viewsets.ModelViewSet):
         # Obtener la zona horaria de Colombia
         tz = zoneinfo.ZoneInfo('America/Bogota')
 
-        # Obtener items pagados en el rango de fechas
+        # Items pagados de pedidos creados en el rango (atribución por fecha de pedido).
         paid_items = OrderItem.objects.filter(
             is_paid=True,
-            paid_at__gte=start_date,
-            paid_at__lte=end_date
+            order__created_at__gte=start_date,
+            order__created_at__lte=end_date
         ).exclude(order__status=Order.Status.CANCELLED)
 
-        # Agrupar por hora del día
+        # Agrupar por hora del día (hora en que se creó el pedido)
         sales_by_hour = (
             paid_items
-            .annotate(hour=ExtractHour('paid_at', tzinfo=tz))
+            .annotate(hour=ExtractHour('order__created_at', tzinfo=tz))
             .values('hour')
             .annotate(
                 revenue=Sum('subtotal'),
@@ -683,7 +683,7 @@ class OrderViewSet(viewsets.ModelViewSet):
                 'count': item['count'] or 0
             }
 
-        # Restar descuentos asociados a la hora del último pago
+        # Restar descuentos asociados a la hora de creación del pedido
         discounted_orders = Order.objects.filter(
             id__in=paid_items.values_list('order_id', flat=True).distinct(),
             is_paid=True,
@@ -691,13 +691,9 @@ class OrderViewSet(viewsets.ModelViewSet):
         ).exclude(status=Order.Status.CANCELLED)
 
         for order in discounted_orders:
-            last_paid_at = OrderItem.objects.filter(
-                order_id=order.pk, is_paid=True
-            ).order_by('-paid_at').values_list('paid_at', flat=True).first()
-            if last_paid_at:
-                hour = last_paid_at.astimezone(tz).hour
-                if hour in hour_dict:
-                    hour_dict[hour]['revenue'] -= float(order.discount)
+            hour = order.created_at.astimezone(tz).hour
+            if hour in hour_dict:
+                hour_dict[hour]['revenue'] -= float(order.discount)
 
         # Generar todas las horas del día (0-23)
         data = []
@@ -733,17 +729,17 @@ class OrderViewSet(viewsets.ModelViewSet):
         # Obtener la zona horaria de Colombia
         tz = zoneinfo.ZoneInfo('America/Bogota')
 
-        # Obtener items pagados en el rango de fechas
+        # Items pagados de pedidos creados en el rango (atribución por fecha de pedido).
         paid_items = OrderItem.objects.filter(
             is_paid=True,
-            paid_at__gte=start_date,
-            paid_at__lte=end_date
+            order__created_at__gte=start_date,
+            order__created_at__lte=end_date
         ).exclude(order__status=Order.Status.CANCELLED)
 
-        # Agrupar por día de la semana (1=Domingo, 2=Lunes, ..., 7=Sábado en Django)
+        # Agrupar por día de la semana en que se creó el pedido (1=Domingo, 2=Lunes, ..., 7=Sábado en Django)
         sales_by_weekday = (
             paid_items
-            .annotate(weekday=ExtractWeekDay('paid_at', tzinfo=tz))
+            .annotate(weekday=ExtractWeekDay('order__created_at', tzinfo=tz))
             .values('weekday')
             .annotate(
                 revenue=Sum('subtotal'),
@@ -760,7 +756,7 @@ class OrderViewSet(viewsets.ModelViewSet):
                 'count': item['count'] or 0
             }
 
-        # Restar descuentos asociados al día de la semana del último pago
+        # Restar descuentos asociados al día de la semana en que se creó el pedido
         discounted_orders = Order.objects.filter(
             id__in=paid_items.values_list('order_id', flat=True).distinct(),
             is_paid=True,
@@ -768,16 +764,12 @@ class OrderViewSet(viewsets.ModelViewSet):
         ).exclude(status=Order.Status.CANCELLED)
 
         for order in discounted_orders:
-            last_paid_at = OrderItem.objects.filter(
-                order_id=order.pk, is_paid=True
-            ).order_by('-paid_at').values_list('paid_at', flat=True).first()
-            if last_paid_at:
-                # ExtractWeekDay de Django: 1=Domingo, 2=Lunes, ..., 7=Sábado
-                weekday = last_paid_at.astimezone(tz).isoweekday()
-                # isoweekday: 1=Lunes...7=Domingo → convertir a Django format
-                django_weekday = 1 if weekday == 7 else weekday + 1
-                if django_weekday in weekday_dict:
-                    weekday_dict[django_weekday]['revenue'] -= float(order.discount)
+            # ExtractWeekDay de Django: 1=Domingo, 2=Lunes, ..., 7=Sábado
+            weekday = order.created_at.astimezone(tz).isoweekday()
+            # isoweekday: 1=Lunes...7=Domingo → convertir a Django format
+            django_weekday = 1 if weekday == 7 else weekday + 1
+            if django_weekday in weekday_dict:
+                weekday_dict[django_weekday]['revenue'] -= float(order.discount)
 
         # Nombres de los días en español (Django: 1=Domingo, 2=Lunes, ..., 7=Sábado)
         weekday_names = {

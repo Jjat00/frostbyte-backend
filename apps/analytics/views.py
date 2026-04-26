@@ -59,11 +59,16 @@ class FinancialAnalyticsViewSet(viewsets.ViewSet):
 
     def _calculate_revenue(self, start_date, end_date):
         """Calcula ingresos de items pagados excluyendo ordenes canceladas,
-        restando descuentos de ordenes completamente pagadas."""
+        restando descuentos de ordenes completamente pagadas.
+
+        Atribuye la venta a la fecha de creación del pedido (no a la de pago)
+        para que un pedido tomado a las 11pm y pagado pasada medianoche cuente
+        en el día en que se generó.
+        """
         paid_items = OrderItem.objects.filter(
             is_paid=True,
-            paid_at__gte=start_date,
-            paid_at__lte=end_date
+            order__created_at__gte=start_date,
+            order__created_at__lte=end_date
         ).exclude(order__status=Order.Status.CANCELLED)
 
         items_revenue = paid_items.aggregate(total=Sum('subtotal'))['total'] or 0
