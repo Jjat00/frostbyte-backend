@@ -565,16 +565,32 @@ def generate_mothers_day_image(request):
         "- Solo agregar un marco decorativo cálido y elegante alrededor de la foto.",
         "- La foto debe ser el elemento central y protagónico de la tarjeta.",
         "",
+        "PALETA — DERIVADA DE LA FOTO:",
+        "- ANALIZA los colores predominantes de la foto adjunta (ropa, fondo, accesorios, tono de piel, ambiente).",
+        "- El COLOR PRINCIPAL / COLOR DE FONDO de toda la tarjeta debe derivarse DIRECTAMENTE de los colores "
+        "predominantes de la foto. Por ejemplo: si la persona viste de azul, el fondo y color principal debe ser "
+        "un azul suave; si viste de verde, tonos verde sage/oliva; si rojo/coral, tonos rojos/coral suaves; "
+        "si beige/neutro, tonos crema y nude.",
+        "- Usa esos mismos colores como base para TODA la paleta de la tarjeta: fondo, marco, adornos, hojas, "
+        "destellos, tipografía decorativa — TODO debe armonizar con los colores de la foto.",
+        "- Si la foto tiene tonos cálidos, usa decoraciones cálidas; si tiene tonos fríos, decoraciones frías.",
+        "- NO uses rosa por defecto para el fondo. El color de fondo lo DICTA la foto.",
+        "",
+        "ROSAS REALISTAS (OBLIGATORIO):",
+        "- SIEMPRE incluye rosas como elemento decorativo principal de la tarjeta, sin importar la paleta.",
+        "- Las rosas deben ser FOTORREALISTAS, con detalles de pétalos visibles, gradientes naturales, "
+        "venas suaves, gotas de rocío opcionales y profundidad. NADA de rosas planas, dibujadas o caricaturescas.",
+        "- El color de las rosas debe armonizar con la paleta derivada de la foto (pueden ser blancas, "
+        "rojas, rosas, durazno, amarillas, lavanda, etc., lo que combine mejor con los colores dominantes).",
+        "- Distribuye las rosas de manera elegante: una guirnalda alrededor del marco, ramos en esquinas, "
+        "o pétalos sueltos cayendo. Composición natural, no recargada.",
+        "",
         "ESTILO VISUAL:",
-        "- Paleta cálida y maternal: rosa pastel, durazno, dorado suave, crema, marfil.",
-        "- ANALIZA los colores predominantes de la foto para armonizar — si la foto tiene tonos cálidos, "
-        "intensifica los rosados/dorados; si es neutra, usa la paleta base maternal.",
         "- Estilo aesthetic, romántico y atemporal — como una carta de amor a mamá.",
-        "- Luz cálida, textura suave tipo papel acuarela, sombras delicadas.",
-        "- Elementos decorativos: rosas suaves, peonías, tulipanes, hojas verde sage, "
-        "destellos dorados, lazos delicados, pequeños corazones discretos.",
+        "- Luz cálida, textura suave, sombras delicadas y realistas.",
+        "- Elementos secundarios opcionales: hojas verdes realistas, destellos suaves, pequeños corazones discretos.",
         "- Composición limpia, romántica y armoniosa.",
-        "- Formato cuadrado estilo post de Instagram (1:1), alta calidad.",
+        "- Formato cuadrado estilo post de Instagram (1:1), alta calidad fotográfica.",
         "- Diseño que transmita ternura, gratitud y amor profundo.",
         "",
         "TEXTO A INCLUIR EN LA TARJETA:",
