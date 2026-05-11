@@ -327,7 +327,7 @@ class SongRequestViewSet(viewsets.ModelViewSet):
             logger.error(f"Error al reproducir track: {e}")
             return Response({"error": "Error al reproducir"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-    @action(detail=False, methods=["get"], url_path="lyrics")
+    @action(detail=False, methods=["get"], url_path="lyrics", authentication_classes=[], permission_classes=[AllowAny])
     def lyrics(self, request):
         """Obtener letras sincronizadas de LRCLib para la canción actual o por parámetros"""
         track_name = request.query_params.get("track_name", "")

@@ -4,6 +4,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth import authenticate, get_user_model
+from django.db import transaction, IntegrityError
 
 from .serializers import (
     UserSerializer,
@@ -78,14 +79,16 @@ class LogoutView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request):
-        try:
-            refresh_token = request.data.get("refresh")
-            if refresh_token:
-                token = RefreshToken(refresh_token)
-                token.blacklist()
-            return Response({"message": "Sesión cerrada exitosamente"})
-        except Exception:
-            return Response({"message": "Sesión cerrada"})
+        refresh_token = request.data.get("refresh")
+        if refresh_token:
+            try:
+                with transaction.atomic():
+                    RefreshToken(refresh_token).blacklist()
+            except IntegrityError:
+                pass
+            except Exception:
+                pass
+        return Response({"message": "Sesión cerrada exitosamente"})
 
 
 class MeView(APIView):
