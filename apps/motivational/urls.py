@@ -18,6 +18,11 @@ urlpatterns = [
         name="generate-mothers-day-image",
     ),
     path(
+        "mothers-day-track/",
+        views.track_mothers_day_event,
+        name="mothers-day-track",
+    ),
+    path(
         "mother-dedications/",
         views.list_mother_dedications,
         name="mother-dedications-list",

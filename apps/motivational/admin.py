@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import RecommenderLog, MotherDedication
+from .models import RecommenderLog, MotherDedication, MothersDayCardEvent
 
 
 @admin.register(RecommenderLog)
@@ -61,3 +61,24 @@ class MotherDedicationAdmin(admin.ModelAdmin):
         return obj.message[:80] + "..." if len(obj.message) > 80 else obj.message
 
     message_preview.short_description = "Mensaje"
+
+
+@admin.register(MothersDayCardEvent)
+class MothersDayCardEventAdmin(admin.ModelAdmin):
+    list_display = ("created_at", "event_type", "user_agent_short")
+    list_filter = ("event_type", "created_at")
+    search_fields = ("user_agent",)
+    readonly_fields = ("event_type", "user_agent", "created_at")
+    date_hierarchy = "created_at"
+    ordering = ["-created_at"]
+
+    def user_agent_short(self, obj):
+        return obj.user_agent[:60] + "..." if len(obj.user_agent) > 60 else obj.user_agent
+
+    user_agent_short.short_description = "User-Agent"
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False

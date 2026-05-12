@@ -7,7 +7,7 @@ from openai import OpenAI
 from django.utils import timezone
 from django.core.cache import cache
 from apps.products.models import Product
-from .models import RecommenderLog, MotherDedication
+from .models import RecommenderLog, MotherDedication, MothersDayCardEvent
 from .serializers import (
     MotherDedicationCreateSerializer,
     MotherDedicationListSerializer,
@@ -451,6 +451,17 @@ Responde ÚNICAMENTE con JSON puro (sin markdown, sin backticks):
 # ─── Día de la Madre — Generador de tarjetas con IA ───────────────────
 
 
+def _log_mothers_day_event(request, event_type):
+    try:
+        MothersDayCardEvent.objects.create(
+            event_type=event_type,
+            user_agent=(request.META.get("HTTP_USER_AGENT") or "")[:400],
+        )
+    except Exception:
+        # El tracking nunca debe romper la respuesta al usuario.
+        pass
+
+
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def generate_mothers_day_phrase(request):
@@ -498,6 +509,7 @@ def generate_mothers_day_phrase(request):
 
         phrase = response.text.strip().strip('"').strip("'").strip("“").strip("”")
 
+        _log_mothers_day_event(request, "phrase_generated")
         return Response({"phrase": phrase}, status=status.HTTP_200_OK)
 
     except Exception as e:
@@ -671,6 +683,7 @@ def generate_mothers_day_image(request):
         else:
             image_base64 = generated_image_data
 
+        _log_mothers_day_event(request, "image_generated")
         return Response(
             {
                 "image_base64": image_base64,
@@ -685,6 +698,29 @@ def generate_mothers_day_image(request):
             {"error": f"Error al generar imagen: {str(e)}"},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
+
+
+class MothersDayTrackThrottle(AnonRateThrottle):
+    rate = "60/hour"
+
+
+_TRACKABLE_FRONTEND_EVENTS = {"photo_uploaded", "downloaded", "shared"}
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+@throttle_classes([MothersDayTrackThrottle])
+def track_mothers_day_event(request):
+    """Registra un evento de uso del generador disparado desde el frontend."""
+    event_type = (request.data.get("event_type") or "").strip()
+    if event_type not in _TRACKABLE_FRONTEND_EVENTS:
+        return Response(
+            {"error": "event_type inválido."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    _log_mothers_day_event(request, event_type)
+    return Response({"ok": True}, status=status.HTTP_202_ACCEPTED)
 
 
 # ─── Dedicatorias Día de la Madre ─────────────────────────────────────

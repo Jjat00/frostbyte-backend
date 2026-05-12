@@ -74,3 +74,38 @@ class MotherDedication(models.Model):
         para = f" para {self.mother_name}" if self.mother_name else ""
         de = f" de {self.author_name}" if self.author_name else ""
         return f"{self.message[:50]}{para}{de}"
+
+
+class MothersDayCardEvent(models.Model):
+    """Evento de uso del generador de tarjetas del Día de la Madre con IA."""
+
+    EVENT_TYPE_CHOICES = [
+        ("photo_uploaded", "Foto cargada"),
+        ("phrase_generated", "Frase generada"),
+        ("image_generated", "Tarjeta generada"),
+        ("downloaded", "Tarjeta descargada"),
+        ("shared", "Tarjeta compartida"),
+    ]
+
+    event_type = models.CharField(
+        max_length=20,
+        choices=EVENT_TYPE_CHOICES,
+        verbose_name="Tipo de evento",
+    )
+    user_agent = models.CharField(
+        max_length=400,
+        blank=True,
+        verbose_name="User-Agent",
+    )
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="Fecha y hora")
+
+    class Meta:
+        verbose_name = "Evento tarjeta Día de la Madre"
+        verbose_name_plural = "Eventos tarjeta Día de la Madre"
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["event_type", "created_at"]),
+        ]
+
+    def __str__(self):
+        return f"[{self.get_event_type_display()}] {self.created_at:%Y-%m-%d %H:%M}"
