@@ -1061,21 +1061,12 @@ class PublicOrderViewSet(viewsets.ViewSet):
 
     @action(detail=False, methods=["post"])
     def verify(self, request):
-        """Verificar pedido con código de acceso y número de mesa"""
+        """Verificar pedido con código de acceso"""
         access_code = request.data.get("access_code", "").strip().upper()
-        table_number = request.data.get("table_number")
 
-        if not access_code or table_number is None:
+        if not access_code:
             return Response(
-                {"error": "access_code y table_number son requeridos"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        try:
-            table_number = int(table_number)
-        except (ValueError, TypeError):
-            return Response(
-                {"error": "table_number debe ser un número"},
+                {"error": "access_code es requerido"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -1084,7 +1075,6 @@ class PublicOrderViewSet(viewsets.ViewSet):
             "items", "items__product_variant__product", "items__product_variant__product__category"
         ).filter(
             access_code=access_code,
-            table_number=table_number,
         ).filter(
             Q(status__in=[Order.Status.PENDING, Order.Status.PREPARING, Order.Status.READY])
             | Q(status=Order.Status.DELIVERED, is_paid=False)
