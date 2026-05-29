@@ -10,6 +10,12 @@ from .serializers import (
     UserCreateSerializer,
     ChangePasswordSerializer,
     LoginSerializer,
+    GoogleAuthSerializer,
+)
+from .google_auth import (
+    GoogleAuthError,
+    verify_google_credential,
+    get_or_create_google_user,
 )
 
 User = get_user_model()
@@ -50,6 +56,50 @@ class LoginView(APIView):
         if not user:
             return Response(
                 {"error": "Credenciales inválidas"},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        if not user.is_active:
+            return Response(
+                {"error": "Usuario desactivado"},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        refresh = RefreshToken.for_user(user)
+
+        return Response(
+            {
+                "user": UserSerializer(user).data,
+                "tokens": {
+                    "access": str(refresh.access_token),
+                    "refresh": str(refresh),
+                },
+            }
+        )
+
+
+class GoogleLoginView(APIView):
+    """Login/registro de clientes con Google.
+
+    Recibe el ``credential`` (id_token) de Google Identity Services, lo
+    verifica, resuelve o crea el usuario cliente y devuelve el mismo shape
+    que ``LoginView``: ``{user, tokens}``.
+    """
+
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        serializer = GoogleAuthSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            idinfo = verify_google_credential(
+                serializer.validated_data["credential"]
+            )
+            user, _created = get_or_create_google_user(idinfo)
+        except GoogleAuthError as exc:
+            return Response(
+                {"error": str(exc)},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
 

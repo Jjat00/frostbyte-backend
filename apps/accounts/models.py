@@ -8,6 +8,11 @@ class User(AbstractUser):
     class Role(models.TextChoices):
         ADMIN = "admin", "Administrador"
         EMPLOYEE = "employee", "Empleado"
+        CUSTOMER = "customer", "Cliente"
+
+    class Provider(models.TextChoices):
+        LOCAL = "local", "Local"
+        GOOGLE = "google", "Google"
 
     role = models.CharField(
         max_length=20,
@@ -20,6 +25,26 @@ class User(AbstractUser):
         blank=True,
         null=True,
         verbose_name="Teléfono",
+    )
+    provider = models.CharField(
+        max_length=20,
+        choices=Provider.choices,
+        default=Provider.LOCAL,
+        verbose_name="Proveedor de autenticación",
+    )
+    google_sub = models.CharField(
+        max_length=255,
+        blank=True,
+        null=True,
+        unique=True,
+        verbose_name="Google ID (sub)",
+        help_text="Identificador único de la cuenta de Google",
+    )
+    avatar_url = models.URLField(
+        max_length=500,
+        blank=True,
+        null=True,
+        verbose_name="Foto de perfil",
     )
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="Fecha de creación")
     updated_at = models.DateTimeField(auto_now=True, verbose_name="Última actualización")
@@ -39,4 +64,13 @@ class User(AbstractUser):
     @property
     def is_employee(self):
         return self.role == self.Role.EMPLOYEE
+
+    @property
+    def is_customer(self):
+        return self.role == self.Role.CUSTOMER
+
+    @property
+    def is_staff_member(self):
+        """True para personal interno (admin o empleado), no para clientes."""
+        return self.role in (self.Role.ADMIN, self.Role.EMPLOYEE) or self.is_superuser
 

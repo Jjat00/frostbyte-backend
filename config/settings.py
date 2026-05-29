@@ -248,6 +248,10 @@ OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')
 # Google Gemini Configuration for Image Generation
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '')
 
+# Google Sign-In (login de clientes con Google Identity Services)
+# Mismo Client ID (OAuth 2.0 Web application) que usa el frontend.
+GOOGLE_CLIENT_ID = os.getenv('GOOGLE_CLIENT_ID', '')
+
 # Spotify Configuration
 SPOTIFY_CLIENT_ID = os.getenv('SPOTIFY_CLIENT_ID', '')
 SPOTIFY_CLIENT_SECRET = os.getenv('SPOTIFY_CLIENT_SECRET', '')

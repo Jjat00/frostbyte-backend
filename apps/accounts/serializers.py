@@ -23,10 +23,12 @@ class UserSerializer(serializers.ModelSerializer):
             "role",
             "role_display",
             "phone",
+            "provider",
+            "avatar_url",
             "is_active",
             "created_at",
         ]
-        read_only_fields = ["id", "created_at"]
+        read_only_fields = ["id", "provider", "avatar_url", "created_at"]
 
     def get_full_name(self, obj):
         return obj.get_full_name() or obj.username
@@ -99,4 +101,14 @@ class LoginSerializer(serializers.Serializer):
 
     username = serializers.CharField(required=True)
     password = serializers.CharField(required=True, write_only=True)
+
+
+class GoogleAuthSerializer(serializers.Serializer):
+    """Serializer para login/registro de clientes con Google.
+
+    Recibe el ``credential`` (id_token JWT) que devuelve Google Identity
+    Services en el frontend.
+    """
+
+    credential = serializers.CharField(required=True, write_only=True)
 
