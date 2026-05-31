@@ -47,16 +47,42 @@ class Command(BaseCommand):
             return
 
         by_api_id = {m.api_fixture_id: m for m in Match.objects.exclude(api_fixture_id=None)}
+        # Mapeo de IDs de API-Football -> selección (si el admin los completó).
+        by_api_team = {
+            t.api_team_id: t for t in Team.objects.exclude(api_team_id=None)
+        }
         changed = 0
         for u in updates:
             m = by_api_id.get(u.api_fixture_id)
             if not m:
                 continue
+            fields = ["status", "home_score", "away_score", "minute", "updated_at"]
             m.status = u.status
             m.home_score = u.home_score
             m.away_score = u.away_score
             m.minute = u.minute if u.status == Match.Status.LIVE else None
-            m.save(update_fields=["status", "home_score", "away_score", "minute", "updated_at"])
+
+            # Resolver equipos reales del cruce (clave en eliminatorias).
+            home_t = by_api_team.get(u.home_api_team_id)
+            away_t = by_api_team.get(u.away_api_team_id)
+            if home_t:
+                m.home_team = home_t
+                fields.append("home_team")
+            if away_t:
+                m.away_team = away_t
+                fields.append("away_team")
+
+            # Quién avanzó (incluye penales). Solo si el cruce ya terminó.
+            if u.status == Match.Status.FINISHED and u.winner in ("home", "away"):
+                winner_t = m.home_team if u.winner == "home" else m.away_team
+                if winner_t:
+                    m.winner_team = winner_t
+                    fields.append("winner_team")
+            elif u.status != Match.Status.FINISHED and m.winner_team_id:
+                m.winner_team = None
+                fields.append("winner_team")
+
+            m.save(update_fields=fields)
             changed += 1
         self.stdout.write(f"  Partidos actualizados desde API-Football: {changed}")
 

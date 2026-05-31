@@ -7,15 +7,17 @@ y los servicios de recalculo que aplica ``polla_sync`` sobre la base de datos
 from __future__ import annotations
 
 from django.contrib.auth import get_user_model
-from django.db.models import Q
+from django.db.models import Count, Q, Sum
 from django.utils import timezone
 
+from .bracket import recompute_bracket
 from .models import (
     POINTS_EXACT,
     POINTS_NONE,
     POINTS_OUTCOME,
     Award,
     AwardPick,
+    BracketPick,
     Match,
     Mission,
     Prediction,
@@ -193,34 +195,50 @@ def recompute_missions_for_user(user, missions=None):
 
 def recompute_scores():
     """Agrega puntajes por usuario en ``UserScore`` y asigna posiciones."""
-    user_ids = set(
-        Prediction.objects.values_list("user_id", flat=True)
-    ) | set(
-        AwardPick.objects.values_list("user_id", flat=True)
-    ) | set(
-        UserMission.objects.filter(done=True).values_list("user_id", flat=True)
-    )
+    # Agregaciones agrupadas por usuario (una query por fuente, sin N+1).
+    pred_agg = {
+        r["user_id"]: r
+        for r in Prediction.objects.values("user_id").annotate(
+            match_points=Sum("points_earned"),
+            predicted=Count("id"),
+            exact_hits=Count("id", filter=Q(is_exact=True, scored=True)),
+            correct_hits=Count("id", filter=Q(is_correct_outcome=True, scored=True)),
+        )
+    }
+    award_agg = {
+        r["user_id"]: r["s"] or 0
+        for r in AwardPick.objects.values("user_id").annotate(s=Sum("points_earned"))
+    }
+    bracket_agg = {
+        r["user_id"]: r["s"] or 0
+        for r in BracketPick.objects.values("user_id").annotate(s=Sum("points_earned"))
+    }
+    mission_agg = {
+        r["user_id"]: r["s"] or 0
+        for r in UserMission.objects.filter(done=True)
+        .values("user_id")
+        .annotate(s=Sum("mission__bonus_points"))
+    }
+
+    user_ids = set(pred_agg) | set(award_agg) | set(bracket_agg) | set(mission_agg)
 
     for uid in user_ids:
-        preds = Prediction.objects.filter(user_id=uid)
-        match_points = sum(p.points_earned for p in preds)
-        exact_hits = preds.filter(is_exact=True, scored=True).count()
-        correct_hits = preds.filter(is_correct_outcome=True, scored=True).count()
-        predicted = preds.count()
-        award_points = sum(
-            p.points_earned for p in AwardPick.objects.filter(user_id=uid)
-        )
-        mission_points = sum(
-            um.mission.bonus_points
-            for um in UserMission.objects.filter(user_id=uid, done=True).select_related("mission")
-        )
+        pa = pred_agg.get(uid) or {}
+        match_points = pa.get("match_points") or 0
+        predicted = pa.get("predicted") or 0
+        exact_hits = pa.get("exact_hits") or 0
+        correct_hits = pa.get("correct_hits") or 0
+        award_points = award_agg.get(uid, 0)
+        bracket_points = bracket_agg.get(uid, 0)
+        mission_points = mission_agg.get(uid, 0)
         UserScore.objects.update_or_create(
             user_id=uid,
             defaults={
                 "match_points": match_points,
                 "award_points": award_points,
                 "mission_points": mission_points,
-                "points": match_points + award_points + mission_points,
+                "bracket_points": bracket_points,
+                "points": match_points + award_points + mission_points + bracket_points,
                 "exact_hits": exact_hits,
                 "correct_hits": correct_hits,
                 "predicted": predicted,
@@ -237,9 +255,10 @@ def recompute_scores():
 
 
 def recompute_all():
-    """Recalcula todo: pronosticos, menciones, misiones y ranking."""
+    """Recalcula todo: pronosticos, menciones, bracket, misiones y ranking."""
     recompute_predictions()
     recompute_awards()
+    recompute_bracket()
     missions = list(Mission.objects.all())
     for uid in set(Prediction.objects.values_list("user_id", flat=True)) | set(
         AwardPick.objects.values_list("user_id", flat=True)

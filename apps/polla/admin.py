@@ -3,6 +3,7 @@ from django.contrib import admin
 from .models import (
     Award,
     AwardPick,
+    BracketPick,
     Group,
     Match,
     Mission,
@@ -45,12 +46,13 @@ class PlayerAdmin(admin.ModelAdmin):
 class MatchAdmin(admin.ModelAdmin):
     list_display = [
         "number", "slug", "stage", "round_label", "home_team", "away_team",
-        "kickoff", "status", "home_score", "away_score", "featured",
+        "kickoff", "status", "home_score", "away_score", "winner_team", "featured",
     ]
     list_filter = ["stage", "status", "group", "featured"]
     search_fields = ["slug", "round_label", "venue_city"]
     ordering = ["kickoff", "number"]
     list_editable = ["status", "home_score", "away_score"]
+    raw_id_fields = ["home_team", "away_team", "winner_team"]
 
 
 @admin.register(Prediction)
@@ -78,6 +80,14 @@ class AwardPickAdmin(admin.ModelAdmin):
     raw_id_fields = ["user", "team", "player"]
 
 
+@admin.register(BracketPick)
+class BracketPickAdmin(admin.ModelAdmin):
+    list_display = ["user", "match", "winner_team", "points_earned", "scored"]
+    list_filter = ["scored", "match__stage"]
+    search_fields = ["user__username", "user__email"]
+    raw_id_fields = ["user", "match", "winner_team"]
+
+
 @admin.register(Mission)
 class MissionAdmin(admin.ModelAdmin):
     list_display = ["code", "title", "kind", "target", "bonus_points", "param", "display_order"]
@@ -95,7 +105,7 @@ class UserMissionAdmin(admin.ModelAdmin):
 class UserScoreAdmin(admin.ModelAdmin):
     list_display = [
         "position", "user", "points", "match_points", "award_points",
-        "mission_points", "exact_hits", "correct_hits", "predicted",
+        "bracket_points", "mission_points", "exact_hits", "correct_hits", "predicted",
     ]
     ordering = ["position"]
     search_fields = ["user__username", "user__email"]

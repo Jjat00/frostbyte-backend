@@ -4,6 +4,8 @@ from rest_framework.routers import DefaultRouter
 from .views import (
     AwardPickView,
     AwardsView,
+    BracketPickView,
+    BracketView,
     GroupsView,
     MatchViewSet,
     MissionsView,
@@ -24,6 +26,8 @@ urlpatterns = [
     path("predictions/me/", MyPredictionsView.as_view(), name="polla-my-predictions"),
     path("awards/", AwardsView.as_view(), name="polla-awards"),
     path("awards/<str:code>/pick/", AwardPickView.as_view(), name="polla-award-pick"),
+    path("bracket/", BracketView.as_view(), name="polla-bracket"),
+    path("bracket/<str:slug>/pick/", BracketPickView.as_view(), name="polla-bracket-pick"),
     path("ranking/", RankingView.as_view(), name="polla-ranking"),
     path("missions/", MissionsView.as_view(), name="polla-missions"),
     path("me/stats/", MyStatsView.as_view(), name="polla-my-stats"),

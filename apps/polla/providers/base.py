@@ -20,6 +20,11 @@ class FixtureUpdate:
     home_score: Optional[int] = None
     away_score: Optional[int] = None
     minute: Optional[int] = None
+    # IDs de API-Football de los equipos que disputan el cruce (para resolver
+    # eliminatorias) y quién avanzó ("home" | "away" | None, incluye penales).
+    home_api_team_id: Optional[int] = None
+    away_api_team_id: Optional[int] = None
+    winner: Optional[str] = None
 
 
 @dataclass

@@ -63,6 +63,17 @@ class APIFootballProvider(MatchProvider):
             fixture = r.get("fixture", {})
             goals = r.get("goals", {})
             status = fixture.get("status", {}) or {}
+            teams = r.get("teams", {}) or {}
+            home_t = teams.get("home", {}) or {}
+            away_t = teams.get("away", {}) or {}
+            # API-Football marca el equipo que avanza con winner=true (incluye
+            # definicion por penales, aunque 'goals' quede empatado).
+            if home_t.get("winner"):
+                winner = "home"
+            elif away_t.get("winner"):
+                winner = "away"
+            else:
+                winner = None
             out.append(
                 FixtureUpdate(
                     api_fixture_id=fixture.get("id"),
@@ -70,6 +81,9 @@ class APIFootballProvider(MatchProvider):
                     home_score=goals.get("home"),
                     away_score=goals.get("away"),
                     minute=status.get("elapsed"),
+                    home_api_team_id=home_t.get("id"),
+                    away_api_team_id=away_t.get("id"),
+                    winner=winner,
                 )
             )
         return out

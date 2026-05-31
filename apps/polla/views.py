@@ -9,9 +9,11 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from . import bracket as bracket_logic
 from .models import (
     Award,
     AwardPick,
+    BracketPick,
     Group,
     Match,
     Mission,
@@ -229,6 +231,139 @@ class AwardPickView(APIView):
         )
         data = AwardSerializer(award, context={"picks": {award.id: pick}}).data
         return Response(data, status=status.HTTP_200_OK)
+
+
+# ── Bracket de eliminación (encadenado) ─────────────────────────────────────
+def _team_lite(team):
+    if not team:
+        return None
+    return {"code": team.code, "name": team.name, "iso2": team.iso2}
+
+
+def _bracket_payload(user):
+    """Arma la llave del usuario: rondas, competidores resueltos y picks."""
+    predicted = bracket_logic.group_predicted_count(user)
+    unlocked = predicted >= bracket_logic.GROUP_TOTAL
+
+    matches = list(
+        Match.objects.exclude(stage=Match.Stage.GROUP)
+        .select_related("home_team", "away_team")
+        .order_by("number")
+    )
+    authed = bool(user and user.is_authenticated)
+    resolved = bracket_logic.resolve_bracket(user, unlocked=unlocked) if authed else {}
+    preds = _predictions_map(user, matches)
+    bracket_picks = (
+        {bp.match_id: bp for bp in BracketPick.objects.filter(user=user)} if authed else {}
+    )
+    stage_label = dict(Match.Stage.choices)
+
+    by_stage = {}
+    for m in matches:
+        info = resolved.get(m.number) or {}
+        pick = info.get("pick")
+        pred = preds.get(m.id)
+        bp = bracket_picks.get(m.id)
+        by_stage.setdefault(m.stage, []).append({
+            "slug": m.slug, "number": m.number, "stage": m.stage,
+            "round_label": m.round_label, "kickoff": m.kickoff,
+            "venue_city": m.venue_city, "venue_stadium": m.venue_stadium,
+            "status": m.status, "minute": m.minute,
+            "home_score": m.home_score, "away_score": m.away_score,
+            "home": _team_lite(info.get("home")),
+            "away": _team_lite(info.get("away")),
+            "home_source": m.home_placeholder or None,
+            "away_source": m.away_placeholder or None,
+            "my_pick": pick.code if pick else None,
+            "pick_points": bp.points_earned if bp else 0,
+            "pick_scored": bool(bp.scored) if bp else False,
+            "my_prediction": (
+                {
+                    "home_score": pred.home_score, "away_score": pred.away_score,
+                    "points_earned": pred.points_earned, "is_exact": pred.is_exact,
+                    "is_correct_outcome": pred.is_correct_outcome, "scored": pred.scored,
+                }
+                if pred else None
+            ),
+            "is_locked": m.is_locked,
+        })
+
+    champion = None
+    final_number = next(
+        (m.number for m in matches if m.stage == Match.Stage.FINAL), None
+    )
+    if final_number is not None:
+        fi = resolved.get(final_number) or {}
+        champion = _team_lite(fi.get("pick"))
+
+    rounds = [
+        {
+            "stage": st,
+            "label": stage_label.get(st, st),
+            "points": bracket_logic.BRACKET_POINTS.get(st, 0),
+            "matches": by_stage.get(st, []),
+        }
+        for st in bracket_logic.ROUND_ORDER
+        if by_stage.get(st)
+    ]
+    return {
+        "unlocked": unlocked,
+        "group_predicted": predicted,
+        "group_total": bracket_logic.GROUP_TOTAL,
+        "champion": champion,
+        "rounds": rounds,
+    }
+
+
+class BracketView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        return Response(_bracket_payload(request.user))
+
+
+class BracketPickView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def put(self, request, slug=None):
+        match = (
+            Match.objects.exclude(stage=Match.Stage.GROUP).filter(slug=slug).first()
+        )
+        if not match:
+            return Response({"detail": "Cruce no encontrado."}, status=404)
+        if not bracket_logic.is_unlocked(request.user):
+            return Response(
+                {"detail": "Completa los 72 pronósticos de grupos para abrir la llave."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if match.is_locked:
+            return Response(
+                {"detail": "Este cruce ya está cerrado."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        resolved = bracket_logic.resolve_bracket(request.user, unlocked=True)
+        info = resolved.get(match.number) or {}
+        if not info.get("home") or not info.get("away"):
+            return Response(
+                {"detail": "Primero define quién llega a este cruce."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        competitors = {t.code: t for t in (info["home"], info["away"])}
+        code = request.data.get("winner_code")
+        if not isinstance(code, str) or code not in competitors:
+            return Response(
+                {"detail": "Ese equipo no está en este cruce."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        BracketPick.objects.update_or_create(
+            user=request.user, match=match,
+            defaults={"winner_team": competitors[code]},
+        )
+        bracket_logic.prune_invalid_picks(request.user)
+        recompute_scores()
+        return Response(_bracket_payload(request.user), status=status.HTTP_200_OK)
 
 
 # ── Ranking ────────────────────────────────────────────────────────────────

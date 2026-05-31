@@ -173,6 +173,12 @@ class Match(models.Model):
     minute = models.PositiveIntegerField(null=True, blank=True, verbose_name="Minuto")
     home_score = models.PositiveIntegerField(null=True, blank=True)
     away_score = models.PositiveIntegerField(null=True, blank=True)
+    # Quién avanzó realmente. En eliminatorias define el ganador aunque el
+    # marcador quede empatado (penales); lo puebla el admin o polla_sync.
+    winner_team = models.ForeignKey(
+        Team, null=True, blank=True, on_delete=models.SET_NULL, related_name="won_matches",
+        verbose_name="Ganador (avanza)",
+    )
 
     featured = models.BooleanField(default=False, verbose_name="Destacado")
     api_fixture_id = models.PositiveIntegerField(null=True, blank=True, db_index=True)
@@ -306,6 +312,41 @@ class AwardPick(models.Model):
         return f"{self.user} · {self.award.code}: {choice}"
 
 
+class BracketPick(models.Model):
+    """Pick de avance del usuario en un cruce de eliminación.
+
+    El bracket es ENCADENADO: los dieciseisavos se siembran con los equipos
+    que el usuario clasificó según sus marcadores de grupo, y de ahí en
+    adelante cada cruce toma los ganadores que el propio usuario fue eligiendo.
+    ``winner_team`` es el equipo que el usuario cree que avanza del ``match``.
+    Puntúa comparándose con el ganador real del cruce (ver ``bracket.py``).
+    """
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="polla_bracket_picks"
+    )
+    match = models.ForeignKey(Match, on_delete=models.CASCADE, related_name="bracket_picks")
+    winner_team = models.ForeignKey(
+        Team, null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
+
+    points_earned = models.PositiveIntegerField(default=0)
+    scored = models.BooleanField(default=False)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Pick de bracket"
+        verbose_name_plural = "Picks de bracket"
+        ordering = ["match__number"]
+        unique_together = [("user", "match")]
+
+    def __str__(self):
+        w = self.winner_team.code if self.winner_team else "?"
+        return f"{self.user} · #{self.match.number} → {w}"
+
+
 class Mission(models.Model):
     """Reto que otorga puntos extra o insignias."""
 
@@ -368,6 +409,7 @@ class UserScore(models.Model):
     match_points = models.PositiveIntegerField(default=0)
     award_points = models.PositiveIntegerField(default=0)
     mission_points = models.PositiveIntegerField(default=0)
+    bracket_points = models.PositiveIntegerField(default=0)
     exact_hits = models.PositiveIntegerField(default=0)
     correct_hits = models.PositiveIntegerField(default=0)
     predicted = models.PositiveIntegerField(default=0)

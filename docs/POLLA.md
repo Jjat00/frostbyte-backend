@@ -16,6 +16,11 @@ puntaje se recalcula automáticamente cuando llegan los resultados.
 Menciones (una sola elección por torneo, valen al resolverse): Campeón 25 ·
 Subcampeón 15 · Goleador 35 · MVP 10 · Guante de Oro 10.
 
+**Avance (bracket de eliminación)** — puntos extra por acertar quién avanza,
+escalados por ronda: Dieciseisavos **2** · Octavos **4** · Cuartos **7** ·
+Semifinal **12** · Tercer puesto **5** · Campeón (final) **20**. Suman aparte de
+los marcadores y de las menciones (todo va a `UserScore.points`).
+
 ## Datos reales (API-Football) — opcional
 
 El backend funciona con el **calendario sembrado** (104 partidos reales,
@@ -72,6 +77,8 @@ cliente); escrituras requieren sesión de cliente (`Authorization: Bearer`).
 | GET | `predictions/me/` | Mis pronósticos. **Auth.** |
 | GET | `awards/` | Menciones + opciones (`team`/`player`/`keeper`) + mi elección. |
 | PUT | `awards/<code>/pick/` | Elige mención: `{team_code}` o `{player_id}`. **Auth.** |
+| GET | `bracket/` | Llave de eliminación encadenada del usuario (ver abajo). |
+| PUT | `bracket/<slug>/pick/` | Elige quién avanza del cruce: `{winner_code}`. Devuelve la llave ya propagada. **Auth.** |
 | GET | `ranking/` | Tabla de posiciones (top 100 + mi fila). |
 | GET | `missions/` | Misiones con mi progreso + `my_stats`. |
 | GET | `me/stats/` | Mis estadísticas (puntos, posición, exactos, …). **Auth.** |
@@ -95,3 +102,42 @@ cliente); escrituras requieren sesión de cliente (`Authorization: Bearer`).
 
 En eliminatorias `home.code`/`away.code` son `null` y `home.placeholder` trae el
 slot del bracket (p.ej. `"1A"`, `"Ganador 73"`).
+
+## Bracket encadenado (fase de eliminación)
+
+La llave es **encadenada y personal**: no usa los equipos reales, usa los que el
+usuario clasificó según SUS marcadores de grupo.
+
+1. Los marcadores de los 72 partidos de grupos definen la **tabla pronosticada**
+   del usuario (mismos desempates que `standings/`): 1.º/2.º de cada grupo + los
+   **8 mejores terceros**, que siembran los 16 dieciseisavos (R32).
+2. De octavos en adelante, cada cruce toma los **ganadores que el propio usuario
+   eligió** (`BracketPick`); el pick se propaga al cruce siguiente (`"Ganador N"`)
+   y el tercer puesto toma los perdedores de semifinal (`"Perdedor N"`).
+3. **Desbloqueo:** la llave se abre cuando el usuario tiene los **72** pronósticos
+   de grupos (`unlocked`). Antes, devuelve la estructura con los slots por definir.
+4. **Puntaje por avance:** al finalizar cada cruce real, se compara el ganador
+   elegido por el usuario contra el ganador real, escalado por ronda (ver arriba).
+   Se recalcula en `recompute_bracket` (parte de `recompute_all`).
+
+Lógica en `apps/polla/bracket.py`. Cambiar un pick de arriba **invalida en
+cascada** (poda) los picks de abajo que dejan de ser válidos.
+
+```json
+{
+  "unlocked": true, "group_predicted": 72, "group_total": 72,
+  "champion": {"code": "ARG", "name": "Argentina", "iso2": "ar"},
+  "rounds": [
+    { "stage": "r32", "label": "Dieciseisavos", "points": 2, "matches": [
+      { "slug": "m73", "number": 73, "stage": "r32", "round_label": "Dieciseisavos",
+        "kickoff": "2026-06-28T14:00:00-05:00",
+        "venue_city": "Inglewood (Los Angeles)", "venue_stadium": "SoFi Stadium",
+        "status": "upcoming", "minute": null, "home_score": null, "away_score": null,
+        "home": {"code": "CZE", "name": "Rep. Checa", "iso2": "cz"},
+        "away": {"code": "SUI", "name": "Suiza", "iso2": "ch"},
+        "home_source": "2A", "away_source": "2B",
+        "my_pick": "CZE", "my_prediction": null, "is_locked": false }
+    ]}
+  ]
+}
+```
