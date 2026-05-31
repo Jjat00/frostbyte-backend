@@ -36,6 +36,8 @@ urlpatterns = [
     path('api/v1/recetarios/', include('apps.recetarios.urls')),
     # YouTube
     path('api/v1/', include('apps.youtube.urls')),
+    # Polla Mundialista 2026
+    path('api/v1/polla/', include('apps.polla.urls')),
 ]
 
 # Servir archivos media en desarrollo

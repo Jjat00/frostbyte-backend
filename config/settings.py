@@ -67,6 +67,7 @@ INSTALLED_APPS = [
     'apps.impostor',
     'apps.recetarios',
     'apps.youtube',
+    'apps.polla',
 ]
 
 # Custom User Model
@@ -261,3 +262,11 @@ SPOTIFY_REDIRECT_URI = os.getenv('SPOTIFY_REDIRECT_URI', 'http://localhost:8000/
 YOUTUBE_API_KEY = os.getenv('YOUTUBE_API_KEY', '')
 # Limite diario de unidades de cuota (free tier = 10000)
 YOUTUBE_QUOTA_LIMIT = int(os.getenv('YOUTUBE_QUOTA_LIMIT', '10000'))
+
+# Polla Mundialista — API-Football (api-sports.io)
+# Si se configura API_FOOTBALL_KEY, el comando polla_sync trae resultados y
+# posiciones en vivo. Sin la key, la Polla funciona con datos sembrados.
+API_FOOTBALL_KEY = os.getenv('API_FOOTBALL_KEY', '')
+API_FOOTBALL_LEAGUE_ID = int(os.getenv('API_FOOTBALL_LEAGUE_ID', '1'))  # 1 = FIFA World Cup
+API_FOOTBALL_SEASON = int(os.getenv('API_FOOTBALL_SEASON', '2026'))
+API_FOOTBALL_BASE_URL = os.getenv('API_FOOTBALL_BASE_URL', 'https://v3.football.api-sports.io')

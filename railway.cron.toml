@@ -1,0 +1,15 @@
+# Servicio CRON de la Polla Mundialista (separado del servicio web).
+#
+# En Railway: crear un servicio adicional apuntando a ESTE repo y usar este
+# archivo como config (Settings -> Config-as-code) o copiar estos valores.
+# Corre polla_sync cada 5 minutos para traer resultados y recalcular puntajes.
+#
+# El servicio web principal sigue usando railway.toml (daphne).
+
+[build]
+builder = "nixpacks"
+buildCommand = "pip install -r requirements.txt"
+
+[deploy]
+startCommand = "python manage.py polla_sync"
+cronSchedule = "*/5 * * * *"
