@@ -400,3 +400,17 @@ class RankingInclusionTests(TestCase):
         emp = User.objects.create(username="emp", email="emp@x.com")
         recompute_all()
         self.assertFalse(UserScore.objects.filter(user=emp).exists())
+
+    def test_ranking_self_heals_missing_customer(self):
+        # Cuenta previa sin fila (señal no corrió, recompute tampoco):
+        u = User.objects.create(
+            username="legacy", email="legacy@x.com", role=User.Role.CUSTOMER
+        )
+        UserScore.objects.filter(user=u).delete()
+        self.assertFalse(UserScore.objects.filter(user=u).exists())
+        # Al consultar el ranking se autocura y aparece, sin recompute.
+        r = self.client.get("/api/v1/polla/ranking/")
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(UserScore.objects.filter(user=u).exists())
+        self.assertEqual(r.data["total"], 1)
+        self.assertEqual(r.data["ranking"][0]["pos"], 1)

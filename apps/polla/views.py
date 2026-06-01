@@ -3,6 +3,7 @@
 Lecturas publicas (se enriquecen con datos del usuario si viene autenticado);
 escrituras (pronosticos, menciones) requieren sesion de cliente (JWT).
 """
+from django.contrib.auth import get_user_model
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -368,34 +369,57 @@ class BracketPickView(APIView):
 
 
 # ── Ranking ────────────────────────────────────────────────────────────────
+def _ensure_customer_scores():
+    """Crea las filas de ranking faltantes para los clientes (autocura).
+
+    Garantiza que todo cliente que ya inició sesión aparezca en la tabla,
+    aunque la señal de registro no hubiera corrido para él (cuentas previas)
+    o aún no se haya ejecutado el recompute. Es idempotente y barato.
+    """
+    User = get_user_model()
+    have = set(UserScore.objects.values_list("user_id", flat=True))
+    missing = list(
+        User.objects.filter(role=User.Role.CUSTOMER)
+        .exclude(id__in=have)
+        .values_list("id", flat=True)
+    )
+    if missing:
+        UserScore.objects.bulk_create(
+            [UserScore(user_id=uid) for uid in missing], ignore_conflicts=True
+        )
+
+
+def _ranked_scores():
+    """Puntajes ordenados como en el ranking (no depende del campo cacheado)."""
+    return UserScore.objects.select_related("user").order_by(
+        "-points", "-exact_hits", "-correct_hits", "user_id"
+    )
+
+
 class RankingView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request):
-        scores = (
-            UserScore.objects.select_related("user")
-            .order_by("position", "-points")[:100]
-        )
+        _ensure_customer_scores()
         me_id = request.user.id if request.user.is_authenticated else None
-        rows = [
-            {
-                "pos": s.position,
+        ordered = list(_ranked_scores())
+        rows, my_row = [], None
+        for i, s in enumerate(ordered, start=1):
+            row = {
+                "pos": i,
                 "name": _display_name(s.user),
                 "points": s.points,
                 "exact": s.exact_hits,
                 "is_you": s.user_id == me_id,
             }
-            for s in scores
-        ]
-        my_row = None
-        if me_id and not any(r["is_you"] for r in rows):
-            s = UserScore.objects.filter(user_id=me_id).select_related("user").first()
-            if s:
-                my_row = {
-                    "pos": s.position, "name": _display_name(s.user),
-                    "points": s.points, "exact": s.exact_hits, "is_you": True,
-                }
-        return Response({"ranking": rows, "me": my_row, "total": UserScore.objects.count()})
+            if i <= 100:
+                rows.append(row)
+            if row["is_you"]:
+                my_row = row
+        # Si ya aparece dentro del top 100, no hace falta mandarlo aparte.
+        if my_row and any(r["is_you"] for r in rows):
+            my_row = None
+        return Response({"ranking": rows, "me": my_row, "total": len(ordered)})
 
 
 # ── Misiones + stats ────────────────────────────────────────────────────---
@@ -424,7 +448,9 @@ class MyStatsView(APIView):
 
 
 def _my_stats(user):
-    total = UserScore.objects.count()
+    _ensure_customer_scores()
+    ordered_ids = list(_ranked_scores().values_list("user_id", flat=True))
+    total = len(ordered_ids)
     if not user or not user.is_authenticated:
         return {"points": 0, "position": 0, "total": total,
                 "exact_hits": 0, "correct_hits": 0, "predicted": 0}
@@ -432,8 +458,9 @@ def _my_stats(user):
     if not s:
         return {"points": 0, "position": 0, "total": total,
                 "exact_hits": 0, "correct_hits": 0, "predicted": 0}
+    position = ordered_ids.index(user.id) + 1 if user.id in ordered_ids else 0
     return {
-        "points": s.points, "position": s.position, "total": total,
+        "points": s.points, "position": position, "total": total,
         "exact_hits": s.exact_hits, "correct_hits": s.correct_hits,
         "predicted": s.predicted,
     }
