@@ -10,7 +10,7 @@ from django.contrib.auth import get_user_model
 from django.db.models import Count, Q, Sum
 from django.utils import timezone
 
-from .bracket import recompute_bracket
+from .bracket import advance_real_bracket, recompute_bracket
 from .models import (
     POINTS_EXACT,
     POINTS_NONE,
@@ -258,6 +258,7 @@ def recompute_all():
     """Recalcula todo: pronosticos, menciones, bracket, misiones y ranking."""
     recompute_predictions()
     recompute_awards()
+    advance_real_bracket()  # arma la llave real con los clasificados de grupos
     recompute_bracket()
     missions = list(Mission.objects.all())
     for uid in set(Prediction.objects.values_list("user_id", flat=True)) | set(

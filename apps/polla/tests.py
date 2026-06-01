@@ -6,8 +6,9 @@ from datetime import timedelta
 from rest_framework.test import APIClient
 
 from .bracket import (
-    is_unlocked,
-    predicted_standings,
+    advance_real_bracket,
+    is_open,
+    real_standings,
     resolve_bracket,
 )
 from .models import (
@@ -177,19 +178,19 @@ class MatchListAPITests(TestCase):
         self.assertEqual(row["home"]["code"], "HOM")
 
 
-# ── Bracket encadenado ──────────────────────────────────────────────────────
+# ── Bracket de equipos reales ───────────────────────────────────────────────
 _LETTERS = "ABCDEFGHIJKL"
 _RR = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]  # round-robin de 4 equipos
 
 
 class BracketTests(TestCase):
-    """Fase de grupos completa (72) + un mini-bracket para probar el encadenado."""
+    """Grupos REALES completos + un mini-bracket para probar la llave real."""
 
     def setUp(self):
         self.client = APIClient()
         self.user = User.objects.create(username="cli", email="cli@x.com")
-        self.locked = User.objects.create(username="lock", email="lock@x.com")
         self.teams = {}
+        self.group_matches = []
 
         number = 0
         for gi, L in enumerate(_LETTERS):
@@ -200,20 +201,18 @@ class BracketTests(TestCase):
                 t = Team.objects.create(code=code, name=code, iso2="xx", group=g)
                 self.teams[code] = t
                 ts.append(t)
-            for i, j in _RR:  # el de menor índice juega de local
+            # Resultado REAL: el de menor índice gana 2-0 => grupo ordena 1>2>3>4.
+            for i, j in _RR:
                 number += 1
-                Match.objects.create(
+                m = Match.objects.create(
                     number=number, slug=f"m{number}",
-                    kickoff=timezone.now() + timedelta(days=5),
+                    kickoff=timezone.now() - timedelta(days=1),
                     home_team=ts[i], away_team=ts[j],
                     stage=Match.Stage.GROUP, group=g, round_label="Jornada",
+                    status=Match.Status.FINISHED, home_score=2, away_score=0,
                 )
+                self.group_matches.append(m)
         assert number == 72
-
-        # El usuario pronostica TODO: el local (menor índice) gana 2-0 siempre,
-        # con lo que cada grupo queda ordenado 1>2>3>4.
-        for m in Match.objects.filter(stage=Match.Stage.GROUP):
-            Prediction.objects.create(user=self.user, match=m, home_score=2, away_score=0)
 
         # Mini-bracket: dos dieciseisavos (slots simples) y un octavo encadenado.
         self.m73 = Match.objects.create(
@@ -232,19 +231,34 @@ class BracketTests(TestCase):
             home_placeholder="Ganador 73", away_placeholder="Ganador 74",
         )
 
-    def test_predicted_standings_order(self):
-        by_group, thirds = predicted_standings(self.user)
+    def test_real_standings_order(self):
+        by_group, thirds = real_standings()
         self.assertEqual([t.code for t in by_group["A"]], ["A1", "A2", "A3", "A4"])
         self.assertEqual(len(thirds), 12)  # un tercero por grupo
 
-    def test_resolution_seeds_r32_from_predictions(self):
-        self.assertTrue(is_unlocked(self.user))
+    def test_open_only_when_groups_finished(self):
+        self.assertTrue(is_open())
+        # Si un partido de grupos vuelve a "próximo", la llave se cierra.
+        gm = self.group_matches[0]
+        gm.status = Match.Status.UPCOMING
+        gm.save(update_fields=["status"])
+        self.assertFalse(is_open())
+
+    def test_seeds_r32_from_real_results(self):
         resolved = resolve_bracket(self.user)
-        self.assertEqual(resolved[73]["home"].code, "A1")  # 1A
-        self.assertEqual(resolved[73]["away"].code, "B2")  # 2B
-        self.assertEqual(resolved[74]["home"].code, "B1")  # 1B
-        self.assertEqual(resolved[74]["away"].code, "A2")  # 2A
-        self.assertIsNone(resolved[75]["home"])  # aún sin pick
+        self.assertEqual(resolved[73]["home"].code, "A1")  # 1A real
+        self.assertEqual(resolved[73]["away"].code, "B2")  # 2B real
+        self.assertEqual(resolved[74]["home"].code, "B1")  # 1B real
+        self.assertEqual(resolved[74]["away"].code, "A2")  # 2A real
+        self.assertIsNone(resolved[75]["home"])  # m73 sin jugar y sin pick
+
+    def test_advance_persists_real_competitors(self):
+        advance_real_bracket()
+        self.m73.refresh_from_db()
+        self.m74.refresh_from_db()
+        self.assertEqual(self.m73.home_team.code, "A1")
+        self.assertEqual(self.m73.away_team.code, "B2")
+        self.assertEqual(self.m74.home_team.code, "B1")
 
     def test_pick_propagates_to_next_round(self):
         self.client.force_authenticate(self.user)
@@ -254,8 +268,25 @@ class BracketTests(TestCase):
         self.client.put("/api/v1/polla/bracket/m74/pick/",
                         {"winner_code": "B1"}, format="json")
         resolved = resolve_bracket(self.user)
+        # Cruces sin jugar: m75 muestra la proyección del usuario (sus picks).
         self.assertEqual(resolved[75]["home"].code, "A1")
         self.assertEqual(resolved[75]["away"].code, "B1")
+
+    def test_reconnects_with_real_winner(self):
+        # El usuario proyecta A1, pero realmente avanza B2: la llave se reconecta.
+        self.client.force_authenticate(self.user)
+        self.client.put("/api/v1/polla/bracket/m73/pick/", {"winner_code": "A1"}, format="json")
+        self.client.put("/api/v1/polla/bracket/m74/pick/", {"winner_code": "B1"}, format="json")
+        # m73 se juega y avanza B2 (no A1, el pick del usuario).
+        self.m73.home_team = self.teams["A1"]
+        self.m73.away_team = self.teams["B2"]
+        self.m73.home_score, self.m73.away_score = 0, 1
+        self.m73.status = Match.Status.FINISHED
+        self.m73.save()
+        advance_real_bracket()
+        resolved = resolve_bracket(self.user)
+        # m75 ahora muestra el ganador REAL de m73 (B2), no el pick fallido (A1).
+        self.assertEqual(resolved[75]["home"].code, "B2")
 
     def test_invalid_pick_rejected(self):
         self.client.force_authenticate(self.user)
@@ -269,7 +300,7 @@ class BracketTests(TestCase):
         self.client.put("/api/v1/polla/bracket/m74/pick/", {"winner_code": "B1"}, format="json")
         self.client.put("/api/v1/polla/bracket/m75/pick/", {"winner_code": "A1"}, format="json")
         self.assertTrue(BracketPick.objects.filter(user=self.user, match=self.m75).exists())
-        # Cambiar el ganador de m73: A1 ya no llega a m75 -> su pick se invalida.
+        # Cambiar el ganador proyectado de m73: A1 ya no llega a m75 -> se invalida.
         self.client.put("/api/v1/polla/bracket/m73/pick/", {"winner_code": "B2"}, format="json")
         self.assertFalse(BracketPick.objects.filter(user=self.user, match=self.m75).exists())
 
@@ -288,7 +319,6 @@ class BracketTests(TestCase):
         self.assertTrue(bp.scored)
         score = UserScore.objects.get(user=self.user)
         self.assertEqual(score.bracket_points, 2)
-        self.assertEqual(score.points, 2)  # grupos aún sin jugar -> solo avance
 
     def test_bracket_scoring_penalty_winner(self):
         # Cruce que termina empatado y se define por penales: winner_team manda.
@@ -319,12 +349,16 @@ class BracketTests(TestCase):
         self.assertEqual(bp.points_earned, 0)
         self.assertFalse(bp.scored)
 
-    def test_gate_locked_until_72(self):
-        self.client.force_authenticate(self.locked)
-        self.assertFalse(is_unlocked(self.locked))
+    def test_closed_until_groups_finish(self):
+        # Con la fase de grupos incompleta, la llave está cerrada.
+        gm = self.group_matches[0]
+        gm.status = Match.Status.UPCOMING
+        gm.save(update_fields=["status"])
+        self.assertFalse(is_open())
         r = self.client.get("/api/v1/polla/bracket/")
         self.assertEqual(r.status_code, 200)
-        self.assertFalse(r.data["unlocked"])
+        self.assertFalse(r.data["open"])
+        self.client.force_authenticate(self.user)
         r = self.client.put("/api/v1/polla/bracket/m73/pick/",
                             {"winner_code": "A1"}, format="json")
         self.assertEqual(r.status_code, 400)

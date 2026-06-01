@@ -77,7 +77,7 @@ cliente); escrituras requieren sesión de cliente (`Authorization: Bearer`).
 | GET | `predictions/me/` | Mis pronósticos. **Auth.** |
 | GET | `awards/` | Menciones + opciones (`team`/`player`/`keeper`) + mi elección. |
 | PUT | `awards/<code>/pick/` | Elige mención: `{team_code}` o `{player_id}`. **Auth.** |
-| GET | `bracket/` | Llave de eliminación encadenada del usuario (ver abajo). |
+| GET | `bracket/` | Llave de eliminación (equipos reales) del usuario (ver abajo). |
 | PUT | `bracket/<slug>/pick/` | Elige quién avanza del cruce: `{winner_code}`. Devuelve la llave ya propagada. **Auth.** |
 | GET | `ranking/` | Tabla de posiciones (top 100 + mi fila). |
 | GET | `missions/` | Misiones con mi progreso + `my_stats`. |
@@ -103,29 +103,33 @@ cliente); escrituras requieren sesión de cliente (`Authorization: Bearer`).
 En eliminatorias `home.code`/`away.code` son `null` y `home.placeholder` trae el
 slot del bracket (p.ej. `"1A"`, `"Ganador 73"`).
 
-## Bracket encadenado (fase de eliminación)
+## Bracket de equipos reales (fase de eliminación)
 
-La llave es **encadenada y personal**: no usa los equipos reales, usa los que el
-usuario clasificó según SUS marcadores de grupo.
+La llave usa los **clasificados reales**, no los pronósticos del usuario: todos
+parten de los mismos equipos verdaderos y nadie queda fuera por fallar un grupo.
 
-1. Los marcadores de los 72 partidos de grupos definen la **tabla pronosticada**
-   del usuario (mismos desempates que `standings/`): 1.º/2.º de cada grupo + los
-   **8 mejores terceros**, que siembran los 16 dieciseisavos (R32).
-2. De octavos en adelante, cada cruce toma los **ganadores que el propio usuario
-   eligió** (`BracketPick`); el pick se propaga al cruce siguiente (`"Ganador N"`)
-   y el tercer puesto toma los perdedores de semifinal (`"Perdedor N"`).
-3. **Desbloqueo:** la llave se abre cuando el usuario tiene los **72** pronósticos
-   de grupos (`unlocked`). Antes, devuelve la estructura con los slots por definir.
-4. **Puntaje por avance:** al finalizar cada cruce real, se compara el ganador
-   elegido por el usuario contra el ganador real, escalado por ronda (ver arriba).
-   Se recalcula en `recompute_bracket` (parte de `recompute_all`).
+1. Al **terminar la fase de grupos** real, los clasificados reales (1.º/2.º de
+   cada grupo + los **8 mejores terceros**, con sus desempates) siembran los 16
+   dieciseisavos (R32). `advance_real_bracket` los persiste en los `Match`
+   (parte de `recompute_all`).
+2. De octavos en adelante, cada cruce toma el **ganador REAL** del cruce que lo
+   alimenta (`"Ganador N"`) si ya se jugó; si aún no, muestra la **proyección del
+   usuario** (su `BracketPick`). Así, cuando un cruce se juega, las rondas
+   siguientes se **reconectan** con la realidad y el usuario nunca queda con
+   equipos eliminados. El tercer puesto toma los perdedores de semifinal
+   (`"Perdedor N"`).
+3. **Apertura:** la llave se abre (`open`) cuando todos los partidos de grupos
+   terminaron. Antes, devuelve la estructura con los slots por definir.
+4. **Puntaje por avance:** al finalizar cada cruce, se compara el ganador elegido
+   por el usuario contra el ganador real, escalado por ronda (ver arriba). Se
+   recalcula en `recompute_bracket` (parte de `recompute_all`).
 
-Lógica en `apps/polla/bracket.py`. Cambiar un pick de arriba **invalida en
-cascada** (poda) los picks de abajo que dejan de ser válidos.
+Lógica en `apps/polla/bracket.py`. Cambiar un pick o reconectar con la realidad
+**invalida en cascada** (poda) los picks de abajo que dejan de ser válidos.
 
 ```json
 {
-  "unlocked": true, "group_predicted": 72, "group_total": 72,
+  "open": true,
   "champion": {"code": "ARG", "name": "Argentina", "iso2": "ar"},
   "rounds": [
     { "stage": "r32", "label": "Dieciseisavos", "points": 2, "matches": [

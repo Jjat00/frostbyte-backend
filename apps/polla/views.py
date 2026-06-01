@@ -241,9 +241,12 @@ def _team_lite(team):
 
 
 def _bracket_payload(user):
-    """Arma la llave del usuario: rondas, competidores resueltos y picks."""
-    predicted = bracket_logic.group_predicted_count(user)
-    unlocked = predicted >= bracket_logic.GROUP_TOTAL
+    """Arma la llave del usuario: rondas, competidores resueltos y picks.
+
+    La llave se siembra de los clasificados REALES; se abre al terminar los
+    grupos. Para usuarios anónimos se muestra la llave real sin picks.
+    """
+    open_ = bracket_logic.is_open()
 
     matches = list(
         Match.objects.exclude(stage=Match.Stage.GROUP)
@@ -251,7 +254,7 @@ def _bracket_payload(user):
         .order_by("number")
     )
     authed = bool(user and user.is_authenticated)
-    resolved = bracket_logic.resolve_bracket(user, unlocked=unlocked) if authed else {}
+    resolved = bracket_logic.resolve_bracket(user, open_=open_)
     preds = _predictions_map(user, matches)
     bracket_picks = (
         {bp.match_id: bp for bp in BracketPick.objects.filter(user=user)} if authed else {}
@@ -307,9 +310,7 @@ def _bracket_payload(user):
         if by_stage.get(st)
     ]
     return {
-        "unlocked": unlocked,
-        "group_predicted": predicted,
-        "group_total": bracket_logic.GROUP_TOTAL,
+        "open": open_,
         "champion": champion,
         "rounds": rounds,
     }
@@ -331,9 +332,9 @@ class BracketPickView(APIView):
         )
         if not match:
             return Response({"detail": "Cruce no encontrado."}, status=404)
-        if not bracket_logic.is_unlocked(request.user):
+        if not bracket_logic.is_open():
             return Response(
-                {"detail": "Completa los 72 pronósticos de grupos para abrir la llave."},
+                {"detail": "La eliminación se abre cuando terminen los grupos del Mundial."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         if match.is_locked:
@@ -342,7 +343,7 @@ class BracketPickView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        resolved = bracket_logic.resolve_bracket(request.user, unlocked=True)
+        resolved = bracket_logic.resolve_bracket(request.user, open_=True)
         info = resolved.get(match.number) or {}
         if not info.get("home") or not info.get("away"):
             return Response(
