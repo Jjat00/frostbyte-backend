@@ -362,3 +362,41 @@ class BracketTests(TestCase):
         r = self.client.put("/api/v1/polla/bracket/m73/pick/",
                             {"winner_code": "A1"}, format="json")
         self.assertEqual(r.status_code, 400)
+
+
+class RankingInclusionTests(TestCase):
+    """Todo cliente que ingresa aparece en el ranking, juegue o no."""
+
+    def test_customer_gets_score_on_signup(self):
+        # Al crear un cliente, la señal le crea su UserScore en 0.
+        u = User.objects.create(
+            username="nuevo", email="n@x.com", role=User.Role.CUSTOMER
+        )
+        score = UserScore.objects.filter(user=u).first()
+        self.assertIsNotNone(score)
+        self.assertEqual(score.points, 0)
+
+    def test_recompute_includes_inactive_customer_with_position(self):
+        u = User.objects.create(
+            username="cust", email="cust@x.com", role=User.Role.CUSTOMER
+        )
+        recompute_all()
+        score = UserScore.objects.get(user=u)
+        self.assertEqual(score.points, 0)
+        self.assertGreater(score.position, 0)
+
+    def test_customer_appears_in_ranking_endpoint(self):
+        User.objects.create(
+            username="visible", email="v@x.com", role=User.Role.CUSTOMER
+        )
+        recompute_all()
+        r = self.client.get("/api/v1/polla/ranking/")
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(any(row["name"] for row in r.data["ranking"]))
+        self.assertGreaterEqual(r.data["total"], 1)
+
+    def test_employee_without_activity_stays_out(self):
+        # El personal interno (rol por defecto) no entra al ranking si no juega.
+        emp = User.objects.create(username="emp", email="emp@x.com")
+        recompute_all()
+        self.assertFalse(UserScore.objects.filter(user=emp).exists())

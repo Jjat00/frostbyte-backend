@@ -220,7 +220,13 @@ def recompute_scores():
         .annotate(s=Sum("mission__bonus_points"))
     }
 
-    user_ids = set(pred_agg) | set(award_agg) | set(bracket_agg) | set(mission_agg)
+    # Todo cliente entra al ranking, haya jugado o no (aparece en 0 puntos).
+    customer_ids = set(
+        User.objects.filter(role=User.Role.CUSTOMER).values_list("id", flat=True)
+    )
+    user_ids = (
+        set(pred_agg) | set(award_agg) | set(bracket_agg) | set(mission_agg) | customer_ids
+    )
 
     for uid in user_ids:
         pa = pred_agg.get(uid) or {}
@@ -245,9 +251,12 @@ def recompute_scores():
             },
         )
 
-    # Asignar posiciones (1 = más puntos). Empates comparten orden por exactos.
+    # Asignar posiciones (1 = más puntos). Empates: por exactos/aciertos y, como
+    # último criterio estable, por antigüedad del usuario (user_id ascendente).
     position = 0
-    for score in UserScore.objects.order_by("-points", "-exact_hits", "-correct_hits"):
+    for score in UserScore.objects.order_by(
+        "-points", "-exact_hits", "-correct_hits", "user_id"
+    ):
         position += 1
         if score.position != position:
             score.position = position
