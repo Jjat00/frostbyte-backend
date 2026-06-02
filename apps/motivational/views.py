@@ -3,12 +3,26 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework import status
 from openai import OpenAI
+from django.core.cache import cache
 from django.utils import timezone
+from datetime import timedelta
 from apps.products.models import Product
 from .models import RecommenderLog
 import os
 import json
 import random
+
+# Prefijo de la clave de caché de la frase del día.
+PHRASE_CACHE_PREFIX = "motivational_phrase"
+
+
+def _seconds_until_local_midnight():
+    """Segundos que faltan hasta la medianoche local (TTL de la frase del día)."""
+    now = timezone.localtime(timezone.now())
+    tomorrow = (now + timedelta(days=1)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    return max(60, int((tomorrow - now).total_seconds()))
 
 
 def _generate_phrase():
@@ -89,9 +103,19 @@ def _generate_phrase():
 @permission_classes([AllowAny])
 def get_motivational_phrase(request):
     """
-    Genera una frase motivacional o dato curioso histórico usando OpenAI basada en la fecha actual.
-    Genera una frase nueva en cada petición.
+    Devuelve la frase motivacional del día (dato curioso o frase, basada en la
+    fecha y los productos activos). Se genera con OpenAI UNA sola vez por día y
+    se cachea: el resto de visitas del día reciben la misma frase sin volver a
+    llamar a la IA. La clave incluye la fecha local, así que al cambiar el día
+    se regenera automáticamente.
     """
+    fecha = timezone.localtime(timezone.now()).strftime("%Y-%m-%d")
+    cache_key = f"{PHRASE_CACHE_PREFIX}:{fecha}"
+
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return Response(cached, status=status.HTTP_200_OK)
+
     try:
         result = _generate_phrase()
 
@@ -101,6 +125,8 @@ def get_motivational_phrase(request):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
+        # Solo cacheamos resultados válidos (un fallo de IA no debe quedar fijado).
+        cache.set(cache_key, result, timeout=_seconds_until_local_midnight())
         return Response(result, status=status.HTTP_200_OK)
 
     except Exception as e:
