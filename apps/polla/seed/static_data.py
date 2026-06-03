@@ -83,7 +83,8 @@ GROUPS = {
 }
 
 # ── Jugadores estrella (opciones de Goleador / MVP) ──────────────────────
-# (name, team_code)
+# (name, team_code). Todos confirmados en sus convocatorias finales de 26
+# anunciadas en mayo 2026 (verificado vs FIFA.com / ESPN / federaciones).
 STAR_PLAYERS = [
     ("Lionel Messi", "ARG"),
     ("Kylian Mbappé", "FRA"),
@@ -97,9 +98,22 @@ STAR_PLAYERS = [
     ("Julián Álvarez", "ARG"),
     ("Mohamed Salah", "EGY"),
     ("Florian Wirtz", "GER"),
+    ("Lautaro Martínez", "ARG"),
+    ("Ousmane Dembélé", "FRA"),
+    ("Raphinha", "BRA"),
+    ("Mikel Oyarzabal", "ESP"),
+    ("Pedri", "ESP"),
+    ("Jamal Musiala", "GER"),
+    ("Kai Havertz", "GER"),
+    ("Kevin De Bruyne", "BEL"),
+    ("Romelu Lukaku", "BEL"),
+    ("Martin Ødegaard", "NOR"),
+    ("Bukayo Saka", "ENG"),
+    ("James Rodríguez", "COL"),
 ]
 
 # ── Arqueros (opciones de Guante de Oro) ─────────────────────────────────
+# Todos titulares/convocados confirmados (mayo 2026).
 STAR_KEEPERS = [
     ("Emiliano Martínez", "ARG"),
     ("Alisson Becker", "BRA"),
@@ -109,6 +123,8 @@ STAR_KEEPERS = [
     ("Camilo Vargas", "COL"),
     ("Yassine Bono", "MAR"),
     ("Jordan Pickford", "ENG"),
+    ("Diogo Costa", "POR"),
+    ("Manuel Neuer", "GER"),
 ]
 
 # ── Menciones / pronosticos de torneo completo ───────────────────────────

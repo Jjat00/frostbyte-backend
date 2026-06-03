@@ -11,6 +11,7 @@ from django.utils.dateparse import parse_datetime
 
 from apps.polla.models import (
     Award,
+    AwardPick,
     Group,
     Match,
     Mission,
@@ -20,6 +21,7 @@ from apps.polla.models import (
 )
 from apps.polla.seed import static_data as sd
 from apps.polla.seed.calendar import normalized_fixtures
+from apps.polla.seed.squads import load_squads
 
 GROUP_NAMES = {l: f"Grupo {l}" for l in "ABCDEFGHIJKL"}
 
@@ -78,16 +80,51 @@ class Command(BaseCommand):
         return teams
 
     def _seed_players(self, teams):
-        for name, code in sd.STAR_PLAYERS:
-            if code in teams:
-                Player.objects.update_or_create(
-                    name=name, team=teams[code], defaults={"is_keeper": False}
+        squads = load_squads()
+        if not squads:
+            # Fallback: listas curadas si no esta el JSON de convocatorias.
+            for name, code in sd.STAR_PLAYERS:
+                if code in teams:
+                    Player.objects.update_or_create(
+                        name=name, team=teams[code], defaults={"is_keeper": False}
+                    )
+            for name, code in sd.STAR_KEEPERS:
+                if code in teams:
+                    Player.objects.update_or_create(
+                        name=name, team=teams[code], defaults={"is_keeper": True}
+                    )
+            self.stdout.write("  Jugadores: listas curadas (sin squads_2026.json)")
+            return
+
+        # Convocatorias completas (26 por seleccion). Carga aditiva idempotente.
+        keep_ids = set()
+        for code, roster in squads.items():
+            team = teams.get(code)
+            if not team:
+                continue
+            for entry in roster:
+                player, _ = Player.objects.update_or_create(
+                    name=entry["name"], team=team,
+                    defaults={"is_keeper": bool(entry.get("gk"))},
                 )
-        for name, code in sd.STAR_KEEPERS:
-            if code in teams:
-                Player.objects.update_or_create(
-                    name=name, team=teams[code], defaults={"is_keeper": True}
-                )
+                keep_ids.add(player.id)
+
+        # Limpieza SEGURA de obsoletos: elimina jugadores que ya no estan en las
+        # convocatorias y que nadie eligio ni estan marcados como resultado
+        # oficial (on_delete=SET_NULL borraria la referencia del pick, no el pick,
+        # asi que excluirlos preserva los pronosticos de los usuarios).
+        used = set(
+            AwardPick.objects.exclude(player=None).values_list("player_id", flat=True)
+        ) | set(
+            Award.objects.exclude(resolved_player=None)
+            .values_list("resolved_player_id", flat=True)
+        )
+        stale = Player.objects.exclude(id__in=keep_ids).exclude(id__in=used)
+        removed = stale.count()
+        stale.delete()
+        self.stdout.write(
+            f"  Jugadores: {len(keep_ids)} convocados, {removed} obsoletos eliminados"
+        )
 
     def _seed_awards(self):
         for code, title, hint, points, atype, order in sd.AWARDS:
