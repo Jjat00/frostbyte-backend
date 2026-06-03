@@ -233,6 +233,21 @@ class AwardPickView(APIView):
         data = AwardSerializer(award, context={"picks": {award.id: pick}}).data
         return Response(data, status=status.HTTP_200_OK)
 
+    def delete(self, request, code=None):
+        """Quita la elección del usuario para esta mención (la deja vacía)."""
+        try:
+            award = Award.objects.get(code=code)
+        except Award.DoesNotExist:
+            return Response({"detail": "Mención no encontrada."}, status=404)
+        if award.resolved:
+            return Response(
+                {"detail": "Esta mención ya está resuelta; no se puede cambiar."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        AwardPick.objects.filter(user=request.user, award=award).delete()
+        data = AwardSerializer(award, context={"picks": {}}).data
+        return Response(data, status=status.HTTP_200_OK)
+
 
 # ── Bracket de eliminación (encadenado) ─────────────────────────────────────
 def _team_lite(team):
