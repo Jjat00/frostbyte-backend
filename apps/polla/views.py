@@ -4,6 +4,8 @@ Lecturas publicas (se enriquecen con datos del usuario si viene autenticado);
 escrituras (pronosticos, menciones) requieren sesion de cliente (JWT).
 """
 from django.contrib.auth import get_user_model
+from django.db import IntegrityError
+from django.utils import timezone
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -12,6 +14,8 @@ from rest_framework.views import APIView
 
 from . import bracket as bracket_logic
 from .models import (
+    REFERRAL_CAP,
+    REFERRAL_POINTS_PER,
     Award,
     AwardPick,
     BracketPick,
@@ -20,6 +24,7 @@ from .models import (
     Mission,
     Player,
     Prediction,
+    Referral,
     Team,
     Tournament,
     UserMission,
@@ -146,6 +151,11 @@ class MatchViewSet(viewsets.ReadOnlyModelViewSet):
         pred, _ = Prediction.objects.update_or_create(
             user=request.user, match=match,
             defaults=serializer.validated_data,
+        )
+        # Si este usuario fue invitado, su primer pronostico califica al
+        # invitador (latch idempotente: un UPDATE condicional no duplica).
+        Referral.objects.filter(invitee=request.user, qualified=False).update(
+            qualified=True, qualified_at=timezone.now()
         )
         # Recalcular misiones/puntaje de este usuario (rapido; partido aun sin resultado)
         recompute_missions_for_user(request.user)
@@ -479,3 +489,101 @@ def _my_stats(user):
         "exact_hits": s.exact_hits, "correct_hits": s.correct_hits,
         "predicted": s.predicted,
     }
+
+
+# ── Referidos (invitar amigos) ──────────────────────────────────────────────
+def _get_or_make_referral_code(user):
+    """Devuelve el código de invitación del usuario, generándolo si falta.
+
+    Generación perezosa: cubre las filas creadas por ``bulk_create`` en
+    ``_ensure_customer_scores`` (que no pasan por ``UserScore.save``).
+    """
+    score, _ = UserScore.objects.get_or_create(user=user)
+    if not score.referral_code:
+        score.save(update_fields=["referral_code"])  # save() genera y reintenta
+    return score.referral_code
+
+
+class ReferralView(APIView):
+    """Estado de invitación del cliente: su código, amigos y puntos ganados."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        code = _get_or_make_referral_code(request.user)
+        referrals = request.user.referrals_made.all()
+        invited = referrals.count()
+        qualified = sum(1 for r in referrals if r.qualified)
+        points = min(qualified, REFERRAL_CAP) * REFERRAL_POINTS_PER
+        return Response({
+            "code": code,
+            "invited": invited,
+            "qualified": qualified,
+            "points": points,
+            "cap": REFERRAL_CAP,
+            "points_per": REFERRAL_POINTS_PER,
+        })
+
+
+class ReferralClaimView(APIView):
+    """Registra que el cliente actual fue invitado con un código.
+
+    Solo es válido para cuentas nuevas que aún no han jugado; el punto se
+    acredita después, cuando el invitado hace su primer pronóstico.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        # 1. Ya fue invitado antes: idempotente, sin error.
+        existing = Referral.objects.filter(invitee=request.user).first()
+        if existing:
+            return Response(
+                {"detail": "Ya estabas vinculado a una invitación.", "claimed": False},
+                status=status.HTTP_200_OK,
+            )
+
+        # 2. Anti-abuso: no se puede reclamar si la cuenta ya jugó.
+        if Prediction.objects.filter(user=request.user).exists():
+            return Response(
+                {"detail": "Tu cuenta ya tiene pronósticos; el código de invitación "
+                           "solo aplica a cuentas nuevas."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        code = (request.data.get("code") or "").strip().upper()
+        if not code:
+            return Response(
+                {"detail": "Falta el código de invitación."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # 3. Resolver al invitador por su código.
+        inviter_score = UserScore.objects.filter(referral_code=code).first()
+        if not inviter_score:
+            return Response(
+                {"detail": "Ese código de invitación no existe."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # 4. No autoinvitarse.
+        if inviter_score.user_id == request.user.id:
+            return Response(
+                {"detail": "No puedes usar tu propio código."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # 5. Crear el vínculo (sin calificar todavía).
+        try:
+            Referral.objects.create(inviter=inviter_score.user, invitee=request.user)
+        except IntegrityError:
+            # Race: otra request creó el vínculo en paralelo. Idempotente.
+            return Response(
+                {"detail": "Ya estabas vinculado a una invitación.", "claimed": False},
+                status=status.HTTP_200_OK,
+            )
+        return Response(
+            {"detail": "¡Invitación registrada! Haz tu primer pronóstico para que "
+                       "tu amigo sume su punto.", "claimed": True},
+            status=status.HTTP_201_CREATED,
+        )

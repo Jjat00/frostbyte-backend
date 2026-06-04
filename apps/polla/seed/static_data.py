@@ -165,11 +165,8 @@ MISSIONS = [
         "Pronostica todos los partidos de la fase de grupos.",
         "+100 pts", "group_stage_complete", 72, 100, "", 5,
     ),
-    (
-        "invite", "Trae la banda",
-        "Invita a un amigo a la Polla de Frostbyte.",
-        "Bebida gratis 🥤", "invite", 1, 0, "", 6,
-    ),
+    # "invite" se gestiona como feature propia de referidos (no como misión),
+    # con su tarjeta dedicada en la pestaña Misiones. Ver apps.polla.Referral.
 ]
 
 # Metadatos de torneo

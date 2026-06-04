@@ -15,12 +15,15 @@ from .models import (
     POINTS_EXACT,
     POINTS_NONE,
     POINTS_OUTCOME,
+    REFERRAL_CAP,
+    REFERRAL_POINTS_PER,
     Award,
     AwardPick,
     BracketPick,
     Match,
     Mission,
     Prediction,
+    Referral,
     UserMission,
     UserScore,
     outcome_of,
@@ -193,6 +196,22 @@ def recompute_missions_for_user(user, missions=None):
             um.save()
 
 
+def recompute_referrals():
+    """Marca como calificadas las invitaciones cuyo invitado ya jugó.
+
+    Es un *latch* de un solo sentido: una invitación calificada nunca se
+    degrada (si el invitado jugó, el punto del invitador es permanente, aunque
+    a futuro se permitiera borrar pronósticos). Idempotente.
+    """
+    return (
+        Referral.objects.filter(
+            qualified=False, invitee__polla_predictions__isnull=False
+        )
+        .distinct()
+        .update(qualified=True, qualified_at=timezone.now())
+    )
+
+
 def recompute_scores():
     """Agrega puntajes por usuario en ``UserScore`` y asigna posiciones."""
     # Agregaciones agrupadas por usuario (una query por fuente, sin N+1).
@@ -219,13 +238,21 @@ def recompute_scores():
         .values("user_id")
         .annotate(s=Sum("mission__bonus_points"))
     }
+    # Invitaciones calificadas por invitador (1 pt c/u, con tope).
+    referral_agg = {
+        r["inviter_id"]: r["c"] or 0
+        for r in Referral.objects.filter(qualified=True)
+        .values("inviter_id")
+        .annotate(c=Count("id"))
+    }
 
     # Todo cliente entra al ranking, haya jugado o no (aparece en 0 puntos).
     customer_ids = set(
         User.objects.filter(role=User.Role.CUSTOMER).values_list("id", flat=True)
     )
     user_ids = (
-        set(pred_agg) | set(award_agg) | set(bracket_agg) | set(mission_agg) | customer_ids
+        set(pred_agg) | set(award_agg) | set(bracket_agg) | set(mission_agg)
+        | set(referral_agg) | customer_ids
     )
 
     for uid in user_ids:
@@ -237,6 +264,7 @@ def recompute_scores():
         award_points = award_agg.get(uid, 0)
         bracket_points = bracket_agg.get(uid, 0)
         mission_points = mission_agg.get(uid, 0)
+        referral_points = min(referral_agg.get(uid, 0), REFERRAL_CAP) * REFERRAL_POINTS_PER
         UserScore.objects.update_or_create(
             user_id=uid,
             defaults={
@@ -244,7 +272,11 @@ def recompute_scores():
                 "award_points": award_points,
                 "mission_points": mission_points,
                 "bracket_points": bracket_points,
-                "points": match_points + award_points + mission_points + bracket_points,
+                "referral_points": referral_points,
+                "points": (
+                    match_points + award_points + mission_points
+                    + bracket_points + referral_points
+                ),
                 "exact_hits": exact_hits,
                 "correct_hits": correct_hits,
                 "predicted": predicted,
@@ -275,4 +307,5 @@ def recompute_all():
     ):
         user = User.objects.get(pk=uid)
         recompute_missions_for_user(user, missions)
+    recompute_referrals()
     recompute_scores()

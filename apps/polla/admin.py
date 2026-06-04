@@ -9,6 +9,7 @@ from .models import (
     Mission,
     Player,
     Prediction,
+    Referral,
     Team,
     Tournament,
     UserMission,
@@ -105,8 +106,20 @@ class UserMissionAdmin(admin.ModelAdmin):
 class UserScoreAdmin(admin.ModelAdmin):
     list_display = [
         "position", "user", "points", "match_points", "award_points",
-        "bracket_points", "mission_points", "exact_hits", "correct_hits", "predicted",
+        "bracket_points", "mission_points", "referral_points", "exact_hits",
+        "correct_hits", "predicted", "referral_code",
     ]
     ordering = ["position"]
-    search_fields = ["user__username", "user__email"]
+    search_fields = ["user__username", "user__email", "referral_code"]
     raw_id_fields = ["user"]
+
+
+@admin.register(Referral)
+class ReferralAdmin(admin.ModelAdmin):
+    list_display = ["inviter", "invitee", "qualified", "created_at", "qualified_at"]
+    list_filter = ["qualified"]
+    search_fields = [
+        "inviter__username", "inviter__email",
+        "invitee__username", "invitee__email",
+    ]
+    raw_id_fields = ["inviter", "invitee"]

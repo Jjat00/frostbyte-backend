@@ -12,6 +12,8 @@ from .views import (
     MyPredictionsView,
     MyStatsView,
     RankingView,
+    ReferralClaimView,
+    ReferralView,
     StandingsView,
     TournamentView,
 )
@@ -31,5 +33,7 @@ urlpatterns = [
     path("ranking/", RankingView.as_view(), name="polla-ranking"),
     path("missions/", MissionsView.as_view(), name="polla-missions"),
     path("me/stats/", MyStatsView.as_view(), name="polla-my-stats"),
+    path("referral/", ReferralView.as_view(), name="polla-referral"),
+    path("referral/claim/", ReferralClaimView.as_view(), name="polla-referral-claim"),
     path("", include(router.urls)),
 ]

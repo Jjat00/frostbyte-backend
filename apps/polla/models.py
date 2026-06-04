@@ -11,13 +11,33 @@ Sistema de puntos (definido en el landing):
   - Incorrecto ................. 0 pts
 """
 from django.conf import settings
-from django.db import models
+from django.db import IntegrityError, models
 from django.utils import timezone
+from django.utils.crypto import get_random_string
 
 # ── Constantes de puntaje ────────────────────────────────────────────────
 POINTS_EXACT = 3
 POINTS_OUTCOME = 1
 POINTS_NONE = 0
+
+# ── Referidos (invitar amigos) ───────────────────────────────────────────
+# 1 punto por cada amigo que se une y juega, hasta un tope de 5 amigos.
+REFERRAL_POINTS_PER = 1
+REFERRAL_CAP = 5
+# Alfabeto sin caracteres ambiguos (sin 0/O/1/I/L) para códigos legibles.
+REFERRAL_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+REFERRAL_CODE_LEN = 6
+
+
+def generate_referral_code():
+    """Genera un código de invitación corto y legible (no garantiza unicidad).
+
+    La unicidad la resuelve la constraint ``unique`` de la BD: quien guarda debe
+    reintentar ante ``IntegrityError`` (ver ``UserScore.save``). Función pura y
+    reutilizable: la usan ``UserScore.save``, el endpoint perezoso y la data
+    migration de backfill (que corre con el modelo histórico, sin ``save``).
+    """
+    return get_random_string(REFERRAL_CODE_LEN, allowed_chars=REFERRAL_ALPHABET)
 
 
 def outcome_of(home, away):
@@ -400,7 +420,12 @@ class UserMission(models.Model):
 
 
 class UserScore(models.Model):
-    """Puntaje y posición cacheados por usuario (recalculados en cada sync)."""
+    """Puntaje, posición e identidad de referido cacheados por usuario.
+
+    Se recalcula en cada sync. Además del puntaje, guarda el ``referral_code``
+    personal del cliente (su enlace de invitación) y los puntos ganados por
+    invitar amigos.
+    """
 
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="polla_score"
@@ -410,10 +435,17 @@ class UserScore(models.Model):
     award_points = models.PositiveIntegerField(default=0)
     mission_points = models.PositiveIntegerField(default=0)
     bracket_points = models.PositiveIntegerField(default=0)
+    referral_points = models.PositiveIntegerField(default=0)
     exact_hits = models.PositiveIntegerField(default=0)
     correct_hits = models.PositiveIntegerField(default=0)
     predicted = models.PositiveIntegerField(default=0)
     position = models.PositiveIntegerField(default=0)
+    # Código personal de invitación. null (no "") para que ``unique`` admita
+    # varias filas "sin código aún" (p.ej. creadas por bulk_create).
+    referral_code = models.CharField(
+        max_length=8, unique=True, null=True, blank=True, db_index=True,
+        verbose_name="Código de invitación",
+    )
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -423,3 +455,65 @@ class UserScore(models.Model):
 
     def __str__(self):
         return f"{self.user} · {self.points} pts (#{self.position})"
+
+    @property
+    def referral_qualified_count(self):
+        """Cantidad de amigos que ya calificaron (hicieron su 1er pronóstico)."""
+        return self.user.referrals_made.filter(qualified=True).count()
+
+    def save(self, *args, **kwargs):
+        """Autogenera ``referral_code`` único si falta, reintentando colisiones.
+
+        La constraint ``unique`` de la BD es el árbitro final de la unicidad
+        (un ``exists()`` previo tendría una race). Ojo: ``bulk_create`` NO pasa
+        por aquí, por eso el endpoint de referidos también lo genera de forma
+        perezosa.
+        """
+        if self.referral_code:
+            return super().save(*args, **kwargs)
+
+        for _ in range(5):
+            self.referral_code = generate_referral_code()
+            try:
+                return super().save(*args, **kwargs)
+            except IntegrityError:
+                # Colisión de código (rarísima): reintentar con otro.
+                self.referral_code = None
+                # Si el update_fields limitaba a otros campos, no forzar nada:
+                # en el reintento volvemos a entrar al bucle con un código nuevo.
+                continue
+        # Último intento sin capturar: que propague si de verdad no hay cupo.
+        self.referral_code = generate_referral_code()
+        return super().save(*args, **kwargs)
+
+
+class Referral(models.Model):
+    """Vínculo de invitación: ``inviter`` invitó a ``invitee`` a la Polla.
+
+    Se crea cuando el invitado inicia sesión por primera vez usando un código
+    de invitación. ``qualified`` pasa a ``True`` (de forma permanente) cuando el
+    invitado hace su primer pronóstico; recién ahí el invitador suma su punto.
+    El ``OneToOne`` sobre ``invitee`` garantiza que cada cuenta solo puede ser
+    invitada una vez.
+    """
+
+    inviter = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="referrals_made"
+    )
+    invitee = models.OneToOneField(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="referral_source"
+    )
+    qualified = models.BooleanField(
+        default=False, help_text="True cuando el invitado ya hizo su primer pronóstico"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    qualified_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        verbose_name = "Invitación"
+        verbose_name_plural = "Invitaciones"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        estado = "calificada" if self.qualified else "pendiente"
+        return f"{self.inviter} → {self.invitee} ({estado})"

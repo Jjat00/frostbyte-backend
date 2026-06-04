@@ -20,6 +20,7 @@ from .models import (
     Mission,
     Player,
     Prediction,
+    Referral,
     Team,
     Tournament,
     UserScore,
@@ -27,6 +28,7 @@ from .models import (
 from .scoring import (
     group_standings,
     recompute_all,
+    recompute_referrals,
     score_prediction,
 )
 
@@ -414,3 +416,141 @@ class RankingInclusionTests(TestCase):
         self.assertTrue(UserScore.objects.filter(user=u).exists())
         self.assertEqual(r.data["total"], 1)
         self.assertEqual(r.data["ranking"][0]["pos"], 1)
+
+
+# ── Referidos (invitar amigos) ──────────────────────────────────────────────
+def _customer(username):
+    """Crea un cliente (rol customer => el signal le crea UserScore con código)."""
+    return User.objects.create(
+        username=username, email=f"{username}@x.com", role=User.Role.CUSTOMER
+    )
+
+
+class ReferralTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.g = Group.objects.create(letter="A", name="Grupo A", display_order=1)
+        self.home = _make_team("HOM", self.g)
+        self.away = _make_team("AWY", self.g)
+        # Partido futuro (no bloqueado) para poder pronosticar.
+        self.match = Match.objects.create(
+            number=1, slug="m1", kickoff=timezone.now() + timedelta(days=2),
+            home_team=self.home, away_team=self.away,
+        )
+        self.inviter = _customer("inviter")
+        self.invitee = _customer("invitee")
+
+    def _code(self, user):
+        return UserScore.objects.get(user=user).referral_code
+
+    def _predict(self, user, home=1, away=0):
+        self.client.force_authenticate(user)
+        resp = self.client.put(
+            "/api/v1/polla/matches/m1/predict/",
+            {"home_score": home, "away_score": away}, format="json",
+        )
+        self.assertEqual(resp.status_code, 200)
+
+    def test_signal_assigns_unique_referral_code(self):
+        self.assertTrue(self._code(self.inviter))
+        self.assertNotEqual(self._code(self.inviter), self._code(self.invitee))
+
+    def test_claim_creates_pending_referral(self):
+        self.client.force_authenticate(self.invitee)
+        resp = self.client.post(
+            "/api/v1/polla/referral/claim/",
+            {"code": self._code(self.inviter)}, format="json",
+        )
+        self.assertEqual(resp.status_code, 201)
+        ref = Referral.objects.get(invitee=self.invitee)
+        self.assertEqual(ref.inviter, self.inviter)
+        self.assertFalse(ref.qualified)
+
+    def test_first_prediction_qualifies_and_awards_one_point(self):
+        Referral.objects.create(inviter=self.inviter, invitee=self.invitee)
+        self._predict(self.invitee)
+        ref = Referral.objects.get(invitee=self.invitee)
+        self.assertTrue(ref.qualified)
+        self.assertIsNotNone(ref.qualified_at)
+        # El predict ya disparó recompute_scores: el invitador suma 1 punto.
+        score = UserScore.objects.get(user=self.inviter)
+        self.assertEqual(score.referral_points, 1)
+        self.assertEqual(score.points, 1)
+
+    def test_no_point_until_invitee_plays(self):
+        Referral.objects.create(inviter=self.inviter, invitee=self.invitee)
+        recompute_all()
+        score = UserScore.objects.get(user=self.inviter)
+        self.assertEqual(score.referral_points, 0)
+
+    def test_self_referral_rejected(self):
+        self.client.force_authenticate(self.inviter)
+        resp = self.client.post(
+            "/api/v1/polla/referral/claim/",
+            {"code": self._code(self.inviter)}, format="json",
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertFalse(Referral.objects.filter(invitee=self.inviter).exists())
+
+    def test_unknown_code_returns_404(self):
+        self.client.force_authenticate(self.invitee)
+        resp = self.client.post(
+            "/api/v1/polla/referral/claim/", {"code": "ZZZZZZ"}, format="json",
+        )
+        self.assertEqual(resp.status_code, 404)
+
+    def test_claim_rejected_if_already_played(self):
+        self._predict(self.invitee)  # juega ANTES de reclamar
+        self.client.force_authenticate(self.invitee)
+        resp = self.client.post(
+            "/api/v1/polla/referral/claim/",
+            {"code": self._code(self.inviter)}, format="json",
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertFalse(Referral.objects.filter(invitee=self.invitee).exists())
+
+    def test_double_claim_is_idempotent(self):
+        self.client.force_authenticate(self.invitee)
+        code = self._code(self.inviter)
+        first = self.client.post(
+            "/api/v1/polla/referral/claim/", {"code": code}, format="json")
+        second = self.client.post(
+            "/api/v1/polla/referral/claim/", {"code": code}, format="json")
+        self.assertEqual(first.status_code, 201)
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(Referral.objects.filter(invitee=self.invitee).count(), 1)
+
+    def test_points_capped_at_five(self):
+        # 6 amigos se unen y juegan: el invitador topa en 5 puntos.
+        for i in range(6):
+            friend = _customer(f"friend{i}")
+            Referral.objects.create(inviter=self.inviter, invitee=friend)
+            self._predict(friend)
+        score = UserScore.objects.get(user=self.inviter)
+        self.assertEqual(Referral.objects.filter(
+            inviter=self.inviter, qualified=True).count(), 6)
+        self.assertEqual(score.referral_points, 5)
+
+    def test_qualified_is_one_way_latch(self):
+        # Aunque el invitado perdiera sus pronósticos, no se degrada el punto.
+        Referral.objects.create(inviter=self.inviter, invitee=self.invitee)
+        self._predict(self.invitee)
+        Prediction.objects.filter(user=self.invitee).delete()
+        recompute_referrals()
+        recompute_all()
+        ref = Referral.objects.get(invitee=self.invitee)
+        self.assertTrue(ref.qualified)
+        score = UserScore.objects.get(user=self.inviter)
+        self.assertEqual(score.referral_points, 1)
+
+    def test_referral_endpoint_reports_state(self):
+        Referral.objects.create(
+            inviter=self.inviter, invitee=self.invitee, qualified=True)
+        self.client.force_authenticate(self.inviter)
+        resp = self.client.get("/api/v1/polla/referral/")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["code"], self._code(self.inviter))
+        self.assertEqual(resp.data["invited"], 1)
+        self.assertEqual(resp.data["qualified"], 1)
+        self.assertEqual(resp.data["points"], 1)
+        self.assertEqual(resp.data["cap"], 5)
