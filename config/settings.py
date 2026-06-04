@@ -175,7 +175,10 @@ REST_FRAMEWORK = {
 # Simple JWT settings
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(hours=12),
-    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
+    # Ventana deslizante: con ROTATE_REFRESH_TOKENS, cada renovacion emite un
+    # refresh token nuevo con 90 dias de vida desde ese momento. Mientras el
+    # cliente entre al menos una vez cada 90 dias, la sesion no expira nunca.
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=90),
     'ROTATE_REFRESH_TOKENS': True,
     'BLACKLIST_AFTER_ROTATION': True,
     'AUTH_HEADER_TYPES': ('Bearer',),
