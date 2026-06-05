@@ -5,12 +5,15 @@ escrituras (pronosticos, menciones) requieren sesion de cliente (JWT).
 """
 from django.contrib.auth import get_user_model
 from django.db import IntegrityError
+from django.db.models import Avg, Max, Q
 from django.utils import timezone
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+
+from apps.accounts.permissions import IsAdminUser
 
 from . import bracket as bracket_logic
 from .models import (
@@ -126,7 +129,6 @@ class MatchViewSet(viewsets.ReadOnlyModelViewSet):
             qs = qs.filter(featured=True)
         team = p.get("team")
         if team:
-            from django.db.models import Q
             qs = qs.filter(
                 Q(home_team__code=team.upper()) | Q(away_team__code=team.upper())
             )
@@ -587,3 +589,169 @@ class ReferralClaimView(APIView):
                        "tu amigo sume su punto.", "claimed": True},
             status=status.HTTP_201_CREATED,
         )
+
+
+# ── Dashboard de administración (solo staff) ────────────────────────────────
+def _score_breakdown(score, pos=None):
+    """Desglose de puntos de un ``UserScore`` para vistas de admin."""
+    return {
+        "user_id": score.user_id,
+        "name": _display_name(score.user),
+        "email": score.user.email,
+        "pos": pos if pos is not None else score.position,
+        "points": score.points,
+        "match_points": score.match_points,
+        "mission_points": score.mission_points,
+        "award_points": score.award_points,
+        "bracket_points": score.bracket_points,
+        "referral_points": score.referral_points,
+        "exact_hits": score.exact_hits,
+        "correct_hits": score.correct_hits,
+        "predicted": score.predicted,
+        "updated_at": score.updated_at,
+    }
+
+
+class PollaAdminViewSet(viewsets.ViewSet):
+    """Tablero de solo lectura para que el staff monitoree la polla.
+
+    Expone KPIs del torneo, la lista de jugadores con su desglose de puntos y
+    el detalle de un jugador (pronósticos, misiones y referidos). Todo bajo
+    ``IsAdminUser``: rol admin o superusuario, igual que el resto del panel.
+    """
+
+    permission_classes = [IsAdminUser]
+
+    def list(self, request):
+        """Jugadores con su desglose, ordenados como el ranking. ``?q=`` filtra."""
+        _ensure_customer_scores()
+        q = (request.query_params.get("q") or "").strip().lower()
+        rows = []
+        for i, score in enumerate(_ranked_scores(), start=1):
+            row = _score_breakdown(score, pos=i)
+            if q and q not in f"{row['name']} {row['email']}".lower():
+                continue
+            rows.append(row)
+        return Response({"players": rows, "total": len(rows)})
+
+    @action(detail=False, methods=["get"])
+    def overview(self, request):
+        """KPIs agregados del torneo y avance global de misiones."""
+        _ensure_customer_scores()
+        total_players = UserScore.objects.count()
+        active_players = Prediction.objects.values("user_id").distinct().count()
+        agg = UserScore.objects.aggregate(avg=Avg("points"), top=Max("points"))
+
+        missions = [
+            {
+                "code": m.code,
+                "title": m.title,
+                "target": m.target,
+                "bonus_points": m.bonus_points,
+                "done": UserMission.objects.filter(mission=m, done=True).count(),
+            }
+            for m in Mission.objects.all().order_by("display_order")
+        ]
+
+        return Response({
+            "players": {
+                "total": total_players,
+                "active": active_players,
+                "inactive": max(total_players - active_players, 0),
+            },
+            "predictions": {
+                "total": Prediction.objects.count(),
+                "group": Prediction.objects.filter(match__stage=Match.Stage.GROUP).count(),
+                "scored": Prediction.objects.filter(scored=True).count(),
+                "exact": Prediction.objects.filter(is_exact=True, scored=True).count(),
+                "correct": Prediction.objects.filter(is_correct_outcome=True, scored=True).count(),
+            },
+            "points": {
+                "avg": round(agg["avg"] or 0, 1),
+                "max": agg["top"] or 0,
+            },
+            "matches": {
+                "total": Match.objects.count(),
+                "finished": Match.objects.filter(status=Match.Status.FINISHED).count(),
+            },
+            "missions": missions,
+        })
+
+    def retrieve(self, request, pk=None):
+        """Detalle de un jugador: score, pronósticos, misiones y referidos."""
+        if not str(pk).isdigit():
+            return Response({"detail": "Jugador no encontrado."}, status=404)
+        User = get_user_model()
+        user = User.objects.filter(pk=pk).first()
+        if not user:
+            return Response({"detail": "Jugador no encontrado."}, status=404)
+
+        _ensure_customer_scores()
+        ordered_ids = list(_ranked_scores().values_list("user_id", flat=True))
+        pos = ordered_ids.index(user.id) + 1 if user.id in ordered_ids else 0
+        score_obj = UserScore.objects.select_related("user").filter(user=user).first()
+
+        preds = (
+            Prediction.objects.filter(user=user)
+            .select_related("match", "match__home_team", "match__away_team")
+            .order_by("match__number")
+        )
+        predictions = [
+            {
+                "match_number": p.match.number,
+                "slug": p.match.slug,
+                "stage": p.match.stage,
+                "stage_display": p.match.get_stage_display(),
+                "home": _team_lite(p.match.home_team)
+                or {"code": None, "name": p.match.home_placeholder or "—", "iso2": None},
+                "away": _team_lite(p.match.away_team)
+                or {"code": None, "name": p.match.away_placeholder or "—", "iso2": None},
+                "kickoff": p.match.kickoff,
+                "status": p.match.status,
+                "real_home": p.match.home_score,
+                "real_away": p.match.away_score,
+                "pred_home": p.home_score,
+                "pred_away": p.away_score,
+                "points_earned": p.points_earned,
+                "is_exact": p.is_exact,
+                "is_correct_outcome": p.is_correct_outcome,
+                "scored": p.scored,
+            }
+            for p in preds
+        ]
+
+        missions = [
+            {
+                "code": um.mission.code,
+                "title": um.mission.title,
+                "progress": um.progress,
+                "target": um.mission.target,
+                "done": um.done,
+                "bonus_points": um.mission.bonus_points,
+                "completed_at": um.completed_at,
+            }
+            for um in (
+                UserMission.objects.filter(user=user)
+                .select_related("mission")
+                .order_by("mission__display_order")
+            )
+        ]
+
+        referrals = user.referrals_made.all()
+        return Response({
+            "user": {
+                "id": user.id,
+                "name": _display_name(user),
+                "email": user.email,
+                "role": user.role,
+                "date_joined": user.date_joined,
+                "last_login": user.last_login,
+            },
+            "score": _score_breakdown(score_obj, pos=pos) if score_obj else None,
+            "predictions": predictions,
+            "missions": missions,
+            "referral": {
+                "invited": referrals.count(),
+                "qualified": sum(1 for r in referrals if r.qualified),
+            },
+        })

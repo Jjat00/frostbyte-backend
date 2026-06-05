@@ -11,6 +11,7 @@ from .views import (
     MissionsView,
     MyPredictionsView,
     MyStatsView,
+    PollaAdminViewSet,
     RankingView,
     ReferralClaimView,
     ReferralView,
@@ -20,6 +21,7 @@ from .views import (
 
 router = DefaultRouter()
 router.register(r"matches", MatchViewSet, basename="polla-match")
+router.register(r"admin", PollaAdminViewSet, basename="polla-admin")
 
 urlpatterns = [
     path("tournament/", TournamentView.as_view(), name="polla-tournament"),
