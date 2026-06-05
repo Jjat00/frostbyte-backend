@@ -162,8 +162,8 @@ MISSIONS = [
     ),
     (
         "groupstage", "Maestro de grupos",
-        "Pronostica todos los partidos de la fase de grupos.",
-        "+20 pts", "group_stage_complete", 72, 20, "", 5,
+        "Pronostica al menos 60 partidos de la fase de grupos.",
+        "+20 pts", "group_stage_complete", 60, 20, "", 5,
     ),
     # "invite" se gestiona como feature propia de referidos (no como misión),
     # con su tarjeta dedicada en la pestaña Misiones. Ver apps.polla.Referral.
