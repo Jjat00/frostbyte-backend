@@ -8,7 +8,7 @@ from django.http import FileResponse, Http404
 from django.conf import settings
 from openai import OpenAI
 from .models import AIImageGeneration
-from .serializers import AIImageGenerationSerializer, AIImageGenerationCreateSerializer, SaveToProductSerializer, SuggestDescriptionSerializer
+from .serializers import AIImageGenerationSerializer, AIImageGenerationCreateSerializer, SaveToProductSerializer, SuggestDescriptionSerializer, SuggestHistorySerializer
 from .tasks import generate_image_sync
 from .services.temp_storage import TempImageStorage
 from .services.r2_persistence import AIGenerationR2Service
@@ -246,5 +246,56 @@ class SuggestDescriptionView(APIView):
             logger.error(f'Error al sugerir descripción: {e}')
             return Response(
                 {'error': 'No se pudo generar la descripción'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+class SuggestHistoryView(APIView):
+    """Sugiere una breve historia/origen de un cóctel usando OpenAI"""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = SuggestHistorySerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        product_name = serializer.validated_data['product_name']
+
+        try:
+            client = OpenAI(api_key=settings.OPENAI_API_KEY)
+            response = client.chat.completions.create(
+                model='gpt-4o-mini',
+                messages=[
+                    {
+                        'role': 'system',
+                        'content': (
+                            'Eres un experto en coctelería e historia de las bebidas. '
+                            'Cuenta la historia u origen de un cóctel de forma breve, amena y fiel. '
+                            'Máximo 2 o 3 oraciones (35-55 palabras). '
+                            'Tono cálido y de divulgación, en español. '
+                            'REGLA 1: incluye SIEMPRE el año exacto de creación mejor documentado '
+                            '(un número de año concreto). Si el año es disputado, usa el más aceptado '
+                            'históricamente; nunca inventes un año falso. '
+                            'REGLA 2: si el nombre es una variación de un cóctel clásico '
+                            '(por ejemplo "Margarita de fresa", "Caipiroshka", "Blue Long"), '
+                            'cuenta la historia del cóctel ORIGINAL del que deriva, no de la variación. '
+                            'Si el nombre no corresponde a ningún cóctel conocido, escribe una breve '
+                            'nota evocadora sobre el estilo de bebida, sin inventar fechas. '
+                            'Responde SOLO con la historia, sin comillas, títulos ni explicaciones.'
+                        ),
+                    },
+                    {
+                        'role': 'user',
+                        'content': f'Cuenta la breve historia, con su año exacto de creación, del cóctel: {product_name}',
+                    },
+                ],
+                max_tokens=160,
+                temperature=0.7,
+            )
+            history = response.choices[0].message.content.strip()
+            return Response({'history': history})
+        except Exception as e:
+            logger.error(f'Error al sugerir historia: {e}')
+            return Response(
+                {'error': 'No se pudo generar la historia'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )

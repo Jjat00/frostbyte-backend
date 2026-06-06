@@ -67,6 +67,11 @@ class SuggestDescriptionSerializer(serializers.Serializer):
     product_name = serializers.CharField(max_length=255)
 
 
+class SuggestHistorySerializer(serializers.Serializer):
+    """Serializer para sugerencia de historia de cóctel con IA"""
+    product_name = serializers.CharField(max_length=255)
+
+
 class SaveToProductSerializer(serializers.Serializer):
     product_id = serializers.IntegerField()
 

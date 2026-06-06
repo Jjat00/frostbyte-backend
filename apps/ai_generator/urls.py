@@ -1,12 +1,13 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from .views import AIImageGenerationViewSet, SuggestDescriptionView
+from .views import AIImageGenerationViewSet, SuggestDescriptionView, SuggestHistoryView
 
 router = DefaultRouter()
 router.register(r'generations', AIImageGenerationViewSet, basename='ai-generation')
 
 urlpatterns = [
     path('suggest-description/', SuggestDescriptionView.as_view(), name='ai-suggest-description'),
+    path('suggest-history/', SuggestHistoryView.as_view(), name='ai-suggest-history'),
     path('', include(router.urls)),
 ]
 

@@ -40,6 +40,12 @@ class Product(models.Model):
     name = models.CharField(max_length=200, verbose_name="Nombre")
     slug = models.SlugField(unique=True, blank=True)
     description = models.TextField(verbose_name="Descripción")
+    history = models.TextField(
+        blank=True,
+        default="",
+        verbose_name="Historia",
+        help_text="Breve historia u origen del cóctel (se muestra en el menú digital).",
+    )
     image_url = models.URLField(blank=True, verbose_name="URL de imagen")
     is_active = models.BooleanField(default=True, verbose_name="Activo")
     is_coming_soon = models.BooleanField(default=False, verbose_name="Próximamente")
