@@ -53,6 +53,11 @@ COCKTAIL_HISTORIES = {
     ),
 }
 
+# Variaciones de sabor/formato: muestran la historia de su cóctel original.
+COCKTAIL_HISTORIES["mojito-de-fresa"] = COCKTAIL_HISTORIES["mojito"]
+COCKTAIL_HISTORIES["jarra-de-mojito-13-l"] = COCKTAIL_HISTORIES["mojito"]
+COCKTAIL_HISTORIES["margarita-de-fresa"] = COCKTAIL_HISTORIES["margarita"]
+
 
 class Command(BaseCommand):
     help = "Siembra historias breves para los cócteles clásicos (categoría mocktails)."
