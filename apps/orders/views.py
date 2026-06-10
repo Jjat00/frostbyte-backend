@@ -605,7 +605,8 @@ class OrderViewSet(viewsets.ModelViewSet):
                 'product_variant__product__id',
                 'product_variant__product__name',
                 'product_variant__id',
-                'product_variant__name'
+                'product_variant__name',
+                'product_variant__price'
             )
             .annotate(
                 quantity_sold=Sum('quantity'),
@@ -624,14 +625,19 @@ class OrderViewSet(viewsets.ModelViewSet):
             if variant_name and variant_name != product_name:
                 display_name = f"{product_name} - {variant_name}"
 
+            quantity_sold = item['quantity_sold'] or 0
+            revenue = float(item['revenue'] or 0)
+
             data.append({
                 "product_id": item['product_variant__product__id'],
                 "variant_id": item['product_variant__id'],
                 "product_name": product_name,
                 "variant_name": variant_name,
                 "display_name": display_name,
-                "quantity_sold": item['quantity_sold'] or 0,
-                "revenue": float(item['revenue'] or 0),
+                "variant_price": float(item['product_variant__price'] or 0),
+                "avg_unit_price": round(revenue / quantity_sold, 2) if quantity_sold else 0,
+                "quantity_sold": quantity_sold,
+                "revenue": revenue,
                 "count": item['count'] or 0,
             })
 
