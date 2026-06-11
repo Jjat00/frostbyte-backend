@@ -43,6 +43,7 @@ from .serializers import (
     MissionSerializer,
     PredictionSerializer,
     PredictionWriteSerializer,
+    TeamSerializer,
     TournamentSerializer,
 )
 
@@ -105,6 +106,70 @@ class StandingsView(APIView):
             ]
             out.append({"letter": g.letter, "name": g.name, "rows": rows})
         return Response(out)
+
+
+# ── Ficha de una selección ─────────────────────────────────────────────────
+class TeamDetailView(APIView):
+    """Ficha de una selección: plantilla, forma, posición en grupo y partidos."""
+
+    permission_classes = [AllowAny]
+
+    def get(self, request, code=None):
+        team = (
+            Team.objects.select_related("group")
+            .filter(code=(code or "").upper())
+            .first()
+        )
+        if not team:
+            return Response({"detail": "Selección no encontrada."}, status=404)
+
+        standing = None
+        if team.group:
+            for row in group_standings(team.group):
+                if row["team"].id == team.id:
+                    standing = {
+                        "rank": row["rank"], "pj": row["pj"], "g": row["g"],
+                        "e": row["e"], "p": row["p"], "gf": row["gf"],
+                        "gc": row["gc"], "dg": row["dg"], "pts": row["pts"],
+                    }
+                    break
+
+        players = [
+            {"id": p.id, "name": p.name, "is_keeper": p.is_keeper}
+            for p in team.players.order_by("-is_keeper", "name")
+        ]
+
+        def side(t, placeholder):
+            return _team_lite(t) or {
+                "code": None, "name": placeholder or "Por definir", "iso2": None,
+            }
+
+        matches = [
+            {
+                "slug": m.slug,
+                "stage": m.stage,
+                "stage_display": m.get_stage_display(),
+                "group": m.group.letter if m.group else None,
+                "round_label": m.round_label,
+                "kickoff": m.kickoff,
+                "status": m.status,
+                "minute": m.minute,
+                "home": side(m.home_team, m.home_placeholder),
+                "away": side(m.away_team, m.away_placeholder),
+                "home_score": m.home_score,
+                "away_score": m.away_score,
+            }
+            for m in Match.objects.filter(Q(home_team=team) | Q(away_team=team))
+            .select_related("home_team", "away_team", "group")
+            .order_by("kickoff")
+        ]
+
+        return Response({
+            "team": TeamSerializer(team).data,
+            "standing": standing,
+            "players": players,
+            "matches": matches,
+        })
 
 
 # ── Goleadores del torneo ──────────────────────────────────────────────────

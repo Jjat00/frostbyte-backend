@@ -16,6 +16,7 @@ from .views import (
     ReferralClaimView,
     ReferralView,
     StandingsView,
+    TeamDetailView,
     TopScorersView,
     TournamentView,
 )
@@ -29,6 +30,7 @@ urlpatterns = [
     path("groups/", GroupsView.as_view(), name="polla-groups"),
     path("standings/", StandingsView.as_view(), name="polla-standings"),
     path("topscorers/", TopScorersView.as_view(), name="polla-topscorers"),
+    path("teams/<str:code>/", TeamDetailView.as_view(), name="polla-team-detail"),
     path("predictions/me/", MyPredictionsView.as_view(), name="polla-my-predictions"),
     path("awards/", AwardsView.as_view(), name="polla-awards"),
     path("awards/<str:code>/pick/", AwardPickView.as_view(), name="polla-award-pick"),
