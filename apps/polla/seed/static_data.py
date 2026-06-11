@@ -174,6 +174,9 @@ TOURNAMENT = {
     "name": "Mundial 2026",
     "slug": "mundial-2026",
     "kickoff": "2026-06-11T19:00:00Z",
+    # Las menciones (campeón, goleador, MVP...) cierran al arrancar las
+    # eliminatorias: fin de la fase de grupos / primer partido de 32avos.
+    "awards_lock_at": "2026-06-28T19:00:00Z",
     "prize": "$500.000",
     "prize_note": "En efectivo · un solo ganador",
     "api_league_id": 1,

@@ -66,6 +66,11 @@ class Tournament(models.Model):
     name = models.CharField(max_length=120, default="Mundial 2026", verbose_name="Nombre")
     slug = models.SlugField(max_length=120, unique=True, default="mundial-2026")
     kickoff = models.DateTimeField(verbose_name="Pitazo inicial")
+    awards_lock_at = models.DateTimeField(
+        null=True, blank=True, verbose_name="Cierre de menciones",
+        help_text="Fecha/hora (UTC) en que se cierran TODAS las menciones. "
+        "Vacío = solo se bloquean al marcarse 'resuelta'.",
+    )
     prize = models.CharField(max_length=120, default="$500.000", verbose_name="Premio")
     prize_note = models.CharField(
         max_length=200, blank=True, default="En efectivo · un solo ganador"
@@ -87,6 +92,11 @@ class Tournament(models.Model):
     @classmethod
     def get_active(cls):
         return cls.objects.filter(is_active=True).order_by("-kickoff").first()
+
+    @property
+    def awards_locked(self):
+        """True si ya pasó el cierre de menciones (o no se puede pronosticar)."""
+        return bool(self.awards_lock_at and timezone.now() >= self.awards_lock_at)
 
 
 class Group(models.Model):

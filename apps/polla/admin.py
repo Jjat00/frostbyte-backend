@@ -19,7 +19,7 @@ from .models import (
 
 @admin.register(Tournament)
 class TournamentAdmin(admin.ModelAdmin):
-    list_display = ["name", "kickoff", "prize", "api_season", "is_active"]
+    list_display = ["name", "kickoff", "awards_lock_at", "prize", "api_season", "is_active"]
     list_filter = ["is_active"]
 
 

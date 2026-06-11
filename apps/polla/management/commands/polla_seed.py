@@ -47,6 +47,7 @@ class Command(BaseCommand):
             defaults={
                 "name": t["name"],
                 "kickoff": parse_datetime(t["kickoff"]),
+                "awards_lock_at": parse_datetime(t["awards_lock_at"]),
                 "prize": t["prize"],
                 "prize_note": t["prize_note"],
                 "api_league_id": t["api_league_id"],

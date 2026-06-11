@@ -193,6 +193,10 @@ class AwardsView(APIView):
             }
         data = AwardSerializer(awards, many=True, context={"picks": picks}).data
 
+        tournament = Tournament.get_active()
+        locks_at = tournament.awards_lock_at if tournament else None
+        picks_locked = bool(tournament and tournament.awards_locked)
+
         teams = Team.objects.all().order_by("name")
         players = Player.objects.filter(is_keeper=False).select_related("team").order_by("name")
         keepers = Player.objects.filter(is_keeper=True).select_related("team").order_by("name")
@@ -207,22 +211,35 @@ class AwardsView(APIView):
                 for p in keepers
             ],
         }
-        return Response({"awards": data, "options": options})
+        return Response({
+            "awards": data,
+            "options": options,
+            "locks_at": locks_at,
+            "picks_locked": picks_locked,
+        })
 
 
 class AwardPickView(APIView):
     permission_classes = [IsAuthenticated]
+
+    @staticmethod
+    def _lock_error(award):
+        """Mensaje de bloqueo si la mención ya no se puede tocar, o None."""
+        if award.resolved:
+            return "Esta mención ya está resuelta; no se puede cambiar."
+        tournament = Tournament.get_active()
+        if tournament and tournament.awards_locked:
+            return "Las menciones ya están cerradas."
+        return None
 
     def put(self, request, code=None):
         try:
             award = Award.objects.get(code=code)
         except Award.DoesNotExist:
             return Response({"detail": "Mención no encontrada."}, status=404)
-        if award.resolved:
-            return Response(
-                {"detail": "Esta mención ya está resuelta; no se puede cambiar."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        locked = self._lock_error(award)
+        if locked:
+            return Response({"detail": locked}, status=status.HTTP_400_BAD_REQUEST)
 
         team = player = None
         if award.award_type == Award.AwardType.TEAM:
@@ -251,11 +268,9 @@ class AwardPickView(APIView):
             award = Award.objects.get(code=code)
         except Award.DoesNotExist:
             return Response({"detail": "Mención no encontrada."}, status=404)
-        if award.resolved:
-            return Response(
-                {"detail": "Esta mención ya está resuelta; no se puede cambiar."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        locked = self._lock_error(award)
+        if locked:
+            return Response({"detail": locked}, status=status.HTTP_400_BAD_REQUEST)
         AwardPick.objects.filter(user=request.user, award=award).delete()
         data = AwardSerializer(award, context={"picks": {}}).data
         return Response(data, status=status.HTTP_200_OK)
