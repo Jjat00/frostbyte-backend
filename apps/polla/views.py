@@ -4,6 +4,7 @@ Lecturas publicas (se enriquecen con datos del usuario si viene autenticado);
 escrituras (pronosticos, menciones) requieren sesion de cliente (JWT).
 """
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from django.db import IntegrityError
 from django.db.models import Avg, Max, Q
 from django.utils import timezone
@@ -33,6 +34,7 @@ from .models import (
     Tournament,
     UserMission,
     UserScore,
+    outcome_of,
 )
 from .scoring import group_standings, recompute_missions_for_user, recompute_scores
 from .serializers import (
@@ -238,6 +240,53 @@ class MatchViewSet(viewsets.ReadOnlyModelViewSet):
         ctx = super().get_serializer_context()
         ctx["predictions"] = _predictions_map(self.request.user)
         return ctx
+
+    @action(detail=True, methods=["get"], permission_classes=[AllowAny])
+    def pulse(self, request, slug=None):
+        """Pulso de la comunidad: cómo pronosticó la polla este partido.
+
+        Para no sesgar, solo es visible si el usuario ya guardó su pronóstico
+        de este partido o si el partido ya está cerrado (arrancó). El agregado
+        se cachea 60 s: el conteo no se repite por cada usuario que lo abre.
+        """
+        match = self.get_object()
+        user = request.user
+        has_mine = bool(
+            user
+            and user.is_authenticated
+            and Prediction.objects.filter(user=user, match=match).exists()
+        )
+        if not match.is_locked and not has_mine:
+            return Response({"visible": False, "reason": "predict_first"})
+
+        cache_key = f"polla:pulse:{match.slug}"
+        data = cache.get(cache_key)
+        if data is None:
+            preds = list(
+                Prediction.objects.filter(match=match)
+                .values_list("home_score", "away_score")
+            )
+            total = len(preds)
+            counts = {"home": 0, "draw": 0, "away": 0}
+            scores = {}
+            for h, a in preds:
+                counts[outcome_of(h, a)] += 1
+                key = f"{h}-{a}"
+                scores[key] = scores.get(key, 0) + 1
+            top = sorted(scores.items(), key=lambda kv: (-kv[1], kv[0]))[:3]
+            data = {
+                "total": total,
+                "outcomes": {
+                    k: {"count": v, "pct": round(v * 100 / total) if total else 0}
+                    for k, v in counts.items()
+                },
+                "top_scores": [
+                    {"score": s, "count": c, "pct": round(c * 100 / total)}
+                    for s, c in top
+                ],
+            }
+            cache.set(cache_key, data, timeout=60)
+        return Response({"visible": True, **data})
 
     @action(detail=True, methods=["put", "post"], permission_classes=[IsAuthenticated])
     def predict(self, request, slug=None):
