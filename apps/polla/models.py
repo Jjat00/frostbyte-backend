@@ -146,10 +146,24 @@ class Team(models.Model):
 class Player(models.Model):
     """Jugador (opciones para Goleador / MVP / Guante de Oro)."""
 
+    class Position(models.TextChoices):
+        GK = "GK", "Arquero"
+        DF = "DF", "Defensa"
+        MF = "MF", "Mediocampista"
+        FW = "FW", "Delantero"
+
     name = models.CharField(max_length=80, verbose_name="Nombre")
     team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name="players")
     is_keeper = models.BooleanField(default=False, verbose_name="Arquero")
     api_player_id = models.PositiveIntegerField(null=True, blank=True, db_index=True)
+    # Ficha visual (foto, dorsal, posición, edad): la puebla el comando
+    # ``polla_squads`` desde /players/squads de API-Football.
+    photo_url = models.URLField(blank=True)
+    position = models.CharField(
+        max_length=2, choices=Position.choices, blank=True, verbose_name="Posición"
+    )
+    number = models.PositiveIntegerField(null=True, blank=True, verbose_name="Dorsal")
+    age = models.PositiveIntegerField(null=True, blank=True, verbose_name="Edad")
 
     class Meta:
         verbose_name = "Jugador"

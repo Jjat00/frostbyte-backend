@@ -15,12 +15,27 @@ from __future__ import annotations
 
 import logging
 
-from .base import FixtureMeta, FixtureUpdate, MatchProvider, ScorerRow, StandingRow
+from .base import (
+    FixtureMeta,
+    FixtureUpdate,
+    MatchProvider,
+    ScorerRow,
+    SquadPlayer,
+    StandingRow,
+)
 
 logger = logging.getLogger(__name__)
 
 _LIVE = {"1H", "HT", "2H", "ET", "BT", "P", "SUSP", "INT", "LIVE"}
 _FINISHED = {"FT", "AET", "PEN"}
+
+# Posicion de /players/squads -> codigo interno corto.
+_POSITIONS = {
+    "Goalkeeper": "GK",
+    "Defender": "DF",
+    "Midfielder": "MF",
+    "Attacker": "FW",
+}
 
 # Estadisticas de partido que exponemos al frontend (tipo de la API -> clave).
 _STAT_KEYS = {
@@ -234,6 +249,24 @@ class APIFootballProvider(MatchProvider):
                             points=team.get("points", 0) or 0,
                         )
                     )
+        return out
+
+    def fetch_squad(self, api_team_id):
+        """Nómina oficial de una selección: foto, dorsal, posición y edad."""
+        rows = self._get("players/squads", {"team": api_team_id})
+        players = (rows[0].get("players") if rows else None) or []
+        out = []
+        for p in players:
+            out.append(
+                SquadPlayer(
+                    api_player_id=p.get("id"),
+                    name=p.get("name", "") or "",
+                    age=p.get("age"),
+                    number=p.get("number"),
+                    position=_POSITIONS.get(p.get("position"), ""),
+                    photo_url=p.get("photo", "") or "",
+                )
+            )
         return out
 
     def fetch_top_scorers(self, limit=20):

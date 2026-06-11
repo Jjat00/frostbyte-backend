@@ -71,6 +71,18 @@ class ScorerRow:
     api_team_id: Optional[int] = None
 
 
+@dataclass
+class SquadPlayer:
+    """Jugador de la nómina oficial de una selección (/players/squads)."""
+
+    api_player_id: int
+    name: str
+    age: Optional[int] = None
+    number: Optional[int] = None
+    position: str = ""  # "GK" | "DF" | "MF" | "FW" | ""
+    photo_url: str = ""
+
+
 class MatchProvider:
     """Contrato base. Las subclases sobreescriben lo que soporten."""
 
@@ -86,6 +98,10 @@ class MatchProvider:
         return []
 
     def fetch_top_scorers(self, limit: int = 20) -> list[ScorerRow]:  # pragma: no cover
+        return []
+
+    def fetch_squad(self, api_team_id) -> list[SquadPlayer]:  # pragma: no cover
+        """Nómina oficial de una selección (foto, dorsal, posición, edad)."""
         return []
 
     def fetch_fixture_details(self, fixture_ids) -> dict:  # pragma: no cover

@@ -136,8 +136,18 @@ class TeamDetailView(APIView):
                     }
                     break
 
+        # Goles en el torneo (tabla de goleadores) para decorar la plantilla.
+        scorer_goals = {
+            ts.player_id: ts.goals
+            for ts in TopScorer.objects.filter(team=team, player__isnull=False)
+        }
         players = [
-            {"id": p.id, "name": p.name, "is_keeper": p.is_keeper}
+            {
+                "id": p.id, "name": p.name, "is_keeper": p.is_keeper,
+                "photo": p.photo_url or None, "position": p.position or None,
+                "number": p.number, "age": p.age,
+                "goals": scorer_goals.get(p.id, 0),
+            }
             for p in team.players.order_by("-is_keeper", "name")
         ]
 

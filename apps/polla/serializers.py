@@ -41,7 +41,7 @@ class PlayerSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Player
-        fields = ["id", "name", "is_keeper", "team"]
+        fields = ["id", "name", "is_keeper", "position", "number", "photo_url", "team"]
 
     def get_team(self, obj):
         return {"code": obj.team.code, "name": obj.team.name, "iso2": obj.team.iso2}
