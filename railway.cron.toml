@@ -2,7 +2,14 @@
 #
 # En Railway: crear un servicio adicional apuntando a ESTE repo y usar este
 # archivo como config (Settings -> Config-as-code) o copiar estos valores.
-# Corre polla_sync cada 5 minutos para traer resultados y recalcular puntajes.
+#
+# Corre polla_sync cada minuto. El comando es adaptativo: solo llama a
+# API-Football si hay partidos en vivo o por arrancar, o si pasaron >= 5 min
+# desde el último sync base (marca compartida en Redis). Fuera de esas
+# condiciones la corrida termina sin consumir requests de la API.
+#
+# Variables de entorno que necesita ESTE servicio (ver .env.example):
+#   DATABASE_URL, REDIS_URL (mismos del web), API_FOOTBALL_KEY
 #
 # El servicio web principal sigue usando railway.toml (daphne).
 
@@ -12,4 +19,4 @@ buildCommand = "pip install -r requirements.txt"
 
 [deploy]
 startCommand = "python manage.py polla_sync"
-cronSchedule = "*/5 * * * *"
+cronSchedule = "* * * * *"

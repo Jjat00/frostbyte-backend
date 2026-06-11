@@ -28,6 +28,25 @@ class FixtureUpdate:
 
 
 @dataclass
+class FixtureMeta:
+    """Metadatos de un fixture para mapear IDs de API-Football a la BD local.
+
+    Se usa una sola vez (comando ``polla_map_api``) para poblar
+    ``Match.api_fixture_id`` y ``Team.api_team_id``. El ancla principal de
+    mapeo es ``kickoff`` (las horas oficiales son fijas); los nombres sirven de
+    desempate/validación.
+    """
+
+    api_fixture_id: int
+    kickoff: object  # datetime aware (UTC)
+    home_api_team_id: Optional[int] = None
+    away_api_team_id: Optional[int] = None
+    home_name: str = ""
+    away_name: str = ""
+    round_label: str = ""
+
+
+@dataclass
 class StandingRow:
     """Fila de posiciones normalizada (opcional; tambien se computa local)."""
 
@@ -54,6 +73,9 @@ class MatchProvider:
     available: bool = False
 
     def fetch_fixtures(self) -> list[FixtureUpdate]:  # pragma: no cover - interfaz
+        return []
+
+    def fetch_fixture_index(self) -> "list[FixtureMeta]":  # pragma: no cover
         return []
 
     def fetch_standings(self) -> list[StandingRow]:  # pragma: no cover - interfaz

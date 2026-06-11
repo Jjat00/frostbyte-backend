@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 
-from .base import FixtureUpdate, MatchProvider, ScorerRow, StandingRow
+from .base import FixtureMeta, FixtureUpdate, MatchProvider, ScorerRow, StandingRow
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +33,10 @@ class APIFootballProvider(MatchProvider):
         self.season = season
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        # Cache por instancia de la respuesta de /fixtures: dentro de un mismo
+        # sync, fetch_fixtures() y fetch_fixture_index() comparten una sola
+        # llamada HTTP (no gasta el doble de cuota de la API).
+        self._fixtures_cache = None
 
     # -- HTTP helper -------------------------------------------------------
     def _get(self, path, params=None):
@@ -55,9 +59,16 @@ class APIFootballProvider(MatchProvider):
             return "live"
         return "upcoming"
 
+    def _fixtures_response(self):
+        """Respuesta cruda de /fixtures, cacheada por instancia."""
+        if self._fixtures_cache is None:
+            self._fixtures_cache = self._get(
+                "fixtures", {"league": self.league_id, "season": self.season})
+        return self._fixtures_cache
+
     # -- API publica del proveedor ----------------------------------------
     def fetch_fixtures(self):
-        rows = self._get("fixtures", {"league": self.league_id, "season": self.season})
+        rows = self._fixtures_response()
         out = []
         for r in rows:
             fixture = r.get("fixture", {})
@@ -84,6 +95,38 @@ class APIFootballProvider(MatchProvider):
                     home_api_team_id=home_t.get("id"),
                     away_api_team_id=away_t.get("id"),
                     winner=winner,
+                )
+            )
+        return out
+
+    def fetch_fixture_index(self):
+        """Índice de fixtures (fecha + IDs + nombres) para el mapeo inicial."""
+        from datetime import datetime, timezone as _tz
+
+        rows = self._fixtures_response()
+        out = []
+        for r in rows:
+            fixture = r.get("fixture", {}) or {}
+            teams = r.get("teams", {}) or {}
+            home_t = teams.get("home", {}) or {}
+            away_t = teams.get("away", {}) or {}
+            league = r.get("league", {}) or {}
+            raw_date = fixture.get("date")
+            kickoff = None
+            if raw_date:
+                try:
+                    kickoff = datetime.fromisoformat(raw_date).astimezone(_tz.utc)
+                except ValueError:
+                    kickoff = None
+            out.append(
+                FixtureMeta(
+                    api_fixture_id=fixture.get("id"),
+                    kickoff=kickoff,
+                    home_api_team_id=home_t.get("id"),
+                    away_api_team_id=away_t.get("id"),
+                    home_name=home_t.get("name", "") or "",
+                    away_name=away_t.get("name", "") or "",
+                    round_label=league.get("round", "") or "",
                 )
             )
         return out
