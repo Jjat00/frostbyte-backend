@@ -29,6 +29,7 @@ from .models import (
     Prediction,
     Referral,
     Team,
+    TopScorer,
     Tournament,
     UserMission,
     UserScore,
@@ -103,6 +104,33 @@ class StandingsView(APIView):
             ]
             out.append({"letter": g.letter, "name": g.name, "rows": rows})
         return Response(out)
+
+
+# ── Goleadores del torneo ──────────────────────────────────────────────────
+class TopScorersView(APIView):
+    """Tabla de goleadores (la refresca ``polla_sync`` desde la API)."""
+
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        scorers = list(TopScorer.objects.select_related("team").order_by("rank"))
+        rows = [
+            {
+                "rank": s.rank,
+                "name": s.name,
+                "goals": s.goals,
+                "assists": s.assists,
+                "appearances": s.appearances,
+                "photo": s.photo_url or None,
+                # id del jugador sembrado (si se pudo enlazar): el frontend lo
+                # compara con my_pick.player_id de la mención "Goleador".
+                "player_id": s.player_id,
+                "team": _team_lite(s.team),
+            }
+            for s in scorers
+        ]
+        updated_at = max((s.updated_at for s in scorers), default=None)
+        return Response({"scorers": rows, "updated_at": updated_at})
 
 
 # ── Partidos + pronosticos ─────────────────────────────────────────────────

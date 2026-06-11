@@ -65,6 +65,10 @@ class ScorerRow:
     api_player_id: int
     name: str
     goals: int = 0
+    assists: int = 0
+    appearances: int = 0
+    photo_url: str = ""
+    api_team_id: Optional[int] = None
 
 
 class MatchProvider:

@@ -160,12 +160,19 @@ class APIFootballProvider(MatchProvider):
         for r in rows[:limit]:
             player = r.get("player", {}) or {}
             stats = (r.get("statistics") or [{}])[0]
-            goals = (stats.get("goals", {}) or {}).get("total", 0) or 0
+            goals = stats.get("goals", {}) or {}
+            games = stats.get("games", {}) or {}
+            team = stats.get("team", {}) or {}
             out.append(
                 ScorerRow(
                     api_player_id=player.get("id"),
                     name=player.get("name", ""),
-                    goals=goals,
+                    goals=goals.get("total", 0) or 0,
+                    assists=goals.get("assists", 0) or 0,
+                    # "appearences" (sic): asi viene escrito en API-Football.
+                    appearances=games.get("appearences", 0) or 0,
+                    photo_url=player.get("photo", "") or "",
+                    api_team_id=team.get("id"),
                 )
             )
         return out

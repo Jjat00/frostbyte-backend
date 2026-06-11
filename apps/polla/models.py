@@ -161,6 +161,39 @@ class Player(models.Model):
         return f"{self.name} — {self.team.code}"
 
 
+class TopScorer(models.Model):
+    """Tabla de goleadores del torneo, refrescada desde la API en cada sync.
+
+    Filas planas e independientes del seed: un goleador puede no estar entre
+    los jugadores sembrados. ``player`` se enlaza cuando se logra (por
+    ``api_player_id`` o por nombre+equipo) para poder resaltar el pick de la
+    mención "Goleador" del usuario en el frontend.
+    """
+
+    rank = models.PositiveIntegerField(verbose_name="Puesto")
+    name = models.CharField(max_length=80, verbose_name="Nombre")
+    goals = models.PositiveIntegerField(default=0, verbose_name="Goles")
+    assists = models.PositiveIntegerField(default=0, verbose_name="Asistencias")
+    appearances = models.PositiveIntegerField(default=0, verbose_name="PJ")
+    photo_url = models.URLField(blank=True)
+    api_player_id = models.PositiveIntegerField(null=True, blank=True, db_index=True)
+    team = models.ForeignKey(
+        Team, null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
+    player = models.ForeignKey(
+        Player, null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Goleador"
+        verbose_name_plural = "Goleadores"
+        ordering = ["rank"]
+
+    def __str__(self):
+        return f"#{self.rank} {self.name} ({self.goals} goles)"
+
+
 class Match(models.Model):
     """Partido del torneo."""
 

@@ -29,7 +29,7 @@ from django.core.cache import cache
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 
-from apps.polla.models import Match, Team
+from apps.polla.models import Match, Player, Team, TopScorer
 from apps.polla.providers import get_provider
 from apps.polla.scoring import recompute_all
 
@@ -38,6 +38,9 @@ from apps.polla.scoring import recompute_all
 SYNC_CACHE_KEY = "polla:last_fetch_ts"
 # Intervalo del sync base cuando no hay partidos en vivo.
 BASE_INTERVAL_SECONDS = 5 * 60
+# Goleadores: cambian solo con goles; refrescarlos cada 30 min alcanza.
+TOPSCORERS_CACHE_KEY = "polla:topscorers_ts"
+TOPSCORERS_INTERVAL_SECONDS = 30 * 60
 
 
 class Command(BaseCommand):
@@ -63,6 +66,7 @@ class Command(BaseCommand):
             # Descubre cruces de eliminatoria que la API recién publicó (reusa la
             # misma llamada /fixtures gracias al cache del provider).
             self._automap_fixtures(provider)
+            changed += self._sync_top_scorers(provider)
         self._update_recent_form()
         recompute_all()
         # Con --no-fetch (recalculo manual tras editar en el admin) también
@@ -212,6 +216,69 @@ class Command(BaseCommand):
             changed += 1
         self.stdout.write(f"  Partidos con cambios desde API-Football: {changed}")
         return changed
+
+    def _sync_top_scorers(self, provider):
+        """Refresca la tabla de goleadores (a lo sumo cada 30 min).
+
+        Reemplaza la tabla completa solo si el contenido cambió, para que el
+        broadcast WS no se dispare en vano. Antes del primer gol del torneo la
+        API devuelve vacío y no se toca nada.
+        """
+        if not provider.available:
+            return 0
+        now_ts = timezone.now().timestamp()
+        last = cache.get(TOPSCORERS_CACHE_KEY)
+        if last and (now_ts - last) < TOPSCORERS_INTERVAL_SECONDS:
+            return 0
+        cache.set(TOPSCORERS_CACHE_KEY, now_ts, timeout=None)
+        try:
+            rows = provider.fetch_top_scorers(limit=20)
+        except Exception as exc:  # noqa: BLE001 - no romper el cron por la API
+            self.stderr.write(f"  Error trayendo goleadores: {exc}")
+            return 0
+        if not rows:
+            return 0
+
+        by_api_team = {t.api_team_id: t for t in Team.objects.exclude(api_team_id=None)}
+        by_api_player = {
+            p.api_player_id: p for p in Player.objects.exclude(api_player_id=None)
+        }
+
+        def local_player(row, team):
+            """Enlaza al jugador sembrado: por id de API o por nombre+equipo."""
+            p = by_api_player.get(row.api_player_id)
+            if p or not team:
+                return p
+            p = Player.objects.filter(team=team, name__iexact=row.name).first()
+            if p:
+                return p
+            # La API suele abreviar ("L. Díaz"): probar por apellido.
+            last_name = row.name.split()[-1] if row.name else ""
+            if len(last_name) >= 4:
+                return Player.objects.filter(team=team, name__icontains=last_name).first()
+            return None
+
+        new_rows = []
+        for i, row in enumerate(rows, start=1):
+            team = by_api_team.get(row.api_team_id)
+            new_rows.append(TopScorer(
+                rank=i, name=row.name, goals=row.goals, assists=row.assists,
+                appearances=row.appearances, photo_url=row.photo_url,
+                api_player_id=row.api_player_id, team=team,
+                player=local_player(row, team),
+            ))
+
+        fingerprint = [(r.rank, r.name, r.goals, r.assists) for r in new_rows]
+        current = [
+            tuple(c) for c in TopScorer.objects.order_by("rank")
+            .values_list("rank", "name", "goals", "assists")
+        ]
+        if fingerprint == current:
+            return 0
+        TopScorer.objects.all().delete()
+        TopScorer.objects.bulk_create(new_rows)
+        self.stdout.write(f"  Goleadores actualizados: {len(new_rows)} filas.")
+        return 1
 
     def _update_recent_form(self):
         """Calcula la forma reciente (últimos 5 finales) de cada selección."""
