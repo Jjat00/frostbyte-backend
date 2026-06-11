@@ -92,6 +92,10 @@ class MatchProvider:
         """{api_fixture_id: {"events": [...], "statistics": {...}}}."""
         return {}
 
+    def fetch_head_to_head(self, api_team_a, api_team_b, last=10):  # pragma: no cover
+        """Enfrentamientos previos (finalizados) entre dos selecciones."""
+        return []
+
 
 class NullProvider(MatchProvider):
     """Proveedor inerte: se usa cuando no hay API key configurada.

@@ -186,6 +186,33 @@ class APIFootballProvider(MatchProvider):
                 out[fid] = {"events": events, "statistics": stats}
         return out
 
+    def fetch_head_to_head(self, api_team_a, api_team_b, last=10):
+        """Enfrentamientos previos entre dos selecciones (solo finalizados)."""
+        rows = self._get(
+            "fixtures/headtohead",
+            {"h2h": f"{api_team_a}-{api_team_b}", "last": last},
+        )
+        out = []
+        for r in rows:
+            fixture = r.get("fixture", {}) or {}
+            status = (fixture.get("status") or {}).get("short") or ""
+            if status not in _FINISHED:
+                continue
+            teams = r.get("teams", {}) or {}
+            goals = r.get("goals", {}) or {}
+            league = r.get("league", {}) or {}
+            out.append({
+                "date": (fixture.get("date") or "")[:10],
+                "competition": league.get("name", "") or "",
+                "home_api_team_id": (teams.get("home") or {}).get("id"),
+                "away_api_team_id": (teams.get("away") or {}).get("id"),
+                "home_name": (teams.get("home") or {}).get("name", "") or "",
+                "away_name": (teams.get("away") or {}).get("name", "") or "",
+                "home_goals": goals.get("home"),
+                "away_goals": goals.get("away"),
+            })
+        return out
+
     def fetch_standings(self):
         rows = self._get("standings", {"league": self.league_id, "season": self.season})
         out = []

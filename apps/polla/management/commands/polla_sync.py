@@ -72,6 +72,7 @@ class Command(BaseCommand):
             self._automap_fixtures(provider)
             changed += self._sync_match_details(provider)
             changed += self._sync_top_scorers(provider)
+            changed += self._sync_head_to_head(provider)
         self._update_recent_form()
         recompute_all()
         # Con --no-fetch (recalculo manual tras editar en el admin) también
@@ -329,6 +330,72 @@ class Command(BaseCommand):
         TopScorer.objects.bulk_create(new_rows)
         self.stdout.write(f"  Goleadores actualizados: {len(new_rows)} filas.")
         return 1
+
+    def _sync_head_to_head(self, provider, limit=6):
+        """Historial (head-to-head) de los cruces que arrancan en < 48 h.
+
+        Es UNA llamada por cruce y queda congelado (``h2h_fetched_at``): el
+        historico no cambia. ``limit`` reparte el trabajo entre corridas; con
+        4-6 partidos por dia se cubre todo en la primera pasada.
+        """
+        if not provider.available:
+            return 0
+        now = timezone.now()
+        targets = list(
+            Match.objects.filter(
+                status=Match.Status.UPCOMING,
+                h2h_fetched_at__isnull=True,
+                kickoff__lte=now + timedelta(hours=48),
+                home_team__api_team_id__isnull=False,
+                away_team__api_team_id__isnull=False,
+            ).select_related("home_team", "away_team")[:limit]
+        )
+        done = 0
+        for m in targets:
+            try:
+                meetings = provider.fetch_head_to_head(
+                    m.home_team.api_team_id, m.away_team.api_team_id)
+            except Exception as exc:  # noqa: BLE001 - reintenta en otra corrida
+                self.stderr.write(f"  Error trayendo H2H de {m.slug}: {exc}")
+                continue
+
+            home_id = m.home_team.api_team_id
+            wins = {"home": 0, "away": 0, "draw": 0}
+            items = []
+            for g in meetings:
+                hg, ag = g["home_goals"], g["away_goals"]
+                if hg is None or ag is None:
+                    continue
+                winner_id = (
+                    g["home_api_team_id"] if hg > ag
+                    else g["away_api_team_id"] if ag > hg
+                    else None
+                )
+                if winner_id is None:
+                    wins["draw"] += 1
+                elif winner_id == home_id:
+                    wins["home"] += 1
+                else:
+                    wins["away"] += 1
+                items.append({
+                    "date": g["date"],
+                    "competition": g["competition"],
+                    "home_name": g["home_name"],
+                    "away_name": g["away_name"],
+                    "home_goals": hg,
+                    "away_goals": ag,
+                })
+            items.sort(key=lambda x: x["date"], reverse=True)
+            m.h2h = {
+                "summary": {**wins, "total": sum(wins.values())},
+                "meetings": items[:5],
+            }
+            m.h2h_fetched_at = now
+            m.save(update_fields=["h2h", "h2h_fetched_at", "updated_at"])
+            done += 1
+        if done:
+            self.stdout.write(f"  Historial (H2H) traido para {done} cruces.")
+        return done
 
     def _update_recent_form(self):
         """Calcula la forma reciente (últimos 5 finales) de cada selección."""

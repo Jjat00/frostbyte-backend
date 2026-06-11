@@ -252,6 +252,12 @@ class Match(models.Model):
     events = models.JSONField(default=list, blank=True)
     statistics = models.JSONField(default=dict, blank=True)
 
+    # Historial entre ambas selecciones (head-to-head). Se trae UNA sola vez
+    # por cruce cuando faltan < 48 h para el pitazo y queda congelado
+    # (``h2h_fetched_at`` marca que ya se intento; el historico no cambia).
+    h2h = models.JSONField(default=dict, blank=True)
+    h2h_fetched_at = models.DateTimeField(null=True, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

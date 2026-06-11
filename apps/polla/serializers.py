@@ -103,9 +103,10 @@ class MatchDetailSerializer(MatchSerializer):
 
     events = serializers.JSONField(read_only=True)
     stats = serializers.JSONField(source="statistics", read_only=True)
+    h2h = serializers.JSONField(read_only=True)
 
     class Meta(MatchSerializer.Meta):
-        fields = MatchSerializer.Meta.fields + ["events", "stats"]
+        fields = MatchSerializer.Meta.fields + ["events", "stats", "h2h"]
 
 
 class GroupSerializer(serializers.ModelSerializer):
