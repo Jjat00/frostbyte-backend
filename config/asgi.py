@@ -45,3 +45,11 @@ application = ProtocolTypeRouter({
     "http": django_asgi_app,
     "websocket": websocket_middleware,
 })
+
+# Loop de tiempo real de la Polla. Se arranca aqui a proposito: este modulo solo
+# lo importa el servidor ASGI (daphne), no los comandos de manage.py, asi que el
+# loop corre unicamente en el proceso web (que ya esta siempre encendido) y no en
+# migrate/collectstatic/cron. Sondea de forma adaptativa y emite polla_changed.
+from apps.polla.realtime_loop import start_realtime_loop  # noqa: E402
+
+start_realtime_loop()

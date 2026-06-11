@@ -1,17 +1,18 @@
-# Servicio CRON de la Polla Mundialista (separado del servicio web).
+# Servicio CRON de la Polla Mundialista -- FALLBACK OPCIONAL (no es el mecanismo
+# principal de tiempo real).
 #
-# En Railway: crear un servicio adicional apuntando a ESTE repo y usar este
-# archivo como config (Settings -> Config-as-code) o copiar estos valores.
+# El tiempo real lo da un loop in-process dentro del servicio web (daphne),
+# arrancado en config/asgi.py via apps/polla/realtime_loop.py: sondea cada ~20s
+# durante partidos en vivo, sin costo extra y sin el limite de cron de Railway.
 #
-# Corre polla_sync cada minuto. El comando es adaptativo: solo llama a
-# API-Football si hay partidos en vivo o por arrancar, o si pasaron >= 5 min
-# desde el último sync base (marca compartida en Redis). Fuera de esas
-# condiciones la corrida termina sin consumir requests de la API.
+# Este cron solo sirve como respaldo barato si se quisiera mover el sync fuera
+# del web (apagando el loop con POLLA_REALTIME_LOOP=0). OJO: Railway impone un
+# minimo de 5 minutos entre ejecuciones de cron, asi que NO se puede correr cada
+# minuto por esta via (de ahi el loop in-process).
 #
-# Variables de entorno que necesita ESTE servicio (ver .env.example):
-#   DATABASE_URL, REDIS_URL (mismos del web), API_FOOTBALL_KEY
-#
-# El servicio web principal sigue usando railway.toml (daphne).
+# Para usarlo: crear un servicio aparte apuntando a ESTE repo, con este archivo
+# como Config-as-code, y las variables DATABASE_URL, REDIS_URL (las mismas del
+# web) y API_FOOTBALL_KEY (ver .env.example).
 
 [build]
 builder = "nixpacks"
@@ -19,4 +20,4 @@ buildCommand = "pip install -r requirements.txt"
 
 [deploy]
 startCommand = "python manage.py polla_sync"
-cronSchedule = "* * * * *"
+cronSchedule = "*/5 * * * *"
