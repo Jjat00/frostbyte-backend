@@ -38,6 +38,7 @@ from .scoring import group_standings, recompute_missions_for_user, recompute_sco
 from .serializers import (
     AwardSerializer,
     GroupSerializer,
+    MatchDetailSerializer,
     MatchSerializer,
     MissionSerializer,
     PredictionSerializer,
@@ -141,6 +142,12 @@ class MatchViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [AllowAny]
     lookup_field = "slug"
     pagination_class = None
+
+    def get_serializer_class(self):
+        # El detalle incluye eventos/estadisticas en vivo; la lista no.
+        if self.action == "retrieve":
+            return MatchDetailSerializer
+        return MatchSerializer
 
     def get_queryset(self):
         qs = Match.objects.select_related(

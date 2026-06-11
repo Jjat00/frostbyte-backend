@@ -246,6 +246,12 @@ class Match(models.Model):
     featured = models.BooleanField(default=False, verbose_name="Destacado")
     api_fixture_id = models.PositiveIntegerField(null=True, blank=True, db_index=True)
 
+    # Detalle en vivo por fixture: eventos (goles, tarjetas, cambios) y
+    # estadisticas (posesion, tiros, ...). Los puebla ``polla_sync`` solo para
+    # partidos en vivo o recien terminados; el resto queda vacio.
+    events = models.JSONField(default=list, blank=True)
+    statistics = models.JSONField(default=dict, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

@@ -22,6 +22,15 @@ logger = logging.getLogger(__name__)
 _LIVE = {"1H", "HT", "2H", "ET", "BT", "P", "SUSP", "INT", "LIVE"}
 _FINISHED = {"FT", "AET", "PEN"}
 
+# Estadisticas de partido que exponemos al frontend (tipo de la API -> clave).
+_STAT_KEYS = {
+    "Ball Possession": "possession",
+    "Total Shots": "shots",
+    "Shots on Goal": "shots_on",
+    "Corner Kicks": "corners",
+    "Fouls": "fouls",
+}
+
 
 class APIFootballProvider(MatchProvider):
     available = True
@@ -129,6 +138,52 @@ class APIFootballProvider(MatchProvider):
                     round_label=league.get("round", "") or "",
                 )
             )
+        return out
+
+    def fetch_fixture_details(self, fixture_ids):
+        """Eventos y estadisticas de varios fixtures en UNA llamada por tanda.
+
+        ``/fixtures?ids=a-b-c`` (hasta 20 ids) devuelve cada fixture con sus
+        bloques ``events`` y ``statistics`` incluidos: no hay que pagar una
+        llamada extra por endpoint. Devuelve un dict indexado por fixture id.
+        """
+        ids = [str(i) for i in fixture_ids if i]
+        out = {}
+        for start in range(0, len(ids), 20):
+            rows = self._get("fixtures", {"ids": "-".join(ids[start:start + 20])})
+            for r in rows:
+                fid = (r.get("fixture", {}) or {}).get("id")
+                if not fid:
+                    continue
+                teams = r.get("teams", {}) or {}
+                home_id = (teams.get("home") or {}).get("id")
+
+                events = []
+                for ev in r.get("events") or []:
+                    time = ev.get("time") or {}
+                    team_id = (ev.get("team") or {}).get("id")
+                    events.append({
+                        "minute": time.get("elapsed"),
+                        "extra": time.get("extra"),
+                        "side": "home" if team_id == home_id else "away",
+                        "type": (ev.get("type") or "").lower(),
+                        "detail": ev.get("detail") or "",
+                        "player": (ev.get("player") or {}).get("name") or "",
+                        "assist": (ev.get("assist") or {}).get("name") or "",
+                    })
+
+                stats = {}
+                for block in r.get("statistics") or []:
+                    team_id = (block.get("team") or {}).get("id")
+                    side = "home" if team_id == home_id else "away"
+                    vals = {}
+                    for item in block.get("statistics") or []:
+                        key = _STAT_KEYS.get(item.get("type"))
+                        if key:
+                            vals[key] = item.get("value")
+                    stats[side] = vals
+
+                out[fid] = {"events": events, "statistics": stats}
         return out
 
     def fetch_standings(self):

@@ -27,6 +27,7 @@ from datetime import timedelta
 
 from django.core.cache import cache
 from django.core.management.base import BaseCommand
+from django.db.models import Q
 from django.utils import timezone
 
 from apps.polla.models import Match, Player, Team, TopScorer
@@ -41,6 +42,9 @@ BASE_INTERVAL_SECONDS = 5 * 60
 # Goleadores: cambian solo con goles; refrescarlos cada 30 min alcanza.
 TOPSCORERS_CACHE_KEY = "polla:topscorers_ts"
 TOPSCORERS_INTERVAL_SECONDS = 30 * 60
+# Detalle (eventos/estadisticas) de partidos en vivo: a lo sumo cada 60 s.
+DETAILS_CACHE_KEY = "polla:details_ts"
+DETAILS_INTERVAL_SECONDS = 60
 
 
 class Command(BaseCommand):
@@ -66,6 +70,7 @@ class Command(BaseCommand):
             # Descubre cruces de eliminatoria que la API recién publicó (reusa la
             # misma llamada /fixtures gracias al cache del provider).
             self._automap_fixtures(provider)
+            changed += self._sync_match_details(provider)
             changed += self._sync_top_scorers(provider)
         self._update_recent_form()
         recompute_all()
@@ -215,6 +220,51 @@ class Command(BaseCommand):
             m.save(update_fields=fields)
             changed += 1
         self.stdout.write(f"  Partidos con cambios desde API-Football: {changed}")
+        return changed
+
+    def _sync_match_details(self, provider):
+        """Eventos y estadisticas de los partidos en vivo (cada 60 s max).
+
+        Tambien refresca los recien terminados (kickoff < 3 h) para capturar
+        los eventos finales; despues de esa ventana quedan congelados.
+        Una sola llamada por tanda de 20 fixtures (``/fixtures?ids=``).
+        """
+        if not provider.available:
+            return 0
+        now = timezone.now()
+        targets = list(
+            Match.objects.exclude(api_fixture_id=None).filter(
+                Q(status=Match.Status.LIVE)
+                | Q(status=Match.Status.FINISHED,
+                    kickoff__gte=now - timedelta(hours=3))
+            )
+        )
+        if not targets:
+            return 0
+        last = cache.get(DETAILS_CACHE_KEY)
+        if last and (now.timestamp() - last) < DETAILS_INTERVAL_SECONDS:
+            return 0
+        cache.set(DETAILS_CACHE_KEY, now.timestamp(), timeout=None)
+        try:
+            details = provider.fetch_fixture_details(
+                [m.api_fixture_id for m in targets])
+        except Exception as exc:  # noqa: BLE001 - no romper el cron por la API
+            self.stderr.write(f"  Error trayendo detalle de partidos: {exc}")
+            return 0
+
+        changed = 0
+        for m in targets:
+            d = details.get(m.api_fixture_id)
+            if not d:
+                continue
+            if m.events != d["events"] or m.statistics != d["statistics"]:
+                m.events = d["events"]
+                m.statistics = d["statistics"]
+                m.save(update_fields=["events", "statistics", "updated_at"])
+                changed += 1
+        if changed:
+            self.stdout.write(
+                f"  Partidos con eventos/estadisticas nuevos: {changed}")
         return changed
 
     def _sync_top_scorers(self, provider):

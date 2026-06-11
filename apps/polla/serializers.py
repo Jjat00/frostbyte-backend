@@ -94,6 +94,20 @@ class MatchSerializer(serializers.ModelSerializer):
         }
 
 
+class MatchDetailSerializer(MatchSerializer):
+    """Detalle de un partido: agrega eventos y estadisticas en vivo.
+
+    Solo se usa en el retrieve (``/matches/{slug}/``) para no engordar la
+    lista de partidos con bloques que solo ve quien abre el detalle.
+    """
+
+    events = serializers.JSONField(read_only=True)
+    stats = serializers.JSONField(source="statistics", read_only=True)
+
+    class Meta(MatchSerializer.Meta):
+        fields = MatchSerializer.Meta.fields + ["events", "stats"]
+
+
 class GroupSerializer(serializers.ModelSerializer):
     teams = TeamSerializer(many=True, read_only=True)
 

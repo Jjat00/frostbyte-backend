@@ -88,6 +88,10 @@ class MatchProvider:
     def fetch_top_scorers(self, limit: int = 20) -> list[ScorerRow]:  # pragma: no cover
         return []
 
+    def fetch_fixture_details(self, fixture_ids) -> dict:  # pragma: no cover
+        """{api_fixture_id: {"events": [...], "statistics": {...}}}."""
+        return {}
+
 
 class NullProvider(MatchProvider):
     """Proveedor inerte: se usa cuando no hay API key configurada.
