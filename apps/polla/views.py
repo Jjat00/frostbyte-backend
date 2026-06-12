@@ -184,6 +184,120 @@ class TeamDetailView(APIView):
         })
 
 
+# ── Ficha de un jugador ─────────────────────────────────────────────────────
+def _player_tournament_stats(player):
+    """Aporte del jugador en el torneo, leído de los eventos de los partidos de
+    su equipo: goles, asistencias y tarjetas (desambigua por apellido contra la
+    plantilla, igual que la tabla de goleadores), más los partidos en que aportó.
+    """
+    from .management.commands.polla_sync import _match_player
+
+    team = player.team
+    empty = {"goals": 0, "assists": 0, "yellow": 0, "red": 0, "matches": []}
+    if not team:
+        return empty
+    pool_map = {team.id: list(Player.objects.filter(team=team))}
+
+    goals = assists = yellow = red = 0
+    per_match = {}
+    matches = list(
+        Match.objects.filter(Q(home_team=team) | Q(away_team=team))
+        .filter(status__in=[Match.Status.LIVE, Match.Status.FINISHED])
+        .select_related("home_team", "away_team", "group")
+        .order_by("kickoff")
+    )
+    def is_him(name):
+        m = _match_player(name or "", team, pool_map)
+        return m is not None and m.pk == player.pk
+
+    for m in matches:
+        my_side = "home" if m.home_team_id == team.id else "away"
+        rival = m.away_team if my_side == "home" else m.home_team
+        for ev in m.events or []:
+            if ev.get("side") != my_side:
+                continue
+            etype = ev.get("type") or ""
+            if etype == "goal":
+                detail = (ev.get("detail") or "").lower()
+                if "own" in detail or "missed" in detail:
+                    continue
+                slot = per_match.setdefault(
+                    m.slug,
+                    {"rival": _team_lite(rival), "group": m.group.letter if m.group else None,
+                     "goals": 0, "assists": 0},
+                )
+                if is_him(ev.get("player")):
+                    goals += 1
+                    slot["goals"] += 1
+                if ev.get("assist") and is_him(ev.get("assist")):
+                    assists += 1
+                    slot["assists"] += 1
+            elif etype == "card":
+                if is_him(ev.get("player")):
+                    d = (ev.get("detail") or "").lower()
+                    if "red" in d:
+                        red += 1
+                    elif "yellow" in d:
+                        yellow += 1
+
+    match_list = [
+        {"slug": s, **v} for s, v in per_match.items() if v["goals"] or v["assists"]
+    ]
+    return {"goals": goals, "assists": assists, "yellow": yellow, "red": red,
+            "matches": match_list}
+
+
+class PlayerDetailView(APIView):
+    """Ficha de un jugador: datos sembrados + perfil biográfico (API, cacheado
+    una semana) + sus números en este torneo (desde los eventos)."""
+
+    permission_classes = [AllowAny]
+
+    def get(self, request, pk=None):
+        player = (
+            Player.objects.select_related("team", "team__group")
+            .filter(pk=pk)
+            .first()
+        )
+        if not player:
+            return Response({"detail": "Jugador no encontrado."}, status=404)
+
+        profile = None
+        if player.api_player_id:
+            ckey = f"polla:player_profile:{player.api_player_id}"
+            profile = cache.get(ckey)
+            if profile is None:
+                try:
+                    from apps.polla.providers import get_provider
+                    provider = get_provider()
+                    if provider.available:
+                        profile = provider.fetch_player_profile(player.api_player_id) or {}
+                        # El perfil no cambia durante el torneo: cache larga.
+                        cache.set(ckey, profile, timeout=7 * 24 * 3600)
+                except Exception:  # noqa: BLE001 - la ficha funciona sin el perfil
+                    profile = None
+
+        team = player.team
+        team_lite = None
+        if team:
+            team_lite = {**_team_lite(team),
+                         "group": team.group.letter if team.group else None,
+                         "is_host": team.is_host}
+
+        return Response({
+            "id": player.id,
+            "name": player.name,
+            "number": player.number,
+            "position": player.position or None,
+            "age": player.age,
+            "is_keeper": player.is_keeper,
+            "photo": player.photo_url or (profile or {}).get("photo") or None,
+            "team": team_lite,
+            "profile": profile or None,
+            "tournament": _player_tournament_stats(player),
+        })
+
+
 # ── Goleadores del torneo ──────────────────────────────────────────────────
 class TopScorersView(APIView):
     """Tabla de goleadores (la refresca ``polla_sync`` desde la API)."""

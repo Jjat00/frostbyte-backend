@@ -228,6 +228,32 @@ class APIFootballProvider(MatchProvider):
             })
         return out
 
+    def fetch_player_profile(self, api_player_id):
+        """Datos biográficos de un jugador.
+
+        ``/players/profiles?player=ID`` devuelve el perfil (nombre completo,
+        nacionalidad, altura, peso, nacimiento, posición y foto) sin depender de
+        una temporada con estadísticas ya consolidadas, así que sirve desde el
+        primer día del torneo. Devuelve un dict simple o None.
+        """
+        rows = self._get("players/profiles", {"player": api_player_id})
+        if not rows:
+            return None
+        p = rows[0].get("player") or {}
+        birth = p.get("birth") or {}
+        full = " ".join(x for x in (p.get("firstname"), p.get("lastname")) if x)
+        return {
+            "full_name": full or p.get("name") or "",
+            "nationality": p.get("nationality") or "",
+            "height": p.get("height") or "",
+            "weight": p.get("weight") or "",
+            "position": p.get("position") or "",
+            "photo": p.get("photo") or "",
+            "birth_date": birth.get("date") or "",
+            "birth_place": birth.get("place") or "",
+            "birth_country": birth.get("country") or "",
+        }
+
     def fetch_standings(self):
         rows = self._get("standings", {"league": self.league_id, "season": self.season})
         out = []

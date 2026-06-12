@@ -623,3 +623,45 @@ class TopScorersFromEventsTests(TestCase):
             events=[self._goal("home", "J. Quinones")],
         )
         self.assertEqual(self.cmd._scorers_from_events(), [])
+
+
+class PlayerTournamentStatsTests(TestCase):
+    """Aporte de un jugador en el torneo (goles/asistencias/tarjetas) leído de
+    los eventos, desambiguando entre jugadores del mismo equipo."""
+
+    def setUp(self):
+        self.mex = _make_team("MEX")
+        self.rsa = _make_team("RSA")
+        self.raul = Player.objects.create(name="Raúl Jiménez", team=self.mex)
+        self.julian = Player.objects.create(name="Julián Quiñones", team=self.mex)
+
+    def test_counts_per_player_and_disambiguates(self):
+        from .views import _player_tournament_stats
+        _make_match(
+            1, self.mex, self.rsa,
+            status=Match.Status.FINISHED, home_score=2, away_score=0,
+            events=[
+                {"type": "goal", "side": "home", "detail": "Normal Goal",
+                 "player": "R. Jimenez", "assist": "J. Quinones"},
+                {"type": "goal", "side": "home", "detail": "Penalty", "player": "R. Jimenez"},
+                {"type": "card", "side": "home", "detail": "Yellow Card", "player": "J. Quinones"},
+            ],
+        )
+        raul = _player_tournament_stats(self.raul)
+        self.assertEqual(raul["goals"], 2)
+        self.assertEqual(raul["assists"], 0)
+        self.assertEqual(raul["yellow"], 0)
+        self.assertEqual(len(raul["matches"]), 1)
+
+        julian = _player_tournament_stats(self.julian)
+        self.assertEqual(julian["goals"], 0)
+        self.assertEqual(julian["assists"], 1)  # asistió el primer gol de Raúl
+        self.assertEqual(julian["yellow"], 1)   # y vio la amarilla, no Raúl
+
+    def test_endpoint_returns_player_card(self):
+        from rest_framework.test import APIClient
+        resp = APIClient().get(f"/api/v1/polla/players/{self.raul.id}/")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["name"], "Raúl Jiménez")
+        self.assertEqual(resp.data["team"]["code"], "MEX")
+        self.assertIn("tournament", resp.data)

@@ -112,6 +112,10 @@ class MatchProvider:
         """Enfrentamientos previos (finalizados) entre dos selecciones."""
         return []
 
+    def fetch_player_profile(self, api_player_id):  # pragma: no cover - interfaz
+        """Datos biográficos de un jugador (nacionalidad, altura, peso, ...)."""
+        return None
+
 
 class NullProvider(MatchProvider):
     """Proveedor inerte: se usa cuando no hay API key configurada.
