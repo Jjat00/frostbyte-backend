@@ -554,3 +554,72 @@ class ReferralTests(TestCase):
         self.assertEqual(resp.data["qualified"], 1)
         self.assertEqual(resp.data["points"], 1)
         self.assertEqual(resp.data["cap"], 5)
+
+
+class TopScorersFromEventsTests(TestCase):
+    """La tabla de goleadores se arma desde los eventos de gol de los partidos
+    cuando el endpoint agregado de la API aún no consolida."""
+
+    def setUp(self):
+        from .management.commands.polla_sync import Command
+        self.cmd = Command()
+        self.mex = _make_team("MEX")
+        self.rsa = _make_team("RSA")
+        self.raul = Player.objects.create(name="Raúl Jiménez", team=self.mex)
+        self.julian = Player.objects.create(name="Julián Quiñones", team=self.mex)
+
+    def _goal(self, side, player, detail="Normal Goal"):
+        return {"type": "goal", "side": side, "detail": detail, "player": player}
+
+    def test_counts_goals_and_links_seeded_players(self):
+        # Nombres abreviados como los entrega la API ("R. Jimenez").
+        _make_match(
+            1, self.mex, self.rsa,
+            status=Match.Status.FINISHED, home_score=2, away_score=0,
+            events=[self._goal("home", "J. Quinones"),
+                    self._goal("home", "R. Jimenez", detail="Penalty")],
+        )
+        rows = {r.name: r for r in self.cmd._scorers_from_events()}
+        self.assertIn("Raúl Jiménez", rows)
+        self.assertIn("Julián Quiñones", rows)
+        self.assertEqual(rows["Raúl Jiménez"].goals, 1)
+        self.assertEqual(rows["Raúl Jiménez"].player_id, self.raul.id)
+        self.assertEqual(rows["Julián Quiñones"].team.code, "MEX")
+
+    def test_excludes_own_goals_and_missed_penalties(self):
+        _make_match(
+            2, self.mex, self.rsa,
+            status=Match.Status.FINISHED, home_score=1, away_score=0,
+            events=[self._goal("away", "S. Defensa", detail="Own Goal"),
+                    self._goal("home", "R. Jimenez", detail="Missed Penalty")],
+        )
+        self.assertEqual(self.cmd._scorers_from_events(), [])
+
+    def test_accumulates_goals_across_matches(self):
+        _make_match(
+            3, self.mex, self.rsa,
+            status=Match.Status.FINISHED, home_score=1, away_score=0,
+            events=[self._goal("home", "R. Jimenez")],
+        )
+        _make_match(
+            4, self.rsa, self.mex,
+            status=Match.Status.FINISHED, home_score=0, away_score=1,
+            events=[self._goal("away", "R. Jimenez")],
+        )
+        raul = next(r for r in self.cmd._scorers_from_events()
+                    if r.player_id == self.raul.id)
+        self.assertEqual(raul.goals, 2)
+
+    def test_ignores_non_goal_events_and_upcoming_matches(self):
+        _make_match(
+            5, self.mex, self.rsa,
+            status=Match.Status.FINISHED, home_score=0, away_score=0,
+            events=[{"type": "card", "side": "home", "detail": "Yellow Card",
+                     "player": "R. Jimenez"}],
+        )
+        _make_match(
+            6, self.mex, self.rsa,
+            status=Match.Status.UPCOMING,
+            events=[self._goal("home", "J. Quinones")],
+        )
+        self.assertEqual(self.cmd._scorers_from_events(), [])

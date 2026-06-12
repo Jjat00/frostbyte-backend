@@ -23,6 +23,7 @@ Opciones:
   --no-fetch   Solo recalcula (no llama a la API externa).
   --force      Sincroniza aunque no haya partidos en vivo ni sync pendiente.
 """
+import unicodedata
 from datetime import timedelta
 
 from django.core.cache import cache
@@ -33,6 +34,40 @@ from django.utils import timezone
 from apps.polla.models import Match, Player, Team, TopScorer
 from apps.polla.providers import get_provider
 from apps.polla.scoring import recompute_all
+
+
+def _norm(s):
+    """minúsculas, sin acentos ni puntuación: para comparar nombres."""
+    s = (s or "").replace("'", "").replace("’", "")
+    s = unicodedata.normalize("NFKD", s)
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    return " ".join(s.lower().replace(".", " ").replace("-", " ").split())
+
+
+def _match_player(name, team, players_by_team):
+    """Empareja el nombre (abreviado, p.ej. 'R. Jiménez') de un evento de gol
+    con un jugador sembrado del mismo equipo: por apellido, desempatando por la
+    inicial del nombre. Devuelve el ``Player`` o None."""
+    if not team:
+        return None
+    pool = players_by_team.get(team.id, [])
+    if not pool:
+        return None
+    parts = _norm(name).split()
+    if not parts:
+        return None
+    last = parts[-1]
+    if len(last) < 3:
+        return None
+    cands = [p for p in pool if last in _norm(p.name).split()]
+    if len(cands) == 1:
+        return cands[0]
+    if len(cands) > 1 and parts[0]:
+        ini = parts[0][0]
+        narrowed = [p for p in cands if _norm(p.name)[:1] == ini]
+        if len(narrowed) == 1:
+            return narrowed[0]
+    return cands[0] if cands else None
 
 # Marca (timestamp) del último fetch a la API. En producción vive en Redis,
 # compartido entre ejecuciones del servicio cron.
@@ -269,26 +304,58 @@ class Command(BaseCommand):
         return changed
 
     def _sync_top_scorers(self, provider):
-        """Refresca la tabla de goleadores (a lo sumo cada 30 min).
+        """Refresca la tabla de goleadores. Dos fuentes, por prioridad:
+
+          1. Endpoint agregado ``/players/topscorers`` (a lo sumo cada 30 min):
+             la fuente rica (asistencias, PJ, foto oficial). Pero API-Football
+             tarda en consolidarlo, así que al inicio del torneo devuelve vacío
+             aunque ya se hayan marcado goles.
+          2. Los eventos de gol ya guardados en cada ``Match`` (casi en vivo):
+             si el endpoint agregado todavía no trae nada, contamos los goles de
+             los eventos para que los goleadores aparezcan apenas se juega.
 
         Reemplaza la tabla completa solo si el contenido cambió, para que el
-        broadcast WS no se dispare en vano. Antes del primer gol del torneo la
-        API devuelve vacío y no se toca nada.
+        broadcast WS no se dispare en vano.
         """
-        if not provider.available:
+        new_rows = self._scorers_from_api(provider) or self._scorers_from_events()
+        if not new_rows:
             return 0
+
+        # Ordena por goles (luego asistencias y nombre) y re-numera el rank.
+        new_rows.sort(key=lambda r: (-r.goals, -r.assists, r.name))
+        new_rows = new_rows[:30]
+        for i, r in enumerate(new_rows, start=1):
+            r.rank = i
+
+        fingerprint = [(r.rank, r.name, r.goals, r.assists) for r in new_rows]
+        current = [
+            tuple(c) for c in TopScorer.objects.order_by("rank")
+            .values_list("rank", "name", "goals", "assists")
+        ]
+        if fingerprint == current:
+            return 0
+        TopScorer.objects.all().delete()
+        TopScorer.objects.bulk_create(new_rows)
+        self.stdout.write(f"  Goleadores actualizados: {len(new_rows)} filas.")
+        return 1
+
+    def _scorers_from_api(self, provider):
+        """Goleadores desde el endpoint agregado. None si no toca (caché de 30
+        min vigente), la API no está disponible, o aún devuelve vacío."""
+        if not provider.available:
+            return None
         now_ts = timezone.now().timestamp()
         last = cache.get(TOPSCORERS_CACHE_KEY)
         if last and (now_ts - last) < TOPSCORERS_INTERVAL_SECONDS:
-            return 0
+            return None
         cache.set(TOPSCORERS_CACHE_KEY, now_ts, timeout=None)
         try:
-            rows = provider.fetch_top_scorers(limit=20)
+            rows = provider.fetch_top_scorers(limit=30)
         except Exception as exc:  # noqa: BLE001 - no romper el cron por la API
             self.stderr.write(f"  Error trayendo goleadores: {exc}")
-            return 0
+            return None
         if not rows:
-            return 0
+            return None
 
         by_api_team = {t.api_team_id: t for t in Team.objects.exclude(api_team_id=None)}
         by_api_player = {
@@ -309,27 +376,78 @@ class Command(BaseCommand):
                 return Player.objects.filter(team=team, name__icontains=last_name).first()
             return None
 
-        new_rows = []
-        for i, row in enumerate(rows, start=1):
+        out = []
+        for row in rows:
             team = by_api_team.get(row.api_team_id)
-            new_rows.append(TopScorer(
-                rank=i, name=row.name, goals=row.goals, assists=row.assists,
+            out.append(TopScorer(
+                rank=0, name=row.name, goals=row.goals, assists=row.assists,
                 appearances=row.appearances, photo_url=row.photo_url,
                 api_player_id=row.api_player_id, team=team,
                 player=local_player(row, team),
             ))
+        return out
 
-        fingerprint = [(r.rank, r.name, r.goals, r.assists) for r in new_rows]
-        current = [
-            tuple(c) for c in TopScorer.objects.order_by("rank")
-            .values_list("rank", "name", "goals", "assists")
-        ]
-        if fingerprint == current:
-            return 0
-        TopScorer.objects.all().delete()
-        TopScorer.objects.bulk_create(new_rows)
-        self.stdout.write(f"  Goleadores actualizados: {len(new_rows)} filas.")
-        return 1
+    def _scorers_from_events(self):
+        """Construye la tabla contando los goles de ``Match.events``.
+
+        Excluye autogoles y penales fallados (no cuentan para el goleador).
+        Enlaza cada goleador al jugador sembrado (por nombre+equipo) para la
+        foto y el ``player_id``; conserva asistencias/PJ/foto de la fila previa
+        cuando existan, para no degradarlas entre refrescos del endpoint
+        agregado.
+        """
+        matches = list(
+            Match.objects.filter(
+                status__in=[Match.Status.LIVE, Match.Status.FINISHED]
+            )
+            .exclude(home_team__isnull=True)
+            .exclude(away_team__isnull=True)
+            .select_related("home_team", "away_team")
+        )
+        if not matches:
+            return []
+
+        players_by_team = {}
+        for p in Player.objects.all():
+            players_by_team.setdefault(p.team_id, []).append(p)
+        prev = {_norm(ts.name): ts for ts in TopScorer.objects.all()}
+
+        tally = {}  # (nombre normalizado, team_id) -> {name, team, goals}
+        for m in matches:
+            for ev in m.events or []:
+                if (ev.get("type") or "") != "goal":
+                    continue
+                detail = (ev.get("detail") or "").lower()
+                if "own" in detail or "missed" in detail:
+                    continue
+                name = (ev.get("player") or "").strip()
+                if not name:
+                    continue
+                team = m.home_team if ev.get("side") == "home" else m.away_team
+                key = (_norm(name), team.id if team else None)
+                acc = tally.get(key)
+                if acc is None:
+                    acc = {"name": name, "team": team, "goals": 0}
+                    tally[key] = acc
+                acc["goals"] += 1
+
+        out = []
+        for (nname, _tid), acc in tally.items():
+            player = _match_player(acc["name"], acc["team"], players_by_team)
+            old = prev.get(nname)
+            photo = (player.photo_url if player else "") or (old.photo_url if old else "")
+            out.append(TopScorer(
+                rank=0,
+                name=(player.name if player else acc["name"]),
+                goals=acc["goals"],
+                assists=(old.assists if old else 0),
+                appearances=(old.appearances if old else 0),
+                photo_url=photo or "",
+                api_player_id=(player.api_player_id if player else None),
+                team=acc["team"],
+                player=player,
+            ))
+        return out
 
     def _sync_head_to_head(self, provider, limit=6):
         """Historial (head-to-head) de los cruces que arrancan en < 48 h.
