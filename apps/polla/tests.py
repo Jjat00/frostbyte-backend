@@ -610,6 +610,21 @@ class TopScorersFromEventsTests(TestCase):
                     if r.player_id == self.raul.id)
         self.assertEqual(raul.goals, 2)
 
+    def test_counts_assists_but_excludes_assist_only_players(self):
+        # Quiñones asiste el gol de Jiménez: Jiménez entra (1 gol, 0 asist),
+        # Quiñones NO entra a la tabla de goleadores (0 goles, solo 1 asist).
+        _make_match(
+            7, self.mex, self.rsa,
+            status=Match.Status.FINISHED, home_score=1, away_score=0,
+            events=[{"type": "goal", "side": "home", "detail": "Normal Goal",
+                     "player": "R. Jimenez", "assist": "J. Quinones"}],
+        )
+        rows = {r.name: r for r in self.cmd._scorers_from_events()}
+        self.assertIn("Raúl Jiménez", rows)
+        self.assertEqual(rows["Raúl Jiménez"].goals, 1)
+        self.assertEqual(rows["Raúl Jiménez"].assists, 0)
+        self.assertNotIn("Julián Quiñones", rows)  # solo asistió: fuera
+
     def test_ignores_non_goal_events_and_upcoming_matches(self):
         _make_match(
             5, self.mex, self.rsa,

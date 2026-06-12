@@ -317,7 +317,13 @@ class Command(BaseCommand):
         Reemplaza la tabla completa solo si el contenido cambió, para que el
         broadcast WS no se dispare en vano.
         """
-        new_rows = self._scorers_from_api(provider) or self._scorers_from_events()
+        # Los eventos de los partidos son la fuente PRIMARIA (verdad de campo,
+        # casi en vivo): el endpoint agregado de la API al inicio del torneo
+        # devuelve un ranking inflado con jugadores de 0 goles, así que solo lo
+        # usamos de respaldo si aún no tenemos eventos con goles. En cualquier
+        # caso filtramos: a la tabla de GOLEADORES solo entra quien marcó.
+        new_rows = self._scorers_from_events() or self._scorers_from_api(provider) or []
+        new_rows = [r for r in new_rows if r.goals and r.goals > 0]
         if not new_rows:
             return 0
 
@@ -412,7 +418,16 @@ class Command(BaseCommand):
             players_by_team.setdefault(p.team_id, []).append(p)
         prev = {_norm(ts.name): ts for ts in TopScorer.objects.all()}
 
-        tally = {}  # (nombre normalizado, team_id) -> {name, team, goals}
+        tally = {}  # (nombre normalizado, team_id) -> {name, team, goals, assists}
+
+        def slot(name, team):
+            key = (_norm(name), team.id if team else None)
+            acc = tally.get(key)
+            if acc is None:
+                acc = {"name": name, "team": team, "goals": 0, "assists": 0}
+                tally[key] = acc
+            return acc
+
         for m in matches:
             for ev in m.events or []:
                 if (ev.get("type") or "") != "goal":
@@ -420,19 +435,19 @@ class Command(BaseCommand):
                 detail = (ev.get("detail") or "").lower()
                 if "own" in detail or "missed" in detail:
                     continue
-                name = (ev.get("player") or "").strip()
-                if not name:
-                    continue
                 team = m.home_team if ev.get("side") == "home" else m.away_team
-                key = (_norm(name), team.id if team else None)
-                acc = tally.get(key)
-                if acc is None:
-                    acc = {"name": name, "team": team, "goals": 0}
-                    tally[key] = acc
-                acc["goals"] += 1
+                scorer = (ev.get("player") or "").strip()
+                if scorer:
+                    slot(scorer, team)["goals"] += 1
+                assist = (ev.get("assist") or "").strip()
+                if assist:
+                    slot(assist, team)["assists"] += 1
 
         out = []
         for (nname, _tid), acc in tally.items():
+            # Tabla de GOLEADORES: quien solo asistió (0 goles) no entra.
+            if acc["goals"] <= 0:
+                continue
             player = _match_player(acc["name"], acc["team"], players_by_team)
             old = prev.get(nname)
             photo = (player.photo_url if player else "") or (old.photo_url if old else "")
@@ -440,7 +455,7 @@ class Command(BaseCommand):
                 rank=0,
                 name=(player.name if player else acc["name"]),
                 goals=acc["goals"],
-                assists=(old.assists if old else 0),
+                assists=acc["assists"],
                 appearances=(old.appearances if old else 0),
                 photo_url=photo or "",
                 api_player_id=(player.api_player_id if player else None),
