@@ -5,26 +5,26 @@ from rest_framework import status
 from openai import OpenAI
 from django.core.cache import cache
 from django.utils import timezone
-from datetime import timedelta
 from apps.products.models import Product
 from .models import RecommenderLog
 import os
 import json
 import random
 
-# Prefijo de la clave de caché de la frase del día.
-# Se versiona (sufijo) para invalidar el caché del día al cambiar el tipo de
-# frase: al desplegar con un prefijo nuevo, la frase de hoy se regenera sola.
+# Prefijo de la clave de caché de la frase.
+# Se versiona (sufijo) para invalidar el caché al cambiar el tipo de frase: al
+# desplegar con un prefijo nuevo, la frase actual se regenera sola.
 PHRASE_CACHE_PREFIX = "motivational_phrase_mundial"
 
+# La frase rota cada 30 minutos: cada franja usa un dato distinto del Mundial y
+# un producto distinto en el CTA, y se cachea para no llamar a la IA en cada
+# visita (a lo sumo una generación por franja con tráfico).
+PHRASE_SLOT_SECONDS = 30 * 60
 
-def _seconds_until_local_midnight():
-    """Segundos que faltan hasta la medianoche local (TTL de la frase del día)."""
-    now = timezone.localtime(timezone.now())
-    tomorrow = (now + timedelta(days=1)).replace(
-        hour=0, minute=0, second=0, microsecond=0
-    )
-    return max(60, int((tomorrow - now).total_seconds()))
+
+def _current_slot():
+    """Identificador de la franja de 30 min actual (global, alineado a epoch)."""
+    return int(timezone.now().timestamp()) // PHRASE_SLOT_SECONDS
 
 
 # Datos curados, reales y verificables de la historia de los Mundiales. La IA
@@ -65,12 +65,13 @@ DATOS_MUNDIAL = [
 ]
 
 
-def _generate_phrase():
+def _generate_phrase(seed):
     """
-    Genera la frase del día: toma un dato curado y verificado del Mundial
-    (rotado por día) y deja que OpenAI lo redacte con estilo colombiano y le
-    sume el CTA a un producto activo. La IA no inventa el hecho, solo lo cuenta.
-    Separada para poder cachear el resultado sin acoplar al request.
+    Genera la frase de la franja: toma un dato curado y verificado del Mundial
+    (rotado por ``seed``, la franja de 30 min) y deja que OpenAI lo redacte con
+    estilo colombiano y le sume el CTA a un producto activo. La IA no inventa el
+    hecho, solo lo cuenta. ``seed`` también baraja el producto del CTA, así cada
+    franja cambia de dato y de bebida.
     """
     api_key = os.getenv("OPENAI_API_KEY")
 
@@ -85,14 +86,14 @@ def _generate_phrase():
     mes = fecha_actual.strftime("%B")
     anio = fecha_actual.year
 
-    # Productos activos, barajados con una semilla fija del día: así el CTA no
-    # cae siempre en el mismo producto, pero se mantiene estable durante la
-    # jornada (la frase se cachea por día).
+    # Productos activos, barajados con la semilla de la franja: así el CTA no
+    # cae siempre en el mismo producto, pero se mantiene estable durante los
+    # 30 min (la frase se cachea por franja).
     active_products = list(
         Product.objects.filter(is_active=True, category__is_active=True)
         .select_related("category")
     )
-    random.Random(fecha_actual.timetuple().tm_yday).shuffle(active_products)
+    random.Random(seed).shuffle(active_products)
 
     products_by_category = {}
     for product in active_products:
@@ -103,10 +104,10 @@ def _generate_phrase():
         for category, products in products_by_category.items()
     )
 
-    # Dato del día (determinístico por día del año): la IA no inventa el hecho,
-    # solo redacta el que le pasamos. Rota a diario y, como se cachea por día,
-    # basta con que cambie cada jornada.
-    dato = DATOS_MUNDIAL[fecha_actual.timetuple().tm_yday % len(DATOS_MUNDIAL)]
+    # Dato de la franja (determinístico por ``seed``): la IA no inventa el
+    # hecho, solo redacta el que le pasamos. Rota cada 30 min recorriendo la
+    # lista, así a lo largo del día se ven datos distintos.
+    dato = DATOS_MUNDIAL[seed % len(DATOS_MUNDIAL)]
 
     prompt = f"""Hoy es {dia_semana} {dia_mes} de {mes} de {anio}.
 
@@ -146,21 +147,21 @@ Reglas:
 @permission_classes([AllowAny])
 def get_motivational_phrase(request):
     """
-    Devuelve la frase motivacional del día (dato curioso o frase, basada en la
-    fecha y los productos activos). Se genera con OpenAI UNA sola vez por día y
-    se cachea: el resto de visitas del día reciben la misma frase sin volver a
-    llamar a la IA. La clave incluye la fecha local, así que al cambiar el día
-    se regenera automáticamente.
+    Devuelve la frase de la franja actual (dato curioso del Mundial + CTA a un
+    producto activo). Se genera con OpenAI UNA sola vez por franja de 30 min y
+    se cachea: el resto de visitas de la franja reciben la misma frase sin
+    volver a llamar a la IA. La clave incluye la franja, así que cada 30 min
+    rota el dato (y el producto) automáticamente.
     """
-    fecha = timezone.localtime(timezone.now()).strftime("%Y-%m-%d")
-    cache_key = f"{PHRASE_CACHE_PREFIX}:{fecha}"
+    slot = _current_slot()
+    cache_key = f"{PHRASE_CACHE_PREFIX}:{slot}"
 
     cached = cache.get(cache_key)
     if cached is not None:
         return Response(cached, status=status.HTTP_200_OK)
 
     try:
-        result = _generate_phrase()
+        result = _generate_phrase(slot)
 
         if result is None:
             return Response(
@@ -168,8 +169,11 @@ def get_motivational_phrase(request):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-        # Solo cacheamos resultados válidos (un fallo de IA no debe quedar fijado).
-        cache.set(cache_key, result, timeout=_seconds_until_local_midnight())
+        # TTL hasta el fin de la franja, para que el cambio quede alineado a los
+        # bloques de 30 min. Solo cacheamos resultados válidos (un fallo de IA no
+        # debe quedar fijado).
+        ttl = int((slot + 1) * PHRASE_SLOT_SECONDS - timezone.now().timestamp())
+        cache.set(cache_key, result, timeout=max(60, ttl))
         return Response(result, status=status.HTTP_200_OK)
 
     except Exception as e:
