@@ -23,9 +23,11 @@ from .models import (
     Referral,
     Team,
     Tournament,
+    UserMission,
     UserScore,
 )
 from .scoring import (
+    _streak_stats,
     group_standings,
     recompute_all,
     recompute_referrals,
@@ -680,3 +682,81 @@ class PlayerTournamentStatsTests(TestCase):
         self.assertEqual(resp.data["name"], "Raúl Jiménez")
         self.assertEqual(resp.data["team"]["code"], "MEX")
         self.assertIn("tournament", resp.data)
+
+
+class StreakMissionTests(TestCase):
+    """La misión 'En racha' mide la racha VIVA (un fallo la baja a 0), con
+    latch: una vez alcanzado el objetivo queda cumplida para siempre."""
+
+    def setUp(self):
+        self.g = Group.objects.create(letter="A", name="Grupo A", display_order=1)
+        self.home = _make_team("HOM", self.g)
+        self.away = _make_team("AWY", self.g)
+        self.user = User.objects.create(username="su", email="su@x.com")
+        self.mission = Mission.objects.create(
+            code="streak5", title="En racha", desc="d", reward="+40 pts",
+            kind=Mission.Kind.STREAK, target=5, bonus_points=40, display_order=4,
+        )
+
+    def _played(self, n, home_score, away_score, pred_home, pred_away):
+        """Crea un partido finalizado (orden cronológico por número) y el
+        pronóstico del usuario, y devuelve el partido."""
+        match = Match.objects.create(
+            number=n, slug=f"m{n}",
+            kickoff=timezone.now() + timedelta(days=n),
+            home_team=self.home, away_team=self.away,
+            status=Match.Status.FINISHED, home_score=home_score, away_score=away_score,
+            stage=Match.Stage.GROUP,
+        )
+        Prediction.objects.create(
+            user=self.user, match=match,
+            home_score=pred_home, away_score=pred_away,
+        )
+        return match
+
+    def _progress(self):
+        return UserMission.objects.get(user=self.user, mission=self.mission)
+
+    def test_streak_stats_returns_best_and_live(self):
+        # Secuencia cronológica: acierto, acierto, fallo, acierto.
+        self._played(1, 1, 0, 2, 0)  # gana local (no exacto) -> acierto
+        self._played(2, 0, 0, 1, 1)  # empate (no exacto) -> acierto
+        self._played(3, 0, 1, 2, 0)  # gana visita, predijo local -> fallo
+        self._played(4, 3, 0, 1, 0)  # gana local -> acierto
+        recompute_all()
+        preds = list(
+            Prediction.objects.filter(user=self.user)
+            .select_related("match").order_by("match__kickoff")
+        )
+        # mejor racha = 2 (los dos primeros); racha viva = 1 (solo el último)
+        self.assertEqual(_streak_stats(preds), (2, 1))
+
+    def test_progress_reflects_live_streak_and_resets_on_miss(self):
+        # Acierta el primero (resultado, no exacto) y luego falla: la barra
+        # debe bajar a 0, no quedarse en el récord.
+        self._played(1, 2, 1, 3, 0)  # gana local (no exacto) -> acierto
+        self._played(2, 0, 2, 1, 0)  # gana visita, predijo local -> fallo
+        recompute_all()
+        um = self._progress()
+        self.assertEqual(um.progress, 0)
+        self.assertFalse(um.done)
+
+    def test_single_non_exact_outcome_counts(self):
+        self._played(1, 2, 1, 3, 0)  # gana local sin acertar marcador
+        recompute_all()
+        self.assertEqual(self._progress().progress, 1)
+
+    def test_done_latches_even_if_streak_breaks_later(self):
+        # Cinco aciertos seguidos completan la misión...
+        for n in range(1, 6):
+            self._played(n, 1, 0, 2, 0)  # gana local (no exacto) -> acierto
+        recompute_all()
+        um = self._progress()
+        self.assertTrue(um.done)
+        self.assertEqual(um.progress, 5)
+        # ...y aunque después falle, sigue cumplida y con la barra llena.
+        self._played(6, 0, 1, 2, 0)  # fallo
+        recompute_all()
+        um = self._progress()
+        self.assertTrue(um.done)
+        self.assertEqual(um.progress, 5)

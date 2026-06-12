@@ -157,7 +157,7 @@ MISSIONS = [
     ),
     (
         "streak5", "En racha",
-        "Acierta 5 resultados seguidos.",
+        "Acierta el resultado de 5 partidos seguidos (basta acertar quién gana, no el marcador exacto). Si fallas uno, la cuenta vuelve a 0.",
         "+40 pts", "streak", 5, 40, "", 4,
     ),
     (

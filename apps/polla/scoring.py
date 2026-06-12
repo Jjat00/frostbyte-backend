@@ -134,8 +134,16 @@ def recompute_awards():
     return len(picks)
 
 
-def _longest_streak(predictions_sorted):
-    """Mayor racha de resultados correctos consecutivos (sobre finalizados)."""
+def _streak_stats(predictions_sorted):
+    """(mejor racha, racha viva) de aciertos de resultado consecutivos.
+
+    Solo cuenta partidos finalizados, en orden cronologico. La *racha viva* es
+    la que termina en el ultimo partido finalizado: acertar el resultado
+    (ganador o empate, no hace falta marcador exacto) la incrementa y un fallo
+    la reinicia a 0. ``best`` es monotona (nunca baja entre recalculos) y sirve
+    de latch: si alguna vez se alcanzo el objetivo, la mision queda cumplida
+    aunque luego se rompa la racha.
+    """
     best = cur = 0
     for p in predictions_sorted:
         if not p.match.is_finished:
@@ -145,7 +153,7 @@ def _longest_streak(predictions_sorted):
             best = max(best, cur)
         else:
             cur = 0
-    return best
+    return best, cur
 
 
 def recompute_missions_for_user(user, missions=None):
@@ -179,7 +187,11 @@ def recompute_missions_for_user(user, missions=None):
             )
             progress = min(mission.target, progress)
         elif mission.kind == Mission.Kind.STREAK:
-            progress = min(mission.target, _longest_streak(preds))
+            best, current = _streak_stats(preds)
+            # La barra muestra la racha VIVA: un fallo la baja a 0. Pero si
+            # alguna vez se alcanzo el objetivo, queda cumplida para siempre
+            # (best es monotona), asi que en ese caso fijamos la barra al maximo.
+            progress = mission.target if best >= mission.target else current
         elif mission.kind == Mission.Kind.INVITE:
             # Social: no hay mecanismo automatico; se respeta el progreso actual.
             existing = UserMission.objects.filter(user=user, mission=mission).first()
