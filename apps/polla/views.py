@@ -760,10 +760,10 @@ class PlayerProfileView(APIView):
 
     Cualquiera puede abrirlo al tocar a una persona en la tabla. Muestra de
     dónde salieron sus puntos: desglose por fuente, misiones completadas y el
-    historial de sus pronósticos en partidos YA TERMINADOS con lo que sumó en
-    cada uno. Solo partidos finalizados: no revela pronósticos de partidos
-    pendientes (sería un spoiler/ventaja). No expone email ni otros datos
-    sensibles, a diferencia del detalle de admin.
+    historial de sus pronósticos en partidos EN VIVO o YA TERMINADOS con lo que
+    sumó en cada uno (en los de en vivo, el marcador parcial). Nunca revela
+    pronósticos de partidos sin empezar (UPCOMING): sería un spoiler/ventaja. No
+    expone email ni otros datos sensibles, a diferencia del detalle de admin.
     """
 
     permission_classes = [AllowAny]
@@ -781,13 +781,20 @@ class PlayerProfileView(APIView):
         if not score:
             return Response({"detail": "Participante no encontrado."}, status=404)
 
-        # Solo pronósticos de partidos ya finalizados, en el ORDEN REAL en que se
-        # jugaron (por kickoff), del más reciente al más antiguo. NO por N.º de
-        # partido: el número no es cronológico (p. ej. el #8 se jugó antes del
-        # #5), así que ordenar por kickoff hace que las rachas de aciertos
-        # consecutivos en la lista coincidan con partidos realmente seguidos.
+        # Pronósticos de partidos ya iniciados (EN VIVO) o terminados, en el ORDEN
+        # REAL en que se jugaron (por kickoff), del más reciente al más antiguo.
+        # Se incluye el partido en vivo porque al sonar el pitazo el pronóstico
+        # queda bloqueado (is_locked): mostrarlo ya no da ventaja y deja ver el
+        # marcador parcial. Se excluyen los UPCOMING para no revelar pronósticos
+        # de partidos sin empezar. NO se ordena por N.º de partido: el número no
+        # es cronológico (p. ej. el #8 se jugó antes del #5), así que ordenar por
+        # kickoff hace que las rachas de aciertos consecutivos coincidan con
+        # partidos realmente seguidos.
         preds = (
-            Prediction.objects.filter(user=user, match__status=Match.Status.FINISHED)
+            Prediction.objects.filter(
+                user=user,
+                match__status__in=[Match.Status.LIVE, Match.Status.FINISHED],
+            )
             .select_related("match", "match__home_team", "match__away_team")
             .order_by("-match__kickoff", "-match__number")
         )
@@ -802,6 +809,8 @@ class PlayerProfileView(APIView):
                 "away": _team_lite(p.match.away_team)
                 or {"code": None, "name": p.match.away_placeholder or "—", "iso2": None},
                 "kickoff": p.match.kickoff,
+                "status": p.match.status,
+                "minute": p.match.minute,
                 "real_home": p.match.home_score,
                 "real_away": p.match.away_score,
                 "pred_home": p.home_score,
