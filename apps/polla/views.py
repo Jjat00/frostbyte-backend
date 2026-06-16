@@ -722,7 +722,9 @@ class RankingView(APIView):
         for i, s in enumerate(ordered, start=1):
             row = {
                 "pos": i,
+                "user_id": s.user_id,
                 "name": _display_name(s.user),
+                "avatar": s.user.avatar_url or None,
                 "points": s.points,
                 "exact": s.exact_hits,
                 "is_you": s.user_id == me_id,
@@ -735,6 +737,109 @@ class RankingView(APIView):
         if my_row and any(r["is_you"] for r in rows):
             my_row = None
         return Response({"ranking": rows, "me": my_row, "total": len(ordered)})
+
+
+def _public_breakdown(score, pos):
+    """Desglose de puntos para el perfil público (sin datos sensibles)."""
+    return {
+        "pos": pos,
+        "points": score.points,
+        "match_points": score.match_points,
+        "mission_points": score.mission_points,
+        "award_points": score.award_points,
+        "bracket_points": score.bracket_points,
+        "referral_points": score.referral_points,
+        "exact_hits": score.exact_hits,
+        "correct_hits": score.correct_hits,
+        "predicted": score.predicted,
+    }
+
+
+class PlayerProfileView(APIView):
+    """Perfil público de un participante del ranking.
+
+    Cualquiera puede abrirlo al tocar a una persona en la tabla. Muestra de
+    dónde salieron sus puntos: desglose por fuente, misiones completadas y el
+    historial de sus pronósticos en partidos YA TERMINADOS con lo que sumó en
+    cada uno. Solo partidos finalizados: no revela pronósticos de partidos
+    pendientes (sería un spoiler/ventaja). No expone email ni otros datos
+    sensibles, a diferencia del detalle de admin.
+    """
+
+    permission_classes = [AllowAny]
+
+    def get(self, request, pk=None):
+        User = get_user_model()
+        user = User.objects.filter(pk=pk).first()
+        if not user:
+            return Response({"detail": "Participante no encontrado."}, status=404)
+
+        _ensure_customer_scores()
+        ordered_ids = list(_ranked_scores().values_list("user_id", flat=True))
+        pos = ordered_ids.index(user.id) + 1 if user.id in ordered_ids else 0
+        score = UserScore.objects.filter(user=user).first()
+        if not score:
+            return Response({"detail": "Participante no encontrado."}, status=404)
+
+        # Solo pronósticos de partidos ya finalizados, del más reciente al más
+        # antiguo, con lo que sumó cada uno.
+        preds = (
+            Prediction.objects.filter(user=user, match__status=Match.Status.FINISHED)
+            .select_related("match", "match__home_team", "match__away_team")
+            .order_by("-match__number")
+        )
+        predictions = [
+            {
+                "match_number": p.match.number,
+                "slug": p.match.slug,
+                "stage": p.match.stage,
+                "stage_display": p.match.get_stage_display(),
+                "home": _team_lite(p.match.home_team)
+                or {"code": None, "name": p.match.home_placeholder or "—", "iso2": None},
+                "away": _team_lite(p.match.away_team)
+                or {"code": None, "name": p.match.away_placeholder or "—", "iso2": None},
+                "kickoff": p.match.kickoff,
+                "real_home": p.match.home_score,
+                "real_away": p.match.away_score,
+                "pred_home": p.home_score,
+                "pred_away": p.away_score,
+                "points_earned": p.points_earned,
+                "is_exact": p.is_exact,
+                "is_correct_outcome": p.is_correct_outcome,
+            }
+            for p in preds
+        ]
+
+        # Misiones: completadas primero, luego por orden de exhibición.
+        missions = [
+            {
+                "code": um.mission.code,
+                "title": um.mission.title,
+                "desc": um.mission.desc,
+                "progress": um.progress,
+                "target": um.mission.target,
+                "done": um.done,
+                "bonus_points": um.mission.bonus_points,
+                "completed_at": um.completed_at,
+            }
+            for um in (
+                UserMission.objects.filter(user=user)
+                .select_related("mission")
+                .order_by("-done", "mission__display_order")
+            )
+        ]
+
+        return Response({
+            "user": {
+                "id": user.id,
+                "name": _display_name(user),
+                "avatar": user.avatar_url or None,
+            },
+            "score": _public_breakdown(score, pos),
+            "missions": missions,
+            "predictions": predictions,
+            "is_you": request.user.is_authenticated and request.user.id == user.id,
+        })
 
 
 # ── Misiones + stats ────────────────────────────────────────────────────---
