@@ -824,10 +824,29 @@ class PlayerProfileView(APIView):
             }
             for um in (
                 UserMission.objects.filter(user=user)
+                # Las misiones de invitar (INVITE) están desactivadas en toda la
+                # app: los referidos son una feature aparte con sus propios
+                # puntos (categoría "Referidos"). Excluirlas evita la
+                # incoherencia de ver "Trae la banda" en 0/1 con puntos de
+                # referidos ya sumados. Mismo criterio que email_reminders.
+                .exclude(mission__kind=Mission.Kind.INVITE)
                 .select_related("mission")
                 .order_by("-done", "mission__display_order")
             )
         ]
+
+        # Referidos: el mismo progreso que la tarjeta "Invita a tu banda" de la
+        # pestaña Misiones. Solo el avance público (cuántos amigos ya jugaron y
+        # los puntos que sumó); nunca el código de invitación, que es privado.
+        ref_qs = user.referrals_made.all()
+        ref_qualified = sum(1 for r in ref_qs if r.qualified)
+        referral = {
+            "invited": ref_qs.count(),
+            "qualified": ref_qualified,
+            "cap": REFERRAL_CAP,
+            "points_per": REFERRAL_POINTS_PER,
+            "points": min(ref_qualified, REFERRAL_CAP) * REFERRAL_POINTS_PER,
+        }
 
         return Response({
             "user": {
@@ -837,6 +856,7 @@ class PlayerProfileView(APIView):
             },
             "score": _public_breakdown(score, pos),
             "missions": missions,
+            "referral": referral,
             "predictions": predictions,
             "is_you": request.user.is_authenticated and request.user.id == user.id,
         })
