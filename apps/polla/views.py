@@ -781,12 +781,15 @@ class PlayerProfileView(APIView):
         if not score:
             return Response({"detail": "Participante no encontrado."}, status=404)
 
-        # Solo pronósticos de partidos ya finalizados, del más reciente al más
-        # antiguo, con lo que sumó cada uno.
+        # Solo pronósticos de partidos ya finalizados, en el ORDEN REAL en que se
+        # jugaron (por kickoff), del más reciente al más antiguo. NO por N.º de
+        # partido: el número no es cronológico (p. ej. el #8 se jugó antes del
+        # #5), así que ordenar por kickoff hace que las rachas de aciertos
+        # consecutivos en la lista coincidan con partidos realmente seguidos.
         preds = (
             Prediction.objects.filter(user=user, match__status=Match.Status.FINISHED)
             .select_related("match", "match__home_team", "match__away_team")
-            .order_by("-match__number")
+            .order_by("-match__kickoff", "-match__number")
         )
         predictions = [
             {
@@ -1104,10 +1107,12 @@ class PollaAdminViewSet(viewsets.ViewSet):
         pos = ordered_ids.index(user.id) + 1 if user.id in ordered_ids else 0
         score_obj = UserScore.objects.select_related("user").filter(user=user).first()
 
+        # Orden REAL en que se jugaron (por kickoff), no por N.º de partido, que
+        # no es cronológico: así las rachas de consecutivos son las reales.
         preds = (
             Prediction.objects.filter(user=user)
             .select_related("match", "match__home_team", "match__away_team")
-            .order_by("match__number")
+            .order_by("match__kickoff", "match__number")
         )
         predictions = [
             {
