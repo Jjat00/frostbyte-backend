@@ -91,10 +91,14 @@
           <!-- Recordatorio Colombia (recuadro sutil) -->
           <tr>
             <td style="padding:18px 28px 0 28px;">
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f0f9f4; border-left:3px solid #128a5e; border-radius:6px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:{% if colombia_today %}#fbf5e0{% else %}#f0f9f4{% endif %}; border-left:3px solid {% if colombia_today %}#d39e00{% else %}#128a5e{% endif %}; border-radius:6px;">
                 <tr>
                   <td style="padding:12px 16px;">
+                    {% if colombia_today %}
+                    <p style="margin:0; font-size:15px; line-height:1.6; color:#5a4500;"><strong>¡Hoy juega Colombia!</strong>{% if next_colombia %} {{ next_colombia.home }} vs {{ next_colombia.away }} a las {{ next_colombia.time }}.{% endif %} Si le aciertas al <strong>marcador exacto</strong> te ganas un granizado en Frostbyte.</p>
+                    {% else %}
                     <p style="margin:0; font-size:14px; line-height:1.6; color:#2f4a3e;">Los días que juega <strong>Colombia</strong>, si le aciertas al <strong>marcador exacto</strong> te ganas un granizado en Frostbyte.{% if next_colombia %}<br>Próximo: <strong>{{ next_colombia.home }} vs {{ next_colombia.away }}</strong> ({{ next_colombia.when }}).{% endif %}</p>
+                    {% endif %}
                   </td>
                 </tr>
               </table>

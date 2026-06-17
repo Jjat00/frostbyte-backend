@@ -47,9 +47,14 @@ def _fmt_dt(dt):
     """Fecha y hora en español, hora de Colombia (p.ej. 'Sáb 14 jun · 5:00 p. m.')."""
     loc = timezone.localtime(dt)
     dia = _DIAS[loc.weekday()].capitalize()[:3]
+    return f"{dia} {loc.day} {_MESES[loc.month - 1]} · {_fmt_time(dt)}"
+
+
+def _fmt_time(dt):
+    """Solo la hora en español, hora de Colombia (p.ej. '5:00 p. m.')."""
+    loc = timezone.localtime(dt)
     hora = loc.strftime("%I:%M %p").lstrip("0")
-    hora = hora.replace("AM", "a. m.").replace("PM", "p. m.")
-    return f"{dia} {loc.day} {_MESES[loc.month - 1]} · {hora}"
+    return hora.replace("AM", "a. m.").replace("PM", "p. m.")
 
 
 def _is_colombia(match):
@@ -66,6 +71,7 @@ def _match_row(match):
         "away": match.away_team.name if match.away_team else (match.away_placeholder or "?"),
         "away_code": match.away_team.code if match.away_team else "",
         "when": _fmt_dt(match.kickoff),
+        "time": _fmt_time(match.kickoff),
         "is_colombia": _is_colombia(match),
         "stage_label": match.get_stage_display(),
     }
@@ -132,6 +138,15 @@ def build_context(score, shared):
     colombia_upcoming = shared["colombia_upcoming"]
     next_colombia = colombia_upcoming[0] if colombia_upcoming else None
     colombia_pending = any(m.id not in predicted_ids for m in colombia_upcoming)
+    # ¿El próximo partido de Colombia es HOY? (misma fecha en hora de Colombia
+    # respecto al momento del envío). Hace que el correo diga "hoy juega Colombia".
+    today = timezone.localtime(shared["now"]).date()
+    colombia_today = bool(
+        next_colombia and timezone.localtime(next_colombia.kickoff).date() == today
+    )
+    colombia_today_pending = bool(
+        colombia_today and next_colombia.id not in predicted_ids
+    )
 
     done_mission_ids = set(
         UserMission.objects.filter(user=user, done=True).values_list("mission_id", flat=True)
@@ -150,6 +165,8 @@ def build_context(score, shared):
         "pending_extra": max(0, len(pending) - MAX_MATCHES_SHOWN),
         "next_colombia": _match_row(next_colombia) if next_colombia else None,
         "colombia_pending": colombia_pending,
+        "colombia_today": colombia_today,
+        "colombia_today_pending": colombia_today_pending,
         "pending_missions": [m.title for m in pending_missions[:MAX_MISSIONS_SHOWN]],
         "pending_missions_count": len(pending_missions),
         "polla_url": settings.POLLA_PUBLIC_URL,
@@ -164,7 +181,13 @@ def subject_for(ctx):
     # Asuntos personales y sin palabras "gancho" (gratis, premio, $) para evitar
     # que Gmail lo mande a Promociones; suben la chance de llegar a Principal.
     name = ctx["name"]
-    if ctx["colombia_pending"]:
+    if ctx["colombia_today"]:
+        core = (
+            "hoy juega Colombia, no te quedes sin pronóstico"
+            if ctx["colombia_today_pending"]
+            else "hoy juega Colombia"
+        )
+    elif ctx["colombia_pending"]:
         core = "no olvides tu pronóstico del partido de Colombia"
     elif ctx["pending_count"] > 0:
         n = ctx["pending_count"]
