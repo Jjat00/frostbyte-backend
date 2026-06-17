@@ -760,3 +760,117 @@ class StreakMissionTests(TestCase):
         um = self._progress()
         self.assertTrue(um.done)
         self.assertEqual(um.progress, 5)
+
+
+from .models import GranizadoReward  # noqa: E402
+from .scoring import (  # noqa: E402
+    issue_granizado_rewards,
+    recompute_predictions,
+)
+
+
+class GranizadoRewardTests(TestCase):
+    """Granizado por acertar el marcador EXACTO de un partido de Colombia (24 h)."""
+
+    def setUp(self):
+        self.col = _make_team("COL")
+        self.opp = _make_team("BRA")
+        self.user = User.objects.create_user(
+            username="g1", password="x", role=User.Role.CUSTOMER, email="g1@x.com"
+        )
+
+    def _won_exact(self, number, hs, away_score, home=None, away=None):
+        """Partido finalizado + pronóstico exacto del usuario; recalcula y emite."""
+        m = _make_match(
+            number, home or self.col, away or self.opp,
+            status=Match.Status.FINISHED, home_score=hs, away_score=away_score,
+        )
+        Prediction.objects.create(user=self.user, match=m, home_score=hs, away_score=away_score)
+        recompute_predictions()
+        issue_granizado_rewards()
+        return m
+
+    def test_exact_colombia_issues_reward(self):
+        m = _make_match(1, self.col, self.opp, status=Match.Status.FINISHED, home_score=2, away_score=1)
+        Prediction.objects.create(user=self.user, match=m, home_score=2, away_score=1)
+        recompute_predictions()
+        self.assertEqual(issue_granizado_rewards(), 1)
+        r = GranizadoReward.objects.get(user=self.user, match=m)
+        self.assertEqual(r.status, "pending")
+        self.assertTrue(r.code.startswith("GRZ-"))
+        self.assertGreater(r.expires_at, timezone.now() + timedelta(hours=23))
+
+    def test_correct_outcome_but_not_exact_gives_nothing(self):
+        m = _make_match(2, self.col, self.opp, status=Match.Status.FINISHED, home_score=2, away_score=1)
+        Prediction.objects.create(user=self.user, match=m, home_score=1, away_score=0)  # gana local, no exacto
+        recompute_predictions()
+        self.assertEqual(issue_granizado_rewards(), 0)
+        self.assertFalse(GranizadoReward.objects.filter(user=self.user).exists())
+
+    def test_exact_but_not_colombia_gives_nothing(self):
+        arg = _make_team("ARG")
+        m = _make_match(3, arg, self.opp, status=Match.Status.FINISHED, home_score=2, away_score=1)
+        Prediction.objects.create(user=self.user, match=m, home_score=2, away_score=1)
+        recompute_predictions()
+        self.assertEqual(issue_granizado_rewards(), 0)
+
+    def test_unfinished_match_gives_nothing(self):
+        m = _make_match(4, self.col, self.opp, status=Match.Status.UPCOMING)
+        Prediction.objects.create(user=self.user, match=m, home_score=2, away_score=1)
+        recompute_predictions()
+        self.assertEqual(issue_granizado_rewards(), 0)
+
+    def test_idempotent(self):
+        self._won_exact(5, 0, 0)
+        self.assertEqual(issue_granizado_rewards(), 0)  # segunda corrida no duplica
+        self.assertEqual(GranizadoReward.objects.filter(user=self.user).count(), 1)
+
+    def test_redeem_marks_delivered(self):
+        m = self._won_exact(6, 3, 1)
+        r = GranizadoReward.objects.get(user=self.user, match=m)
+        client = APIClient()
+        client.force_authenticate(self.user)
+        resp = client.post(f"/api/v1/polla/granizado/{r.id}/redeem/")
+        self.assertEqual(resp.status_code, 200)
+        r.refresh_from_db()
+        self.assertTrue(r.redeemed)
+        self.assertEqual(r.status, "redeemed")
+        # Un segundo intento ya no procede.
+        self.assertEqual(client.post(f"/api/v1/polla/granizado/{r.id}/redeem/").status_code, 400)
+
+    def test_redeem_after_expiry_fails(self):
+        m = self._won_exact(7, 1, 0)
+        r = GranizadoReward.objects.get(user=self.user, match=m)
+        r.expires_at = timezone.now() - timedelta(minutes=1)
+        r.save(update_fields=["expires_at"])
+        self.assertEqual(r.status, "expired")
+        client = APIClient()
+        client.force_authenticate(self.user)
+        resp = client.post(f"/api/v1/polla/granizado/{r.id}/redeem/")
+        self.assertEqual(resp.status_code, 400)
+        r.refresh_from_db()
+        self.assertFalse(r.redeemed)
+
+    def test_other_user_cannot_redeem(self):
+        m = self._won_exact(8, 2, 2)
+        r = GranizadoReward.objects.get(user=self.user, match=m)
+        other = User.objects.create_user(
+            username="g2", password="x", role=User.Role.CUSTOMER, email="g2@x.com"
+        )
+        client = APIClient()
+        client.force_authenticate(other)
+        resp = client.post(f"/api/v1/polla/granizado/{r.id}/redeem/")
+        self.assertEqual(resp.status_code, 404)
+        r.refresh_from_db()
+        self.assertFalse(r.redeemed)
+
+    def test_list_endpoint(self):
+        self._won_exact(9, 1, 1)
+        client = APIClient()
+        client.force_authenticate(self.user)
+        resp = client.get("/api/v1/polla/granizado/")
+        self.assertEqual(resp.status_code, 200)
+        rewards = resp.json()["rewards"]
+        self.assertEqual(len(rewards), 1)
+        self.assertEqual(rewards[0]["status"], "pending")
+        self.assertIn("vs", rewards[0]["match"])

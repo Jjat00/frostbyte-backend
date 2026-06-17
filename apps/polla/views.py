@@ -23,6 +23,7 @@ from .models import (
     Award,
     AwardPick,
     BracketPick,
+    GranizadoReward,
     Group,
     Match,
     Mission,
@@ -916,6 +917,65 @@ def _my_stats(user):
         "exact_hits": s.exact_hits, "correct_hits": s.correct_hits,
         "predicted": s.predicted,
     }
+
+
+# ── Granizado gratis (acierto exacto de Colombia, 24 h) ─────────────────────
+def _granizado_dict(reward):
+    m = reward.match
+    home = m.home_team.name if m.home_team else (m.home_placeholder or "?")
+    away = m.away_team.name if m.away_team else (m.away_placeholder or "?")
+    return {
+        "id": reward.id,
+        "code": reward.code,
+        "status": reward.status,  # pending | redeemed | expired
+        "match": f"{home} vs {away}",
+        "match_number": m.number,
+        "issued_at": reward.issued_at,
+        "expires_at": reward.expires_at,
+        "redeemed_at": reward.redeemed_at,
+    }
+
+
+class GranizadoView(APIView):
+    """Granizados ganados por el usuario (para mostrar/reclamar en la Polla)."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        rewards = (
+            GranizadoReward.objects.filter(user=request.user)
+            .select_related("match", "match__home_team", "match__away_team")
+        )
+        return Response({"rewards": [_granizado_dict(r) for r in rewards]})
+
+
+class GranizadoRedeemView(APIView):
+    """Marca un granizado como entregado (el personal lo toca en el mostrador)."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        reward = (
+            GranizadoReward.objects.filter(pk=pk, user=request.user)
+            .select_related("match", "match__home_team", "match__away_team")
+            .first()
+        )
+        if not reward:
+            return Response({"detail": "Granizado no encontrado."}, status=status.HTTP_404_NOT_FOUND)
+        if reward.redeemed:
+            return Response(
+                {"detail": "Este granizado ya fue entregado.", "reward": _granizado_dict(reward)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if reward.is_expired:
+            return Response(
+                {"detail": "El plazo de 24 horas ya venció.", "reward": _granizado_dict(reward)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        reward.redeemed = True
+        reward.redeemed_at = timezone.now()
+        reward.save(update_fields=["redeemed", "redeemed_at"])
+        return Response({"reward": _granizado_dict(reward)})
 
 
 # ── Referidos (invitar amigos) ──────────────────────────────────────────────

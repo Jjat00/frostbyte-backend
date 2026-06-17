@@ -4,6 +4,7 @@ from .models import (
     Award,
     AwardPick,
     BracketPick,
+    GranizadoReward,
     Group,
     Match,
     Mission,
@@ -123,3 +124,25 @@ class ReferralAdmin(admin.ModelAdmin):
         "invitee__username", "invitee__email",
     ]
     raw_id_fields = ["inviter", "invitee"]
+
+
+@admin.register(GranizadoReward)
+class GranizadoRewardAdmin(admin.ModelAdmin):
+    list_display = ["code", "user", "match", "status", "issued_at", "expires_at", "redeemed", "redeemed_at"]
+    list_filter = ["redeemed", "match"]
+    search_fields = ["code", "user__username", "user__email"]
+    raw_id_fields = ["user", "match"]
+    readonly_fields = ["issued_at", "status"]
+    actions = ["marcar_entregado"]
+
+    @admin.display(description="Estado")
+    def status(self, obj):
+        return obj.status
+
+    @admin.action(description="Marcar como entregado")
+    def marcar_entregado(self, request, queryset):
+        from django.utils import timezone
+        updated = queryset.filter(redeemed=False).update(
+            redeemed=True, redeemed_at=timezone.now()
+        )
+        self.message_user(request, f"{updated} granizado(s) marcados como entregados.")

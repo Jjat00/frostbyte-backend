@@ -11,7 +11,10 @@ from django.db.models import Count, Q, Sum
 from django.utils import timezone
 
 from .bracket import advance_real_bracket, recompute_bracket
+from datetime import timedelta
+
 from .models import (
+    GRANIZADO_WINDOW_HOURS,
     POINTS_EXACT,
     POINTS_NONE,
     POINTS_OUTCOME,
@@ -20,6 +23,7 @@ from .models import (
     Award,
     AwardPick,
     BracketPick,
+    GranizadoReward,
     Match,
     Mission,
     Prediction,
@@ -28,6 +32,8 @@ from .models import (
     UserScore,
     outcome_of,
 )
+
+COLOMBIA_CODE = "COL"
 
 User = get_user_model()
 
@@ -114,6 +120,30 @@ def recompute_predictions():
             batch_size=500,
         )
     return len(preds)
+
+
+def issue_granizado_rewards():
+    """Emite el granizado a quienes acertaron el marcador EXACTO de Colombia.
+
+    Solo para partidos de Colombia ya finalizados. Idempotente: un (usuario,
+    partido) genera a lo sumo un premio. La ventana de 24 h se cuenta desde la
+    emisión, que ocurre al detectar el partido finalizado en el sync (≈ fin del
+    partido). Devuelve cuántos premios nuevos se crearon.
+    """
+    col_matches = Match.objects.filter(status=Match.Status.FINISHED).filter(
+        Q(home_team__code=COLOMBIA_CODE) | Q(away_team__code=COLOMBIA_CODE)
+    )
+    created = 0
+    for m in col_matches:
+        winners = Prediction.objects.filter(match=m, is_exact=True, scored=True)
+        for p in winners:
+            _, was_created = GranizadoReward.objects.get_or_create(
+                user_id=p.user_id,
+                match=m,
+                defaults={"expires_at": timezone.now() + timedelta(hours=GRANIZADO_WINDOW_HOURS)},
+            )
+            created += int(was_created)
+    return created
 
 
 def recompute_awards():
@@ -310,6 +340,7 @@ def recompute_scores():
 def recompute_all():
     """Recalcula todo: pronosticos, menciones, bracket, misiones y ranking."""
     recompute_predictions()
+    issue_granizado_rewards()  # premia aciertos exactos de Colombia (24 h)
     recompute_awards()
     advance_real_bracket()  # arma la llave real con los clasificados de grupos
     recompute_bracket()

@@ -40,6 +40,22 @@ def generate_referral_code():
     return get_random_string(REFERRAL_CODE_LEN, allowed_chars=REFERRAL_ALPHABET)
 
 
+# ── Granizado gratis (acertar el marcador exacto de Colombia) ─────────────
+# Ventana para reclamarlo, contada desde que el partido termina (se emite el
+# premio al detectar el partido finalizado en el sync).
+GRANIZADO_WINDOW_HOURS = 24
+GRANIZADO_CODE_LEN = 4
+
+
+def generate_granizado_code():
+    """Código corto y legible para reclamar un granizado, p.ej. 'GRZ-7K3Q'.
+
+    No garantiza unicidad; la constraint ``unique`` de la BD es el árbitro y
+    ``GranizadoReward.save`` reintenta ante colisiones.
+    """
+    return "GRZ-" + get_random_string(GRANIZADO_CODE_LEN, allowed_chars=REFERRAL_ALPHABET)
+
+
 def outcome_of(home, away):
     """'home' | 'away' | 'draw' a partir de un marcador. None si falta dato."""
     if home is None or away is None:
@@ -586,3 +602,64 @@ class Referral(models.Model):
     def __str__(self):
         estado = "calificada" if self.qualified else "pendiente"
         return f"{self.inviter} → {self.invitee} ({estado})"
+
+
+class GranizadoReward(models.Model):
+    """Granizado gratis por acertar el marcador EXACTO de un partido de Colombia.
+
+    Se emite automáticamente cuando el partido termina y el pronóstico del
+    usuario fue exacto. Se puede reclamar dentro de una ventana de 24 h
+    (``expires_at``); el personal de Frostbyte lo marca como entregado desde la
+    pantalla del cliente en la Polla. Un (usuario, partido) genera un solo premio.
+    """
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="granizado_rewards"
+    )
+    match = models.ForeignKey(
+        Match, on_delete=models.CASCADE, related_name="granizado_rewards"
+    )
+    code = models.CharField(
+        max_length=12, unique=True, null=True, blank=True, db_index=True,
+        verbose_name="Código",
+    )
+    issued_at = models.DateTimeField(auto_now_add=True, verbose_name="Emitido")
+    expires_at = models.DateTimeField(verbose_name="Vence")
+    redeemed = models.BooleanField(default=False, verbose_name="Entregado")
+    redeemed_at = models.DateTimeField(null=True, blank=True, verbose_name="Entregado el")
+
+    class Meta:
+        verbose_name = "Granizado ganado"
+        verbose_name_plural = "Granizados ganados"
+        ordering = ["-issued_at"]
+        unique_together = [("user", "match")]
+
+    def __str__(self):
+        return f"{self.user} · granizado #{self.match.number} ({self.status})"
+
+    @property
+    def is_expired(self):
+        return not self.redeemed and timezone.now() >= self.expires_at
+
+    @property
+    def status(self):
+        """'redeemed' | 'expired' | 'pending'."""
+        if self.redeemed:
+            return "redeemed"
+        if timezone.now() >= self.expires_at:
+            return "expired"
+        return "pending"
+
+    def save(self, *args, **kwargs):
+        """Autogenera un ``code`` único si falta, reintentando colisiones."""
+        if self.code:
+            return super().save(*args, **kwargs)
+        for _ in range(5):
+            self.code = generate_granizado_code()
+            try:
+                return super().save(*args, **kwargs)
+            except IntegrityError:
+                self.code = None
+                continue
+        self.code = generate_granizado_code()
+        return super().save(*args, **kwargs)

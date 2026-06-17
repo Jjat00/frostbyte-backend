@@ -7,6 +7,8 @@ from .views import (
     AwardsView,
     BracketPickView,
     BracketView,
+    GranizadoRedeemView,
+    GranizadoView,
     GroupsView,
     MatchViewSet,
     MissionsView,
@@ -44,6 +46,8 @@ urlpatterns = [
     path("participants/<int:pk>/", PlayerProfileView.as_view(), name="polla-participant"),
     path("missions/", MissionsView.as_view(), name="polla-missions"),
     path("me/stats/", MyStatsView.as_view(), name="polla-my-stats"),
+    path("granizado/", GranizadoView.as_view(), name="polla-granizado"),
+    path("granizado/<int:pk>/redeem/", GranizadoRedeemView.as_view(), name="polla-granizado-redeem"),
     path("referral/", ReferralView.as_view(), name="polla-referral"),
     path("referral/claim/", ReferralClaimView.as_view(), name="polla-referral-claim"),
     path(
