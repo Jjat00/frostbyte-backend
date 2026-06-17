@@ -16,7 +16,7 @@ class UserAdmin(BaseUserAdmin):
         "is_active",
         "created_at",
     ]
-    list_filter = ["role", "provider", "is_active", "is_staff", "created_at"]
+    list_filter = ["role", "provider", "is_active", "is_staff", "email_opt_out", "created_at"]
     search_fields = ["username", "email", "first_name", "last_name", "google_sub"]
     ordering = ["-created_at"]
     readonly_fields = ["provider", "google_sub", "avatar_url"]
@@ -24,6 +24,7 @@ class UserAdmin(BaseUserAdmin):
     fieldsets = BaseUserAdmin.fieldsets + (
         ("Información adicional", {"fields": ("role", "phone")}),
         ("Cuenta externa", {"fields": ("provider", "google_sub", "avatar_url")}),
+        ("Correos", {"fields": ("email_opt_out",)}),
     )
 
     add_fieldsets = BaseUserAdmin.add_fieldsets + (

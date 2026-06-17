@@ -273,3 +273,19 @@ API_FOOTBALL_KEY = os.getenv('API_FOOTBALL_KEY', '')
 API_FOOTBALL_LEAGUE_ID = int(os.getenv('API_FOOTBALL_LEAGUE_ID', '1'))  # 1 = FIFA World Cup
 API_FOOTBALL_SEASON = int(os.getenv('API_FOOTBALL_SEASON', '2026'))
 API_FOOTBALL_BASE_URL = os.getenv('API_FOOTBALL_BASE_URL', 'https://v3.football.api-sports.io')
+
+# Correo transaccional/recordatorios de la Polla (Resend)
+# -------------------------------------------------------------------------
+# Resend exige un dominio propio verificado (SPF/DKIM/DMARC) para que los
+# correos NO caigan en spam. Enviamos desde el dominio (frostbyte.com) y
+# dejamos Reply-To al Gmail de Frostbyte para que las respuestas lleguen ahí.
+# El management command `polla_email_reminder` usa estas variables.
+RESEND_API_KEY = os.getenv('RESEND_API_KEY', '')
+POLLA_EMAIL_FROM = os.getenv('POLLA_EMAIL_FROM', 'Frostbyte Polla <polla@frostbyte.com.co>')
+POLLA_EMAIL_REPLY_TO = os.getenv('POLLA_EMAIL_REPLY_TO', 'frostbyte.col@gmail.com')
+# URL pública de la Polla (botón del correo) y del backend (enlace de baja).
+POLLA_PUBLIC_URL = os.getenv('POLLA_PUBLIC_URL', 'https://frostbyte.com.co/polla-mundial')
+BACKEND_PUBLIC_URL = os.getenv(
+    'BACKEND_PUBLIC_URL', 'https://frostbyte-backend-production.up.railway.app'
+)
+SITE_URL = os.getenv('SITE_URL', 'https://frostbyte.com.co')

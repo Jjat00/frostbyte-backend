@@ -1,6 +1,7 @@
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
+from .email_views import email_unsubscribe
 from .views import (
     AwardPickView,
     AwardsView,
@@ -45,5 +46,10 @@ urlpatterns = [
     path("me/stats/", MyStatsView.as_view(), name="polla-my-stats"),
     path("referral/", ReferralView.as_view(), name="polla-referral"),
     path("referral/claim/", ReferralClaimView.as_view(), name="polla-referral-claim"),
+    path(
+        "email/unsubscribe/<str:token>/",
+        email_unsubscribe,
+        name="polla-email-unsubscribe",
+    ),
     path("", include(router.urls)),
 ]
