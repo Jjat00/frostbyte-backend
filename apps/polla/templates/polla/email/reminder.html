@@ -15,12 +15,7 @@
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#eef1f4;">
     <tr>
       <td align="center" style="padding:24px 12px;">
-        <table role="presentation" width="560" cellpadding="0" cellspacing="0" style="width:100%; max-width:560px; background-color:#ffffff; border:1px solid #e2e7ec; border-radius:14px; overflow:hidden;">
-
-          <!-- Acento superior -->
-          <tr>
-            <td style="height:4px; background-color:#128a5e; background-image:linear-gradient(90deg,#128a5e,#f2c53d);">&nbsp;</td>
-          </tr>
+        <table role="presentation" width="560" cellpadding="0" cellspacing="0" style="width:100%; max-width:560px; background-color:#ffffff; border-radius:14px; overflow:hidden;">
 
           <!-- Encabezado de marca -->
           <tr>
@@ -41,9 +36,9 @@
           <!-- Tarjeta de puntaje -->
           <tr>
             <td style="padding:16px 28px 0 28px;">
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f7f9; border:1px solid #e2e8ee; border-radius:12px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f7f9; border-radius:12px;">
                 <tr>
-                  <td width="50%" style="padding:14px 18px; border-right:1px solid #e2e8ee;">
+                  <td width="50%" style="padding:14px 18px;">
                     <p style="margin:0; font-size:11px; letter-spacing:1px; text-transform:uppercase; color:#6b7884; font-weight:700;">Tus puntos</p>
                     <p style="margin:3px 0 0 0; font-size:26px; font-weight:900; color:#128a5e;">{{ points }}</p>
                   </td>
@@ -67,6 +62,25 @@
             </td>
           </tr>
 
+          <!-- Partidos de hoy -->
+          {% if today_count %}
+          <tr>
+            <td style="padding:18px 28px 0 28px;">
+              <p style="margin:0 0 8px 0; font-size:11px; letter-spacing:1px; text-transform:uppercase; color:#6b7884; font-weight:700;">Hoy se juega · {{ today_label }}</p>
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f7f9; border-radius:12px;">
+                {% for m in today_matches %}
+                <tr>
+                  <td style="padding:10px 16px; font-size:14px; color:{% if m.is_colombia %}#a8780a{% else %}#1b2430{% endif %}; font-weight:{% if m.is_colombia %}700{% else %}400{% endif %};">
+                    {{ m.home }} <span style="color:#9aa7b3; font-weight:400;">vs</span> {{ m.away }} <span style="color:#6b7884; font-weight:400;">— {{ m.time }}</span>
+                  </td>
+                </tr>
+                {% endfor %}
+              </table>
+              {% if today_pending_count %}<p style="margin:8px 0 0 0; font-size:13px; color:#a8780a;"><strong>Te falta{{ today_pending_count|pluralize }} pronosticar {{ today_pending_count }} de hoy.</strong> Hazlo antes de que empiecen.</p>{% else %}<p style="margin:8px 0 0 0; font-size:13px; color:#128a5e;">Ya tienes pronosticados todos los de hoy. ¡Suerte!</p>{% endif %}
+            </td>
+          </tr>
+          {% endif %}
+
           <!-- Partidos por pronosticar -->
           <tr>
             <td style="padding:18px 28px 0 28px;">
@@ -75,7 +89,7 @@
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
                 {% for m in pending %}
                 <tr>
-                  <td style="padding:8px 0; border-bottom:1px solid #eef1f4; font-size:14px; color:{% if m.is_colombia %}#a8780a{% else %}#1b2430{% endif %};">
+                  <td style="padding:8px 0; font-size:14px; color:{% if m.is_colombia %}#a8780a{% else %}#1b2430{% endif %};">
                     {{ m.home }} <span style="color:#9aa7b3;">vs</span> {{ m.away }} <span style="color:#6b7884;">— {{ m.when }}</span>
                   </td>
                 </tr>
@@ -91,7 +105,7 @@
           <!-- Recordatorio Colombia (recuadro sutil) -->
           <tr>
             <td style="padding:18px 28px 0 28px;">
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:{% if colombia_today %}#fbf5e0{% else %}#f0f9f4{% endif %}; border-left:3px solid {% if colombia_today %}#d39e00{% else %}#128a5e{% endif %}; border-radius:6px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:{% if colombia_today %}#fbf5e0{% else %}#f0f9f4{% endif %}; border-radius:8px;">
                 <tr>
                   <td style="padding:12px 16px;">
                     {% if colombia_today %}
@@ -129,7 +143,7 @@
 
           <!-- Pie -->
           <tr>
-            <td style="padding:20px 28px 24px 28px; border-top:1px solid #eef1f4;">
+            <td style="padding:20px 28px 24px 28px;">
               <p style="margin:0; font-size:12px; line-height:1.6; color:#94a0ab;">
                 Frostbyte · Cumbal, Nariño. Puedes responder a este correo (<a href="mailto:{{ reply_to }}" style="color:#6b7884;">{{ reply_to }}</a>).<br>
                 Si no quieres más recordatorios, <a href="{{ unsub_url }}" target="_blank" style="color:#6b7884;">date de baja aquí</a>.

@@ -5,7 +5,11 @@
 Un recordatorio para que no se te pasen los próximos partidos del Mundial.
 
 Llevas {{ points }} punto(s){% if position %} y vas en el puesto #{{ position }} de {{ total }}{% endif %}.{% if exact_hits %} Marcadores exactos: {{ exact_hits }}.{% endif %}
-
+{% if today_count %}
+Hoy se juega ({{ today_label }}):
+{% for m in today_matches %}  - {{ m.home }} vs {{ m.away }} ({{ m.time }}){% if m.is_colombia %} [COLOMBIA]{% endif %}
+{% endfor %}{% if today_pending_count %}  Te faltan {{ today_pending_count }} de hoy por pronosticar.
+{% endif %}{% endif %}
 {% if pending_count %}Te faltan {{ pending_count }} por pronosticar. Los próximos:
 {% for m in pending %}  - {{ m.home }} vs {{ m.away }} ({{ m.when }})
 {% endfor %}{% if pending_extra %}  ...y {{ pending_extra }} más en la app.

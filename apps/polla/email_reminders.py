@@ -25,9 +25,12 @@ COLOMBIA_CODE = "COL"
 UNSUB_SALT = "polla-email-unsub"
 MAX_MATCHES_SHOWN = 4
 MAX_MISSIONS_SHOWN = 5
+MAX_TODAY_SHOWN = 8
 
 _DIAS = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
 _MESES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"]
+_MESES_LARGOS = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
+                 "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
@@ -55,6 +58,12 @@ def _fmt_time(dt):
     loc = timezone.localtime(dt)
     hora = loc.strftime("%I:%M %p").lstrip("0")
     return hora.replace("AM", "a. m.").replace("PM", "p. m.")
+
+
+def _fmt_today(dt):
+    """Etiqueta de la fecha de hoy en español (p.ej. 'martes 23 de junio')."""
+    loc = timezone.localtime(dt)
+    return f"{_DIAS[loc.weekday()]} {loc.day} de {_MESES_LARGOS[loc.month - 1]}"
 
 
 def _is_colombia(match):
@@ -101,6 +110,10 @@ def gather():
         .order_by("kickoff")
     )
     colombia_upcoming = [m for m in upcoming if _is_colombia(m)]
+    # Partidos que se juegan HOY (en hora de Colombia), para recordarlos a todos
+    # aunque ya estén pronosticados.
+    today = timezone.localtime(now).date()
+    today_matches = [m for m in upcoming if timezone.localtime(m.kickoff).date() == today]
     # Misiones que se completan pronosticando (la de invitar es social aparte).
     missions = list(Mission.objects.exclude(kind=Mission.Kind.INVITE))
     total = UserScore.objects.count()
@@ -108,6 +121,8 @@ def gather():
         "now": now,
         "upcoming": upcoming,
         "colombia_upcoming": colombia_upcoming,
+        "today": today,
+        "today_matches": today_matches,
         "missions": missions,
         "total": total,
     }
@@ -138,9 +153,18 @@ def build_context(score, shared):
     colombia_upcoming = shared["colombia_upcoming"]
     next_colombia = colombia_upcoming[0] if colombia_upcoming else None
     colombia_pending = any(m.id not in predicted_ids for m in colombia_upcoming)
+    # Partidos de hoy (compartidos), con marca de si este usuario ya los pronosticó.
+    today = shared["today"]
+    today_rows = []
+    today_pending_count = 0
+    for m in shared["today_matches"][:MAX_TODAY_SHOWN]:
+        row = _match_row(m)
+        row["is_predicted"] = m.id in predicted_ids
+        if not row["is_predicted"]:
+            today_pending_count += 1
+        today_rows.append(row)
     # ¿El próximo partido de Colombia es HOY? (misma fecha en hora de Colombia
     # respecto al momento del envío). Hace que el correo diga "hoy juega Colombia".
-    today = timezone.localtime(shared["now"]).date()
     colombia_today = bool(
         next_colombia and timezone.localtime(next_colombia.kickoff).date() == today
     )
@@ -163,6 +187,10 @@ def build_context(score, shared):
         "pending": [_match_row(m) for m in pending[:MAX_MATCHES_SHOWN]],
         "pending_count": len(pending),
         "pending_extra": max(0, len(pending) - MAX_MATCHES_SHOWN),
+        "today_matches": today_rows,
+        "today_count": len(today_rows),
+        "today_pending_count": today_pending_count,
+        "today_label": _fmt_today(shared["now"]),
         "next_colombia": _match_row(next_colombia) if next_colombia else None,
         "colombia_pending": colombia_pending,
         "colombia_today": colombia_today,
