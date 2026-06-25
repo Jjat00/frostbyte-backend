@@ -37,7 +37,7 @@ from .models import (
     UserScore,
     outcome_of,
 )
-from .scoring import group_standings, recompute_missions_for_user, recompute_scores
+from .scoring import group_standings, recompute_missions_for_user, recompute_scores, stage_points
 from .serializers import (
     AwardSerializer,
     GroupSerializer,
@@ -584,8 +584,10 @@ def _bracket_payload(user):
         pick = info.get("pick")
         pred = preds.get(m.id)
         bp = bracket_picks.get(m.id)
+        o_pts, e_pts = stage_points(m.stage)
         by_stage.setdefault(m.stage, []).append({
             "slug": m.slug, "number": m.number, "stage": m.stage,
+            "points": {"outcome": o_pts, "exact": e_pts},
             "round_label": m.round_label, "kickoff": m.kickoff,
             "venue_city": m.venue_city, "venue_stadium": m.venue_stadium,
             "status": m.status, "minute": m.minute,
@@ -608,19 +610,17 @@ def _bracket_payload(user):
             "is_locked": m.is_locked,
         })
 
+    # El campeon es el ganador REAL de la final (cuando ya se jugo).
     champion = None
-    final_number = next(
-        (m.number for m in matches if m.stage == Match.Stage.FINAL), None
-    )
-    if final_number is not None:
-        fi = resolved.get(final_number) or {}
-        champion = _team_lite(fi.get("pick"))
+    final_match = next((m for m in matches if m.stage == Match.Stage.FINAL), None)
+    if final_match is not None:
+        champion = _team_lite(bracket_logic.real_winner(final_match))
 
     rounds = [
         {
             "stage": st,
             "label": stage_label.get(st, st),
-            "points": bracket_logic.BRACKET_POINTS.get(st, 0),
+            "points": {"outcome": stage_points(st)[0], "exact": stage_points(st)[1]},
             "matches": by_stage.get(st, []),
         }
         for st in bracket_logic.ROUND_ORDER

@@ -38,20 +38,45 @@ COLOMBIA_CODE = "COL"
 User = get_user_model()
 
 
+# Puntos por fase para los pronosticos de marcador: (resultado, exacto).
+# El "resultado" es acertar ganador/empate; el "exacto" es el marcador justo
+# (y NO se suma al resultado: se lleva el mayor). La fase de grupos mantiene el
+# 1/3 historico; la eliminacion escala ronda a ronda (acertar pesa mas cuanto
+# mas avanzada la fase).
+STAGE_POINTS = {
+    Match.Stage.GROUP: (POINTS_OUTCOME, POINTS_EXACT),  # 1 / 3
+    Match.Stage.R32: (2, 4),
+    Match.Stage.R16: (3, 6),
+    Match.Stage.QF: (5, 9),
+    Match.Stage.SF: (7, 13),
+    Match.Stage.THIRD: (4, 7),
+    Match.Stage.FINAL: (10, 18),
+}
+
+
+def stage_points(stage):
+    """(resultado, exacto) que otorga un pronostico de marcador en esa fase."""
+    return STAGE_POINTS.get(stage, (POINTS_OUTCOME, POINTS_EXACT))
+
+
 # ── Logica pura ───────────────────────────────────────────────────────────
-def score_prediction(pred_home, pred_away, real_home, real_away):
+def score_prediction(pred_home, pred_away, real_home, real_away,
+                     points_outcome=POINTS_OUTCOME, points_exact=POINTS_EXACT):
     """Devuelve (puntos, es_exacto, resultado_correcto).
 
-    - Marcador exacto -> 3 pts (tambien cuenta como resultado correcto)
-    - Resultado correcto (ganador/empate) sin marcador exacto -> 1 pt
+    - Marcador exacto -> ``points_exact`` (tambien cuenta como resultado correcto)
+    - Resultado correcto (ganador/empate) sin marcador exacto -> ``points_outcome``
     - Incorrecto -> 0 pts
+
+    Por defecto usa el esquema de grupos (1/3); ``recompute_predictions`` pasa
+    los puntos de la fase del partido (ver ``STAGE_POINTS``).
     """
     if real_home is None or real_away is None:
         return POINTS_NONE, False, False
     if pred_home == real_home and pred_away == real_away:
-        return POINTS_EXACT, True, True
+        return points_exact, True, True
     if outcome_of(pred_home, pred_away) == outcome_of(real_home, real_away):
-        return POINTS_OUTCOME, False, True
+        return points_outcome, False, True
     return POINTS_NONE, False, False
 
 
@@ -104,8 +129,10 @@ def recompute_predictions():
     for p in preds:
         m = p.match
         if m.is_finished and m.home_score is not None and m.away_score is not None:
+            outcome_pts, exact_pts = stage_points(m.stage)
             pts, exact, correct = score_prediction(
-                p.home_score, p.away_score, m.home_score, m.away_score
+                p.home_score, p.away_score, m.home_score, m.away_score,
+                outcome_pts, exact_pts,
             )
             p.points_earned, p.is_exact, p.is_correct_outcome, p.scored = (
                 pts, exact, correct, True,
