@@ -11,3 +11,7 @@ wheels/
 .env
 db.sqlite3
 ai_generations/
+
+# Artefactos locales de polla_simulate (previsualizar la eliminatoria)
+.polla_sim_snapshot.json
+.polla_sync_paused

@@ -38,6 +38,20 @@ _started = False
 _lock = threading.Lock()
 
 
+def _sync_paused():
+    """True si el sync esta en pausa manual (p.ej. una simulacion local).
+
+    ``polla_simulate`` crea el archivo ``.polla_sync_paused`` para que el loop no
+    pise los datos simulados con los resultados reales; ``--reset`` lo borra. En
+    produccion el archivo no existe, asi que no tiene efecto.
+    """
+    try:
+        from django.conf import settings
+        return os.path.exists(os.path.join(settings.BASE_DIR, ".polla_sync_paused"))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _has_live_or_imminent():
     """True si hay partidos en vivo o por arrancar (define el ritmo del loop)."""
     from datetime import timedelta
@@ -71,8 +85,11 @@ def _run():
     while True:
         interval = IDLE_SECONDS
         try:
-            call_command("polla_sync")
-            interval = LIVE_SECONDS if _has_live_or_imminent() else IDLE_SECONDS
+            if _sync_paused():
+                logger.info("Polla realtime loop: sync en PAUSA (.polla_sync_paused); omito polla_sync.")
+            else:
+                call_command("polla_sync")
+                interval = LIVE_SECONDS if _has_live_or_imminent() else IDLE_SECONDS
         except Exception:  # noqa: BLE001 - el loop nunca debe morir por una iteracion
             logger.exception("Polla realtime loop: error en la iteracion")
         finally:
