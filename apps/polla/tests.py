@@ -7,6 +7,7 @@ from rest_framework.test import APIClient
 
 from .bracket import (
     advance_real_bracket,
+    all_groups_complete,
     is_open,
     real_standings,
     resolve_bracket,
@@ -240,13 +241,36 @@ class BracketTests(TestCase):
         self.assertEqual([t.code for t in by_group["A"]], ["A1", "A2", "A3", "A4"])
         self.assertEqual(len(thirds), 12)  # un tercero por grupo
 
-    def test_open_only_when_groups_finished(self):
+    def test_open_progressively_as_groups_finish(self):
+        # Con todos los grupos cerrados, la llave está abierta y completa.
         self.assertTrue(is_open())
-        # Si un partido de grupos vuelve a "próximo", la llave se cierra.
-        gm = self.group_matches[0]
+        self.assertTrue(all_groups_complete())
+        # Reabrir UN partido del grupo A no cierra la llave: los otros 11 grupos
+        # siguen completos y ya tienen clasificados que mostrar...
+        gm = self.group_matches[0]  # primer partido del grupo A
         gm.status = Match.Status.UPCOMING
         gm.save(update_fields=["status"])
-        self.assertFalse(is_open())
+        self.assertTrue(is_open())              # hay clasificados firmes
+        self.assertFalse(all_groups_complete())  # ...pero aún no terminan TODOS
+
+    def test_seeds_progressively_before_all_groups_finish(self):
+        # Reabrimos el grupo B por completo: 1A (grupo A, cerrado) ya es firme;
+        # 2B (grupo B, abierto) y los terceros aún no.
+        for gm in Match.objects.filter(stage=Match.Stage.GROUP, group__letter="B"):
+            gm.status = Match.Status.UPCOMING
+            gm.save(update_fields=["status"])
+        self.assertTrue(is_open())
+        self.assertFalse(all_groups_complete())
+        resolved = resolve_bracket(self.user)
+        self.assertEqual(resolved[73]["home"].code, "A1")  # grupo A cerrado
+        self.assertIsNone(resolved[73]["away"])            # 2B: grupo B abierto
+        self.assertEqual(resolved[74]["away"].code, "A2")  # 2A firme
+        self.assertIsNone(resolved[74]["home"])            # 1B: grupo B abierto
+        # advance no debe persistir el lado todavía indefinido.
+        advance_real_bracket()
+        self.m73.refresh_from_db()
+        self.assertEqual(self.m73.home_team.code, "A1")
+        self.assertIsNone(self.m73.away_team_id)
 
     def test_seeds_r32_from_real_results(self):
         resolved = resolve_bracket(self.user)
@@ -291,6 +315,22 @@ class BracketTests(TestCase):
         resolved = resolve_bracket(self.user)
         # m75 ahora muestra el ganador REAL de m73 (B2), no el pick fallido (A1).
         self.assertEqual(resolved[75]["home"].code, "B2")
+
+    def test_ignores_stale_team_on_unplayed_derived_slot(self):
+        # Residuo de simulación: un equipo quedó persistido en un octavo cuyo
+        # alimentador (m73) aún no se jugó. Es imposible conocerlo: se ignora.
+        self.m75.home_team = self.teams["A1"]
+        self.m75.save(update_fields=["home_team"])
+        resolved = resolve_bracket(self.user)
+        self.assertIsNone(resolved[75]["home"])  # m73 sin jugar -> se ignora
+        # Cuando m73 se juega y A1 avanza, el octavo sí toma el ganador real.
+        self.m73.home_team = self.teams["A1"]
+        self.m73.away_team = self.teams["B2"]
+        self.m73.home_score, self.m73.away_score = 2, 0
+        self.m73.status = Match.Status.FINISHED
+        self.m73.save()
+        resolved = resolve_bracket(self.user)
+        self.assertEqual(resolved[75]["home"].code, "A1")
 
     def test_invalid_pick_rejected(self):
         self.client.force_authenticate(self.user)
@@ -355,15 +395,18 @@ class BracketTests(TestCase):
         score = UserScore.objects.get(user=self.user)
         self.assertEqual(score.bracket_points, 0)
 
-    def test_closed_until_groups_finish(self):
-        # Con la fase de grupos incompleta, la llave está cerrada.
-        gm = self.group_matches[0]
-        gm.status = Match.Status.UPCOMING
-        gm.save(update_fields=["status"])
+    def test_closed_when_no_group_complete(self):
+        # Si NINGÚN grupo está cerrado, no hay nada firme: la llave está cerrada.
+        # Reabrimos un partido de cada grupo (los _RR son 6 partidos por grupo).
+        for i in range(0, len(self.group_matches), len(_RR)):
+            gm = self.group_matches[i]
+            gm.status = Match.Status.UPCOMING
+            gm.save(update_fields=["status"])
         self.assertFalse(is_open())
         r = self.client.get("/api/v1/polla/bracket/")
         self.assertEqual(r.status_code, 200)
         self.assertFalse(r.data["open"])
+        self.assertFalse(r.data["groups_finished"])
         self.client.force_authenticate(self.user)
         r = self.client.put("/api/v1/polla/bracket/m73/pick/",
                             {"winner_code": "A1"}, format="json")

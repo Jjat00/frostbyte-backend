@@ -5,8 +5,10 @@ REALES y se va resolviendo con la realidad. El usuario predice quién avanza en
 cada cruce y suma cuando acierta.
 
 Modelo:
-  1. Al terminar la fase de grupos REAL, los clasificados reales (1.º/2.º de cada
-     grupo + 8 mejores terceros) siembran los dieciseisavos (R32).
+  1. Cada grupo que TERMINA siembra sus slots ``1X``/``2X`` de los dieciseisavos
+     (R32) con su 1.º/2.º reales; los 8 mejores terceros entran cuando terminan
+     TODOS los grupos. Así la llave se va llenando de forma PROGRESIVA con los
+     clasificados reales (no espera a que termine toda la fase de grupos).
   2. De octavos en adelante, cada cruce toma el ganador REAL del cruce que lo
      alimenta si ya se jugó; si aún no, muestra la proyección del usuario (su
      ``BracketPick``). Así, cuando un cruce se juega, las rondas siguientes se
@@ -62,17 +64,42 @@ def group_predicted_count(user):
     ).count()
 
 
-def is_open():
-    """La eliminación se abre cuando TODOS los partidos de grupos terminaron.
+def completed_groups():
+    """Letras de los grupos cuyos partidos terminaron TODOS.
 
-    Recién ahí se conocen los clasificados reales que siembran la llave.
+    Solo cuando un grupo cierra por completo quedan firmes su 1.º y 2.º (y, por
+    tanto, los equipos que siembran sus slots ``1X``/``2X`` de los dieciseisavos).
+    """
+    out = set()
+    for g in Group.objects.prefetch_related("matches").all():
+        ms = list(g.matches.all())
+        if ms and all(m.is_finished for m in ms):
+            out.add(g.letter)
+    return out
+
+
+def all_groups_complete():
+    """True si TODOS los partidos de grupos terminaron.
+
+    Recién ahí quedan firmes los 8 mejores terceros: es la única siembra que
+    exige comparar resultados ENTRE grupos.
     """
     qs = Match.objects.filter(stage=Match.Stage.GROUP)
     total = qs.count()
     if total == 0:
         return False
-    done = qs.filter(status=Match.Status.FINISHED).count()
-    return done == total
+    return qs.filter(status=Match.Status.FINISHED).count() == total
+
+
+def is_open():
+    """La llave se muestra apenas haya AL MENOS un clasificado real.
+
+    Se va llenando de forma PROGRESIVA: cada grupo que termina siembra sus slots
+    ``1X``/``2X``; los 8 mejores terceros entran cuando terminan todos los grupos;
+    y de octavos en adelante cada cruce se conecta al jugarse el que lo alimenta.
+    Antes de que cierre el primer grupo no hay nada firme que mostrar.
+    """
+    return bool(completed_groups())
 
 
 # ── Tabla REAL de la fase de grupos ─────────────────────────────────────────
@@ -253,10 +280,15 @@ def advance_real_bracket():
     if not is_open():
         return 0
 
+    completed = completed_groups()
+    all_done = all_groups_complete()
     by_group, thirds = real_standings()
     matches = list(Match.objects.exclude(stage=Match.Stage.GROUP).order_by("number"))
     by_number = {m.number: m for m in matches}
-    third_by_number = _assign_thirds(_third_slots_for(matches), thirds[:8])
+    # Los 8 mejores terceros solo quedan firmes cuando TODOS los grupos cerraron.
+    third_by_number = (
+        _assign_thirds(_third_slots_for(matches), thirds[:8]) if all_done else {}
+    )
 
     def real_side(ph, number):
         ph = (ph or "").strip()
@@ -265,6 +297,8 @@ def advance_real_bracket():
         simple = _simple_slot(ph)
         if simple:
             rank, letter = simple
+            if letter not in completed:
+                return None  # el grupo aún no termina: 1.º/2.º no son firmes
             order = by_group.get(letter) or []
             return order[rank - 1] if len(order) >= rank else None
         mw = _WINNER_RE.match(ph)
@@ -330,19 +364,38 @@ def resolve_bracket(user, open_=None):
         return resolved
 
     by_number = {m.number: m for m in matches}
+    completed = completed_groups()
+    all_done = all_groups_complete()
     by_group, thirds = real_standings()
-    third_by_number = _assign_thirds(_third_slots_for(matches), thirds[:8])
+    # Terceros: solo cuando TODOS los grupos cerraron (comparan entre grupos).
+    third_by_number = (
+        _assign_thirds(_third_slots_for(matches), thirds[:8]) if all_done else {}
+    )
 
     def side(m, which):
+        ph = (m.home_placeholder if which == "home" else m.away_placeholder).strip()
         real = m.home_team if which == "home" else m.away_team
         if real is not None:
-            return real  # la realidad ya definió este competidor
-        ph = (m.home_placeholder if which == "home" else m.away_placeholder).strip()
+            # En slots DERIVADOS (``Ganador N``/``Perdedor N``) el equipo
+            # persistido solo es válido si el cruce que los alimenta YA se jugó;
+            # de lo contrario no puede conocerse aún y es un dato inconsistente
+            # (p. ej. residuo de una simulación). En ese caso lo ignoramos y se
+            # resuelve por la vía normal (realidad si el alimentador terminó,
+            # proyección del usuario si no).
+            feeder = _WINNER_RE.match(ph) or _LOSER_RE.match(ph)
+            if feeder is not None:
+                mn = by_number.get(int(feeder.group(1)))
+                if mn is None or not mn.is_finished:
+                    real = None
+            if real is not None:
+                return real  # la realidad ya definió este competidor
         if _third_slot(ph) is not None:
             return third_by_number.get(m.number)
         simple = _simple_slot(ph)
         if simple:
             rank, letter = simple
+            if letter not in completed:
+                return None  # el grupo aún no termina: posición no firme
             order = by_group.get(letter) or []
             return order[rank - 1] if len(order) >= rank else None
         mw = _WINNER_RE.match(ph)

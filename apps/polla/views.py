@@ -560,8 +560,10 @@ def _team_lite(team):
 def _bracket_payload(user):
     """Arma la llave del usuario: rondas, competidores resueltos y picks.
 
-    La llave se siembra de los clasificados REALES; se abre al terminar los
-    grupos. Para usuarios anónimos se muestra la llave real sin picks.
+    La llave se siembra de los clasificados REALES y se va llenando de forma
+    progresiva: aparece apenas cierra el primer grupo y cada grupo que termina
+    suma sus clasificados. Para usuarios anónimos se muestra la llave real sin
+    picks.
     """
     open_ = bracket_logic.is_open()
 
@@ -627,7 +629,11 @@ def _bracket_payload(user):
         if by_stage.get(st)
     ]
     return {
+        # ``open``: hay al menos un clasificado real (la llave se va llenando).
+        # ``groups_finished``: TODOS los grupos cerraron (recién ahí la vista de
+        # partidos entra por defecto en Eliminación).
         "open": open_,
+        "groups_finished": bracket_logic.all_groups_complete(),
         "champion": champion,
         "rounds": rounds,
     }
