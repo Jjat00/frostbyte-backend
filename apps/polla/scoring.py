@@ -10,7 +10,7 @@ from django.contrib.auth import get_user_model
 from django.db.models import Count, Q, Sum
 from django.utils import timezone
 
-from .bracket import advance_real_bracket, recompute_bracket
+from .bracket import advance_real_bracket
 from datetime import timedelta
 
 from .models import (
@@ -22,7 +22,6 @@ from .models import (
     REFERRAL_POINTS_PER,
     Award,
     AwardPick,
-    BracketPick,
     GranizadoReward,
     Match,
     Mission,
@@ -297,10 +296,6 @@ def recompute_scores():
         r["user_id"]: r["s"] or 0
         for r in AwardPick.objects.values("user_id").annotate(s=Sum("points_earned"))
     }
-    bracket_agg = {
-        r["user_id"]: r["s"] or 0
-        for r in BracketPick.objects.values("user_id").annotate(s=Sum("points_earned"))
-    }
     mission_agg = {
         r["user_id"]: r["s"] or 0
         for r in UserMission.objects.filter(done=True)
@@ -320,7 +315,7 @@ def recompute_scores():
         User.objects.filter(role=User.Role.CUSTOMER).values_list("id", flat=True)
     )
     user_ids = (
-        set(pred_agg) | set(award_agg) | set(bracket_agg) | set(mission_agg)
+        set(pred_agg) | set(award_agg) | set(mission_agg)
         | set(referral_agg) | customer_ids
     )
 
@@ -331,20 +326,22 @@ def recompute_scores():
         exact_hits = pa.get("exact_hits") or 0
         correct_hits = pa.get("correct_hits") or 0
         award_points = award_agg.get(uid, 0)
-        bracket_points = bracket_agg.get(uid, 0)
         mission_points = mission_agg.get(uid, 0)
         referral_points = min(referral_agg.get(uid, 0), REFERRAL_CAP) * REFERRAL_POINTS_PER
+        # bracket_points (mecanica vieja de "elegir quien avanza") quedo deprecada:
+        # la eliminacion ahora se juega por marcador y suma via match_points. Se
+        # mantiene el campo en 0 para no romper el modelo ni clientes existentes.
         UserScore.objects.update_or_create(
             user_id=uid,
             defaults={
                 "match_points": match_points,
                 "award_points": award_points,
                 "mission_points": mission_points,
-                "bracket_points": bracket_points,
+                "bracket_points": 0,
                 "referral_points": referral_points,
                 "points": (
                     match_points + award_points + mission_points
-                    + bracket_points + referral_points
+                    + referral_points
                 ),
                 "exact_hits": exact_hits,
                 "correct_hits": correct_hits,
@@ -370,7 +367,6 @@ def recompute_all():
     issue_granizado_rewards()  # premia aciertos exactos de Colombia (24 h)
     recompute_awards()
     advance_real_bracket()  # arma la llave real con los clasificados de grupos
-    recompute_bracket()
     missions = list(Mission.objects.all())
     for uid in set(Prediction.objects.values_list("user_id", flat=True)) | set(
         AwardPick.objects.values_list("user_id", flat=True)
