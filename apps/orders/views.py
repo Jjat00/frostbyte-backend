@@ -1,14 +1,16 @@
-from rest_framework import viewsets, filters, status
+from rest_framework import viewsets, filters, status, mixins
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.exceptions import ValidationError
+from rest_framework.throttling import UserRateThrottle
 from apps.accounts.permissions import IsAdminUser
 from django.db.models import Sum, Count, Q
 from django.db.models.functions import TruncDate, ExtractHour, ExtractWeekDay
 from django.utils import timezone
 from datetime import timedelta
 
-from .models import Order, OrderItem, Table, PageVisit
+from .models import Order, OrderItem, Table, PageVisit, StoreSettings
 from .consumers import broadcast_orders_update
 from .serializers import (
     OrderListSerializer,
@@ -21,6 +23,9 @@ from .serializers import (
     MarkItemPaidSerializer,
     PublicOrderDetailSerializer,
     TableSerializer,
+    CustomerOrderCreateSerializer,
+    CustomerOrderListSerializer,
+    build_table_label,
 )
 
 
@@ -302,6 +307,8 @@ class OrderViewSet(viewsets.ModelViewSet):
                 "id": order.id,
                 "order_number": order.order_number,
                 "table_number": order.table_number,
+                "table_label": build_table_label(order),
+                "order_type": order.order_type,
                 "customer_name": order.customer_name,
                 "customer_notes": order.customer_notes,
                 "status": order.status,
@@ -1288,3 +1295,70 @@ class PublicOrderViewSet(viewsets.ViewSet):
         ]
 
         return Response(data)
+
+
+class CustomerOrderThrottle(UserRateThrottle):
+    """Límite anti-spam para la creación de pedidos del cliente."""
+    scope = "customer_orders"
+    rate = "30/hour"
+
+
+class CustomerOrderViewSet(mixins.CreateModelMixin,
+                           mixins.ListModelMixin,
+                           mixins.RetrieveModelMixin,
+                           viewsets.GenericViewSet):
+    """
+    Pedidos a domicilio del cliente autenticado con Google.
+
+    create: Crea un pedido a domicilio propio (entra directo a la cola como PENDING).
+    list: 'Mis pedidos' del cliente autenticado.
+    retrieve: Detalle/seguimiento de un pedido propio.
+    config: Configuración pública del local (tarifa de envío, domicilios activos).
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get_throttles(self):
+        # Solo limitar la creación de pedidos, no las consultas
+        if self.action == "create":
+            return [CustomerOrderThrottle()]
+        return []
+
+    def get_queryset(self):
+        return (
+            Order.objects
+            .filter(user=self.request.user)
+            .prefetch_related(
+                "items",
+                "items__product_variant__product",
+                "items__product_variant__product__category",
+            )
+            .order_by("-created_at")
+        )
+
+    def get_serializer_class(self):
+        if self.action == "create":
+            return CustomerOrderCreateSerializer
+        if self.action == "list":
+            return CustomerOrderListSerializer
+        return OrderDetailSerializer
+
+    def perform_create(self, serializer):
+        cfg = StoreSettings.load()
+        if not cfg.customer_ordering_enabled:
+            raise ValidationError(
+                "Los pedidos a domicilio están deshabilitados por el momento.")
+
+        # El servidor decide la tarifa de envío; nunca se confía en el cliente
+        instance = serializer.save(
+            user=self.request.user, delivery_fee=cfg.delivery_fee)
+        broadcast_orders_update()
+        return instance
+
+    @action(detail=False, methods=["get"], permission_classes=[AllowAny])
+    def config(self, request):
+        """Configuración pública para que el checkout muestre tarifa y disponibilidad."""
+        cfg = StoreSettings.load()
+        return Response({
+            "customer_ordering_enabled": cfg.customer_ordering_enabled,
+            "delivery_fee": str(cfg.delivery_fee),
+        })

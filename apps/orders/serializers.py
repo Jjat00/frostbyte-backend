@@ -140,6 +140,9 @@ class OrderListSerializer(serializers.ModelSerializer):
     payment_method_display = serializers.CharField(
         source="get_payment_method_display", read_only=True
     )
+    order_type_display = serializers.CharField(
+        source="get_order_type_display", read_only=True
+    )
     items_count = serializers.IntegerField(read_only=True)
     business_breakdown = serializers.ReadOnlyField()
     floor = serializers.IntegerField(source="table_floor", read_only=True)
@@ -161,7 +164,15 @@ class OrderListSerializer(serializers.ModelSerializer):
             "is_paid",
             "payment_method",
             "payment_method_display",
+            "order_type",
+            "order_type_display",
+            "source",
             "total",
+            "delivery_fee",
+            "delivery_address",
+            "delivery_reference",
+            "delivery_lat",
+            "delivery_lng",
             "items_count",
             "business_breakdown",
             "table_number",
@@ -179,6 +190,9 @@ class OrderDetailSerializer(serializers.ModelSerializer):
         source="get_status_display", read_only=True)
     payment_method_display = serializers.CharField(
         source="get_payment_method_display", read_only=True
+    )
+    order_type_display = serializers.CharField(
+        source="get_order_type_display", read_only=True
     )
     items = OrderItemSerializer(many=True, read_only=True)
     items_count = serializers.IntegerField(read_only=True)
@@ -208,6 +222,14 @@ class OrderDetailSerializer(serializers.ModelSerializer):
             "customer_notes",
             "status",
             "status_display",
+            "order_type",
+            "order_type_display",
+            "source",
+            "delivery_address",
+            "delivery_reference",
+            "delivery_lat",
+            "delivery_lng",
+            "delivery_fee",
             "payment_method",
             "payment_method_display",
             "is_paid",
@@ -461,3 +483,106 @@ class PublicOrderDetailSerializer(serializers.ModelSerializer):
             "table_label",
             "created_at",
         ]
+
+
+class CustomerOrderListSerializer(serializers.ModelSerializer):
+    """Serializer ligero para la lista 'Mis pedidos' del cliente"""
+
+    status_display = serializers.CharField(
+        source="get_status_display", read_only=True)
+    order_type_display = serializers.CharField(
+        source="get_order_type_display", read_only=True)
+    items_count = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = Order
+        fields = [
+            "id",
+            "order_number",
+            "access_code",
+            "status",
+            "status_display",
+            "order_type",
+            "order_type_display",
+            "is_paid",
+            "total",
+            "delivery_fee",
+            "items_count",
+            "created_at",
+        ]
+
+
+class CustomerOrderCreateSerializer(serializers.ModelSerializer):
+    """Serializer para que el cliente autenticado cree su pedido a domicilio.
+
+    Los pedidos en línea del cliente son SOLO a domicilio. Los campos `user` y
+    `delivery_fee` NO se aceptan del cliente: los inyecta el ViewSet en
+    perform_create.
+    """
+
+    items = OrderItemCreateSerializer(many=True, write_only=True)
+    payment_method = serializers.ChoiceField(
+        choices=Order.PaymentMethod.choices, required=True)
+
+    class Meta:
+        model = Order
+        fields = [
+            "id",
+            "order_number",
+            "access_code",
+            "customer_name",
+            "customer_phone",
+            "customer_notes",
+            "payment_method",
+            "delivery_address",
+            "delivery_reference",
+            "delivery_lat",
+            "delivery_lng",
+            "total",
+            "items",
+        ]
+        read_only_fields = ["id", "order_number", "access_code", "total"]
+
+    def validate_items(self, value):
+        if not value:
+            raise serializers.ValidationError(
+                "El pedido debe tener al menos un item.")
+        return value
+
+    def validate(self, attrs):
+        if not attrs.get("delivery_address"):
+            raise serializers.ValidationError({
+                "delivery_address": "La dirección es obligatoria para el domicilio."
+            })
+        if attrs.get("delivery_lat") is None or attrs.get("delivery_lng") is None:
+            raise serializers.ValidationError({
+                "delivery_lat": "Marca tu ubicación en el mapa."
+            })
+        return attrs
+
+    def create(self, validated_data):
+        items_data = validated_data.pop("items")
+        validated_data["source"] = Order.Source.CUSTOMER
+        validated_data["order_type"] = Order.OrderType.DELIVERY
+
+        order = Order.objects.create(**validated_data)
+
+        # Un OrderItem por unidad para permitir pagos/entregas independientes
+        for item_data in items_data:
+            product_variant = item_data["product_variant_id"]
+            quantity = item_data.get("quantity", 1)
+            notes = item_data.get("notes", "")
+            unit_price = product_variant.price or Decimal("0.00")
+            for _ in range(quantity):
+                OrderItem.objects.create(
+                    order=order,
+                    product_variant=product_variant,
+                    quantity=1,
+                    unit_price=unit_price,
+                    subtotal=unit_price,
+                    notes=notes,
+                )
+
+        order.calculate_totals()
+        order.save()
+        return order

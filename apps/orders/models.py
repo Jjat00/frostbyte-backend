@@ -78,6 +78,40 @@ class Order(models.Model):
         NEQUI = "nequi", "Nequi"
         DAVIPLATA = "daviplata", "Daviplata"
 
+    class OrderType(models.TextChoices):
+        DINE_IN = "dine_in", "En el local"
+        PICKUP = "pickup", "Para recoger"
+        DELIVERY = "delivery", "Domicilio"
+
+    class Source(models.TextChoices):
+        STAFF = "staff", "Staff"
+        CUSTOMER = "customer", "Cliente"
+
+    # Tipo y origen del pedido
+    order_type = models.CharField(
+        max_length=20,
+        choices=OrderType.choices,
+        default=OrderType.DINE_IN,
+        verbose_name="Tipo de pedido",
+    )
+    source = models.CharField(
+        max_length=20,
+        choices=Source.choices,
+        default=Source.STAFF,
+        verbose_name="Origen",
+        help_text="staff = creado por el equipo; customer = pedido en línea del cliente",
+    )
+
+    # Cliente autenticado (pedidos en línea). Null para pedidos del staff.
+    user = models.ForeignKey(
+        "accounts.User",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="orders",
+        verbose_name="Cliente",
+    )
+
     # Código de acceso para el cliente
     access_code = models.CharField(
         max_length=4,
@@ -130,6 +164,39 @@ class Order(models.Model):
         blank=True,
         verbose_name="Piso",
         help_text="Piso de la mesa donde se atiende al cliente",
+    )
+
+    # Domicilio (solo aplica cuando order_type == delivery)
+    delivery_address = models.CharField(
+        max_length=300,
+        blank=True,
+        verbose_name="Dirección de entrega",
+    )
+    delivery_reference = models.CharField(
+        max_length=300,
+        blank=True,
+        verbose_name="Referencia / indicaciones",
+        help_text="Punto de referencia o indicaciones para el domiciliario",
+    )
+    delivery_lat = models.DecimalField(
+        max_digits=10,
+        decimal_places=7,
+        null=True,
+        blank=True,
+        verbose_name="Latitud",
+    )
+    delivery_lng = models.DecimalField(
+        max_digits=10,
+        decimal_places=7,
+        null=True,
+        blank=True,
+        verbose_name="Longitud",
+    )
+    delivery_fee = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=Decimal("0.00"),
+        verbose_name="Tarifa de envío",
     )
 
     # Estado y pago
@@ -225,7 +292,7 @@ class Order(models.Model):
             total=Sum('subtotal')
         )
         self.subtotal = result['total'] or Decimal("0.00")
-        self.total = self.subtotal - self.discount
+        self.total = self.subtotal - self.discount + (self.delivery_fee or Decimal("0.00"))
         return self.total
 
     def mark_as_preparing(self):
@@ -586,3 +653,43 @@ class PageVisit(models.Model):
         """Incrementa el contador de visitas"""
         self.visit_count += 1
         self.save(update_fields=["visit_count", "updated_at"])
+
+
+class StoreSettings(models.Model):
+    """Configuración operativa del local (singleton, editable desde el admin).
+
+    Permite ajustar la tarifa de domicilio y activar/desactivar los pedidos a
+    domicilio del cliente sin necesidad de redeploy.
+    """
+
+    delivery_fee = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=Decimal("3000.00"),
+        verbose_name="Tarifa de envío",
+        help_text="Costo fijo del domicilio que se suma al total del pedido",
+    )
+    customer_ordering_enabled = models.BooleanField(
+        default=True,
+        verbose_name="Domicilios en línea activos",
+        help_text="Interruptor general para habilitar/pausar los pedidos a domicilio del cliente",
+    )
+    updated_at = models.DateTimeField(auto_now=True, verbose_name="Actualizado")
+
+    class Meta:
+        verbose_name = "Configuración de la tienda"
+        verbose_name_plural = "Configuración de la tienda"
+
+    def __str__(self):
+        return "Configuración de la tienda"
+
+    def save(self, *args, **kwargs):
+        # Fuerza singleton: siempre la misma fila
+        self.pk = 1
+        super().save(*args, **kwargs)
+
+    @classmethod
+    def load(cls):
+        """Devuelve la única instancia de configuración, creándola si no existe."""
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj

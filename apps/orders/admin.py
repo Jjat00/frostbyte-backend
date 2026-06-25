@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django.utils.html import format_html
 from django.db.models import Count
-from .models import Order, OrderItem, Table, PageVisit
+from .models import Order, OrderItem, Table, PageVisit, StoreSettings
 
 
 class OrderItemInline(admin.TabularInline):
@@ -17,6 +17,8 @@ class OrderAdmin(admin.ModelAdmin):
         "order_number",
         "access_code",
         "customer_name",
+        "order_type",
+        "source",
         "status",
         "total",
         "is_paid",
@@ -24,16 +26,17 @@ class OrderAdmin(admin.ModelAdmin):
         "get_items_count",
         "created_at",
     ]
-    list_filter = ["status", "is_paid", "payment_method", "created_at"]
-    search_fields = ["order_number", "customer_name", "customer_phone"]
-    readonly_fields = ["order_number", "access_code", "subtotal", "total", "created_at", "updated_at", "completed_at"]
+    list_filter = ["status", "order_type", "source", "is_paid", "payment_method", "created_at"]
+    search_fields = ["order_number", "customer_name", "customer_phone", "delivery_address"]
+    readonly_fields = ["order_number", "access_code", "subtotal", "total", "user", "created_at", "updated_at", "completed_at"]
     date_hierarchy = "created_at"
     ordering = ["-created_at"]
     inlines = [OrderItemInline]
 
     fieldsets = (
-        ("Pedido", {"fields": ("order_number", "access_code", "status")}),
+        ("Pedido", {"fields": ("order_number", "access_code", "status", "order_type", "source", "user")}),
         ("Cliente", {"fields": ("customer_name", "customer_phone", "customer_notes", "table", "table_number", "table_floor")}),
+        ("Domicilio", {"fields": ("delivery_address", "delivery_reference", "delivery_lat", "delivery_lng", "delivery_fee")}),
         ("Pago", {"fields": ("payment_method", "is_paid")}),
         ("Totales", {"fields": ("subtotal", "discount", "total")}),
         ("Fechas", {"fields": ("created_at", "updated_at", "completed_at")}),
@@ -138,3 +141,21 @@ class PageVisitAdmin(admin.ModelAdmin):
         ("Estadísticas", {"fields": ("visit_count",)}),
         ("Fechas", {"fields": ("created_at", "updated_at")}),
     )
+
+
+@admin.register(StoreSettings)
+class StoreSettingsAdmin(admin.ModelAdmin):
+    list_display = ["__str__", "delivery_fee", "customer_ordering_enabled", "updated_at"]
+    readonly_fields = ["updated_at"]
+
+    fieldsets = (
+        ("Domicilio", {"fields": ("delivery_fee", "customer_ordering_enabled")}),
+        ("Metadatos", {"fields": ("updated_at",)}),
+    )
+
+    def has_add_permission(self, request):
+        # Singleton: solo se permite crear la primera instancia
+        return not StoreSettings.objects.exists()
+
+    def has_delete_permission(self, request, obj=None):
+        return False
