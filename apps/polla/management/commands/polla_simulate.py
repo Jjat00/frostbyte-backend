@@ -12,12 +12,18 @@ Dos modos:
     para ver "como se veria" un torneo terminado, pero deja todo finalizado (no
     se puede pronosticar). Usalo solo para mirar, no para jugar.
 
+  * AVANZAR (--advance): termina (con marcadores simulados) la ronda eliminatoria
+    ABIERTA mas temprana, recalcula tus puntos y abre la siguiente ronda con los
+    ganadores reales. Sirve para ver el cruce ya FINALIZADO: tu marcador vs el
+    real y los puntos que ganaste. Repetilo para avanzar ronda por ronda.
+
 Pausa el loop de tiempo real mientras dure (crea ``.polla_sync_paused``) para
 que ``polla_sync`` no pise la simulacion con los resultados reales. Todo es
 REVERSIBLE: guarda un snapshot del estado original y ``--reset`` lo restaura y
 reanuda el sync. Solo para la BD local (guarda anti-produccion).
 
     python manage.py polla_simulate            # abre la eliminacion JUGABLE
+    python manage.py polla_simulate --advance   # termina la ronda abierta y abre la siguiente
     python manage.py polla_simulate --full      # simula el torneo entero (mirar)
     python manage.py polla_simulate --reset      # restaura el estado real
     python manage.py polla_simulate --seed 7     # otra combinacion (reproducible)
@@ -50,6 +56,8 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument("--full", action="store_true",
                             help="Modo espectador: juega R32..Final (deja todo finalizado).")
+        parser.add_argument("--advance", action="store_true",
+                            help="Termina (simulado) la ronda abierta mas temprana y abre la siguiente.")
         parser.add_argument("--reset", action="store_true",
                             help="Restaura el estado original y reanuda el sync.")
         parser.add_argument("--seed", type=int, default=2026,
@@ -83,6 +91,8 @@ class Command(BaseCommand):
             return self._reset()
 
         rng = random.Random(opts["seed"])
+        if opts["advance"]:
+            return self._advance(rng)
         group_pending = list(
             Match.objects.filter(stage=Match.Stage.GROUP).exclude(status=Match.Status.FINISHED)
         )
@@ -149,6 +159,48 @@ class Command(BaseCommand):
                 m.save(update_fields=["home_score", "away_score", "winner_team", "status"])
             bracketmod.advance_real_bracket()
         self.stdout.write("Eliminatorias simuladas hasta la final.")
+
+    # ── avanzar una ronda (termina la abierta mas temprana) ──────────────────
+    def _advance(self, rng):
+        if not PAUSE.exists():
+            raise CommandError(
+                "No hay simulacion activa. Corre primero: python manage.py polla_simulate"
+            )
+        for stage in bracketmod.ROUND_ORDER:
+            ms = list(Match.objects.filter(stage=stage).order_by("number"))
+            if not ms:
+                continue
+            pending = [
+                m for m in ms
+                if m.home_team_id and m.away_team_id and m.status != Match.Status.FINISHED
+            ]
+            if not pending:
+                continue
+            # termina los cruces de esta ronda con marcadores simulados
+            for m in pending:
+                hs, as_ = rng.randint(0, 3), rng.randint(0, 3)
+                m.home_score, m.away_score = hs, as_
+                if hs == as_:  # "penales": ganador determinista
+                    m.winner_team = m.home_team if rng.random() < 0.5 else m.away_team
+                m.status = Match.Status.FINISHED
+                m.save(update_fields=["home_score", "away_score", "winner_team", "status"])
+            # abre la siguiente ronda con los ganadores reales
+            seeded = bracketmod.advance_real_bracket()
+            recompute_all()
+            label = {
+                Match.Stage.R32: "Dieciseisavos", Match.Stage.R16: "Octavos",
+                Match.Stage.QF: "Cuartos", Match.Stage.SF: "Semifinales",
+                Match.Stage.THIRD: "Tercer puesto", Match.Stage.FINAL: "Final",
+            }
+            self.stdout.write(self.style.SUCCESS(
+                f"{label.get(stage, stage)} finalizada ({len(pending)} cruces). "
+                f"Siguiente ronda abierta: {seeded} cruces. Recarga el front."
+            ))
+            self._print_bracket()
+            return
+        self.stdout.write(self.style.WARNING(
+            "No hay rondas pendientes por avanzar (la llave ya esta completa)."
+        ))
 
     # ── reset ────────────────────────────────────────────────────────────────
     def _reset(self):
