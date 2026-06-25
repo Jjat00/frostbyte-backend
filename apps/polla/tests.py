@@ -308,50 +308,52 @@ class BracketTests(TestCase):
         self.client.put("/api/v1/polla/bracket/m73/pick/", {"winner_code": "B2"}, format="json")
         self.assertFalse(BracketPick.objects.filter(user=self.user, match=self.m75).exists())
 
-    def test_bracket_scoring_and_total(self):
+    def test_elimination_scored_by_prediction_with_stage_points(self):
+        # La eliminatoria se puntua por MARCADOR (Prediction) con puntos por
+        # fase, NO por "elegir quien avanza" (BracketPick quedo deprecado).
+        advance_real_bracket()  # siembra m73 = A1 vs B2 (grupos terminados)
+        self.m73.refresh_from_db()
         self.client.force_authenticate(self.user)
-        self.client.put("/api/v1/polla/bracket/m73/pick/", {"winner_code": "A1"}, format="json")
-        # Resultado real: A1 gana 1-0.
-        self.m73.home_team = self.teams["A1"]
-        self.m73.away_team = self.teams["B2"]
-        self.m73.home_score, self.m73.away_score = 1, 0
+        # Marcador exacto en dieciseisavos (R32): vale 4.
+        r = self.client.put("/api/v1/polla/matches/m73/predict/",
+                            {"home_score": 2, "away_score": 0}, format="json")
+        self.assertEqual(r.status_code, 200)
+        # Regresion: un pick legacy con puntos NO debe sumar al total.
+        BracketPick.objects.create(
+            user=self.user, match=self.m73, winner_team=self.teams["A1"],
+            points_earned=99, scored=True,
+        )
+        self.m73.home_score, self.m73.away_score = 2, 0
         self.m73.status = Match.Status.FINISHED
         self.m73.save()
         recompute_all()
-        bp = BracketPick.objects.get(user=self.user, match=self.m73)
-        self.assertEqual(bp.points_earned, 2)  # dieciseisavos = 2
-        self.assertTrue(bp.scored)
+        pred = Prediction.objects.get(user=self.user, match=self.m73)
+        self.assertEqual(pred.points_earned, 4)  # R32 exacto
+        self.assertTrue(pred.is_exact)
         score = UserScore.objects.get(user=self.user)
-        self.assertEqual(score.bracket_points, 2)
+        self.assertEqual(score.match_points, 4)
+        self.assertEqual(score.bracket_points, 0)  # el pick de 99 no cuenta
+        self.assertEqual(score.points, 4)
 
-    def test_bracket_scoring_penalty_winner(self):
-        # Cruce que termina empatado y se define por penales: winner_team manda.
+    def test_elimination_outcome_points_ignore_penalties(self):
+        # Empate definido por penales: el pronostico se puntua por el MARCADOR
+        # (resultado de la fase); el ganador por penales solo arma la llave.
+        advance_real_bracket()
+        self.m73.refresh_from_db()
         self.client.force_authenticate(self.user)
-        self.client.put("/api/v1/polla/bracket/m73/pick/", {"winner_code": "B2"}, format="json")
-        self.m73.home_team = self.teams["A1"]
-        self.m73.away_team = self.teams["B2"]
-        self.m73.home_score, self.m73.away_score = 1, 1  # empate en 90/120'
+        # Predice empate, no exacto: resultado correcto en R32 vale 2.
+        self.client.put("/api/v1/polla/matches/m73/predict/",
+                        {"home_score": 0, "away_score": 0}, format="json")
+        self.m73.home_score, self.m73.away_score = 1, 1
         self.m73.winner_team = self.teams["B2"]  # B2 avanza por penales
         self.m73.status = Match.Status.FINISHED
         self.m73.save()
         recompute_all()
-        bp = BracketPick.objects.get(user=self.user, match=self.m73)
-        self.assertEqual(bp.points_earned, 2)
-        self.assertTrue(bp.scored)
-
-    def test_draw_without_winner_stays_unscored(self):
-        # Empate finalizado SIN winner_team: no se puede puntuar avance todavía.
-        self.client.force_authenticate(self.user)
-        self.client.put("/api/v1/polla/bracket/m73/pick/", {"winner_code": "A1"}, format="json")
-        self.m73.home_team = self.teams["A1"]
-        self.m73.away_team = self.teams["B2"]
-        self.m73.home_score, self.m73.away_score = 0, 0
-        self.m73.status = Match.Status.FINISHED
-        self.m73.save()
-        recompute_all()
-        bp = BracketPick.objects.get(user=self.user, match=self.m73)
-        self.assertEqual(bp.points_earned, 0)
-        self.assertFalse(bp.scored)
+        pred = Prediction.objects.get(user=self.user, match=self.m73)
+        self.assertEqual(pred.points_earned, 2)  # R32 resultado (empate)
+        self.assertFalse(pred.is_exact)
+        score = UserScore.objects.get(user=self.user)
+        self.assertEqual(score.bracket_points, 0)
 
     def test_closed_until_groups_finish(self):
         # Con la fase de grupos incompleta, la llave está cerrada.
