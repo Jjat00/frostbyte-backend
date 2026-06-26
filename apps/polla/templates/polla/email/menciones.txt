@@ -1,0 +1,22 @@
+{% autoescape off %}Polla Mundialista Frostbyte
+
+{% if name %}Hola, {{ name }}:{% else %}Hola:{% endif %}
+
+Te escribo para recordarte que todavia estas a tiempo de elegir (o cambiar) tus menciones del Mundial: son pronosticos de todo el torneo y dan bastantes puntos.
+
+Estas son las menciones y cuanto valen:
+{% for a in awards %}  - {{ a.title }}: {{ a.points }} pts
+{% endfor %}
+{% if set_count == 0 %}Aun no has elegido ninguna, asi que las tienes todas por delante.{% elif missing_count %}Ya elegiste {{ set_count }} de {{ total_awards }}; te faltan {{ missing_count }} por completar.{% else %}Ya las elegiste todas; si quieres, todavia puedes cambiarlas.{% endif %}
+{% if deadline_long %}
+Puedes elegirlas y cambiarlas las veces que quieras hasta el {{ deadline_long }}, justo antes de que empiecen las eliminatorias. Despues quedan bloqueadas.
+{% endif %}
+Las eliges aqui: {{ polla_url }}
+
+Un saludo,
+Frostbyte
+
+--
+Frostbyte - Cumbal, Narino. Responde a este correo: {{ reply_to }}
+Date de baja: {{ unsub_url }}
+{% endautoescape %}
