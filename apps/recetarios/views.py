@@ -22,7 +22,9 @@ class RecipeBookViewSet(viewsets.ModelViewSet):
     """
 
     queryset = RecipeBook.objects.select_related(
-        "category", "product", "product_variant"
+        "category__business",
+        "product__business",
+        "product_variant__product__business",
     ).prefetch_related("steps", "ingredients", "images")
     permission_classes = [IsEmployeeOrAdminWithAdminWrite]
     lookup_field = "slug"
@@ -56,6 +58,19 @@ class RecipeBookViewSet(viewsets.ModelViewSet):
         product = self.request.query_params.get("product")
         if product:
             queryset = queryset.filter(product_id=product)
+
+        # Filtro por negocio: la receta pertenece al negocio de su producto
+        # (o categoría, o variante). Una receta sin vínculos no matchea ningún
+        # negocio y solo aparece en consolidado.
+        business = self.request.query_params.get("business")
+        if business:
+            from django.db.models import Q
+
+            queryset = queryset.filter(
+                Q(product__business__slug=business)
+                | Q(category__business__slug=business)
+                | Q(product_variant__product__business__slug=business)
+            ).distinct()
 
         return queryset
 

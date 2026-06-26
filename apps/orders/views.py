@@ -35,7 +35,7 @@ class OrderViewSet(viewsets.ModelViewSet):
     """
 
     queryset = Order.objects.prefetch_related(
-        "items", "items__product_variant__product")
+        "items", "items__product_variant__product", "items__business")
     permission_classes = [IsAuthenticated]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["order_number", "customer_name", "customer_phone"]
@@ -110,6 +110,14 @@ class OrderViewSet(viewsets.ModelViewSet):
                 status__in=[Order.Status.PENDING,
                             Order.Status.PREPARING, Order.Status.READY]
             )
+
+        # Filtrar por negocio: pedidos que tengan al menos un item de ese
+        # negocio (un pedido puede cruzar negocios, por eso .distinct()).
+        business_slug = self.request.query_params.get("business")
+        if business_slug:
+            queryset = queryset.filter(
+                items__business__slug=business_slug
+            ).distinct()
 
         return queryset
 
@@ -247,6 +255,54 @@ class OrderViewSet(viewsets.ModelViewSet):
         return Response(serializer.data)
 
     @action(detail=False, methods=["get"])
+    def kitchen(self, request):
+        """Vista de cocina (KDS) filtrada por negocio.
+
+        Devuelve los pedidos activos pero, dentro de cada uno, SOLO los items
+        del negocio indicado (?business=<slug>) que aún no fueron entregados.
+        Así la cocina de Frostbyte Food ve únicamente sus platos y la barra de
+        Frostbyte solo sus bebidas, aunque sea el mismo pedido/mesa.
+        """
+        business_slug = request.query_params.get("business")
+
+        orders = self.get_queryset().filter(
+            status__in=[Order.Status.PENDING,
+                        Order.Status.PREPARING, Order.Status.READY]
+        ).order_by("created_at")
+
+        data = []
+        for order in orders:
+            items = list(order.items.all())
+            if business_slug:
+                items = [i for i in items
+                         if i.business and i.business.slug == business_slug]
+            # En la cocina no interesan los items ya entregados.
+            items = [i for i in items if not i.is_delivered]
+            if not items:
+                continue
+
+            # Ordenar: primero los que faltan, luego los listos.
+            prep_order = {
+                OrderItem.PrepStatus.PENDING: 0,
+                OrderItem.PrepStatus.PREPARING: 1,
+                OrderItem.PrepStatus.READY: 2,
+            }
+            items.sort(key=lambda i: prep_order.get(i.prep_status, 0))
+
+            data.append({
+                "id": order.id,
+                "order_number": order.order_number,
+                "table_number": order.table_number,
+                "customer_name": order.customer_name,
+                "customer_notes": order.customer_notes,
+                "status": order.status,
+                "created_at": order.created_at,
+                "items": OrderItemSerializer(items, many=True).data,
+            })
+
+        return Response(data)
+
+    @action(detail=False, methods=["get"])
     def pending_payments(self, request):
         """
         Obtener pedidos con pagos pendientes independientemente de la fecha.
@@ -289,6 +345,8 @@ class OrderViewSet(viewsets.ModelViewSet):
         date_filter = request.query_params.get("date", "today")
         start_date_param = request.query_params.get("start_date")
         end_date_param = request.query_params.get("end_date")
+        # Filtro por negocio (los KPIs del Home/Pedidos respetan el negocio activo)
+        business_slug = request.query_params.get("business")
 
         # Usar el helper para obtener el rango de fechas
         start_date, end_date = self._get_date_range(
@@ -297,6 +355,9 @@ class OrderViewSet(viewsets.ModelViewSet):
         # Filtrar pedidos por el rango de fechas (para conteo de pedidos y estados)
         orders = Order.objects.filter(
             created_at__gte=start_date, created_at__lte=end_date)
+        if business_slug:
+            # Pedidos que involucran a este negocio (pueden cruzar negocios)
+            orders = orders.filter(items__business__slug=business_slug).distinct()
 
         total_orders = orders.count()
 
@@ -309,19 +370,38 @@ class OrderViewSet(viewsets.ModelViewSet):
             order__created_at__gte=start_date,
             order__created_at__lte=end_date
         ).exclude(order__status=Order.Status.CANCELLED)
+        if business_slug:
+            paid_items = paid_items.filter(business__slug=business_slug)
 
         # Total de ingresos = suma de items pagados - descuentos de pedidos
         items_revenue = paid_items.aggregate(
             total=Sum("subtotal"))["total"] or 0
 
-        # Restar descuentos de pedidos completamente pagados en el período
+        # Restar descuentos de pedidos completamente pagados en el período.
         paid_order_ids = paid_items.values_list(
             'order_id', flat=True).distinct()
-        total_discounts = Order.objects.filter(
-            id__in=paid_order_ids,
-            is_paid=True,
-            discount__gt=0
-        ).aggregate(total=Sum('discount'))['total'] or 0
+        if business_slug:
+            # Prorratear el descuento de cada pedido por la parte de este negocio.
+            from decimal import Decimal
+            total_discounts = Decimal('0')
+            disc_orders = Order.objects.filter(
+                id__in=list(paid_order_ids), is_paid=True, discount__gt=0
+            )
+            for o in disc_orders:
+                order_paid = OrderItem.objects.filter(
+                    order_id=o.id, is_paid=True
+                ).aggregate(t=Sum('subtotal'))['t'] or Decimal('0')
+                biz_paid = OrderItem.objects.filter(
+                    order_id=o.id, is_paid=True, business__slug=business_slug
+                ).aggregate(t=Sum('subtotal'))['t'] or Decimal('0')
+                if order_paid > 0:
+                    total_discounts += (o.discount * biz_paid / order_paid)
+        else:
+            total_discounts = Order.objects.filter(
+                id__in=paid_order_ids,
+                is_paid=True,
+                discount__gt=0
+            ).aggregate(total=Sum('discount'))['total'] or 0
 
         total_revenue = items_revenue - total_discounts
 
@@ -363,11 +443,13 @@ class OrderViewSet(viewsets.ModelViewSet):
         cancelled_count = orders.filter(status=Order.Status.CANCELLED).count()
 
         # Total pendiente = suma de items NO pagados de pedidos del período
-        order_ids = orders.values_list('id', flat=True)
+        order_ids = list(orders.values_list('id', flat=True))
         unpaid_items = OrderItem.objects.filter(
             order_id__in=order_ids,
             is_paid=False
         ).exclude(order__status=Order.Status.CANCELLED)
+        if business_slug:
+            unpaid_items = unpaid_items.filter(business__slug=business_slug)
         unpaid_total = unpaid_items.aggregate(
             total=Sum("subtotal"))["total"] or 0
 
@@ -482,6 +564,7 @@ class OrderViewSet(viewsets.ModelViewSet):
         date_filter = request.query_params.get("date", "today")
         start_date_param = request.query_params.get("start_date")
         end_date_param = request.query_params.get("end_date")
+        business_slug = request.query_params.get("business")
 
         start_date, end_date = self._get_date_range(
             date_filter, start_date_param, end_date_param)
@@ -492,6 +575,8 @@ class OrderViewSet(viewsets.ModelViewSet):
             order__created_at__gte=start_date,
             order__created_at__lte=end_date
         ).exclude(order__status=Order.Status.CANCELLED)
+        if business_slug:
+            paid_items = paid_items.filter(business__slug=business_slug)
 
         # Obtener la zona horaria configurada
         tz = zoneinfo.ZoneInfo('America/Bogota')
@@ -527,7 +612,17 @@ class OrderViewSet(viewsets.ModelViewSet):
             if last_paid_at:
                 date_str = last_paid_at.astimezone(tz).strftime('%Y-%m-%d')
                 if date_str in revenue_dict:
-                    revenue_dict[date_str] -= float(order.discount)
+                    # Prorratear el descuento por la parte del negocio activo.
+                    discount = float(order.discount)
+                    if business_slug:
+                        order_paid = OrderItem.objects.filter(
+                            order_id=order.pk, is_paid=True
+                        ).aggregate(t=Sum('subtotal'))['t'] or 0
+                        biz_paid = OrderItem.objects.filter(
+                            order_id=order.pk, is_paid=True, business__slug=business_slug
+                        ).aggregate(t=Sum('subtotal'))['t'] or 0
+                        discount = discount * (float(biz_paid) / float(order_paid)) if order_paid else 0
+                    revenue_dict[date_str] -= discount
 
         # Generar todos los días del rango, incluso sin datos
         data = []
@@ -586,6 +681,7 @@ class OrderViewSet(viewsets.ModelViewSet):
         date_filter = request.query_params.get("date", "today")
         start_date_param = request.query_params.get("start_date")
         end_date_param = request.query_params.get("end_date")
+        business_slug = request.query_params.get("business")
 
         start_date, end_date = self._get_date_range(
             date_filter, start_date_param, end_date_param)
@@ -596,6 +692,8 @@ class OrderViewSet(viewsets.ModelViewSet):
             order__created_at__gte=start_date,
             order__created_at__lte=end_date
         ).exclude(order__status=Order.Status.CANCELLED)
+        if business_slug:
+            paid_items = paid_items.filter(business__slug=business_slug)
 
         # Agrupar por producto y variante
         product_stats = (
@@ -912,6 +1010,32 @@ class OrderItemViewSet(viewsets.ModelViewSet):
                 status=Order.Status.PREPARING,
                 completed_at=None
             )
+
+        broadcast_orders_update()
+        return Response(OrderItemSerializer(item).data)
+
+    @action(detail=True, methods=["post"], url_path="prep-status")
+    def set_prep_status(self, request, pk=None):
+        """Cambiar el estado de preparación de un item (lo usa el KDS).
+
+        La cocina marca SOLO sus items; el estado del pedido se recalcula a
+        partir del avance de todos los items (sync_status_from_items).
+        """
+        item = self.get_object()
+        new_status = request.data.get("prep_status")
+
+        valid = {c[0] for c in OrderItem.PrepStatus.choices}
+        if new_status not in valid:
+            return Response(
+                {"error": f"prep_status inválido. Opciones: {sorted(valid)}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        item.prep_status = new_status
+        item.save(update_fields=["prep_status"])
+
+        # Recalcular el estado del pedido según el avance de las cocinas.
+        item.order.sync_status_from_items()
 
         broadcast_orders_update()
         return Response(OrderItemSerializer(item).data)

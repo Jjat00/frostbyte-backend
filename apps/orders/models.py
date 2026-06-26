@@ -8,6 +8,7 @@ import random
 import string
 
 from apps.products.models import ProductVariant
+from apps.business.models import Business
 
 
 class Table(models.Model):
@@ -292,7 +293,7 @@ class Order(models.Model):
         """Actualiza el estado de entrega basado en los items"""
         total_items = OrderItem.objects.filter(order_id=self.pk).count()
         delivered_items = OrderItem.objects.filter(order_id=self.pk, is_delivered=True).count()
-        
+
         if total_items > 0:
             all_delivered = (total_items == delivered_items)
             if all_delivered and self.status != self.Status.DELIVERED:
@@ -300,9 +301,72 @@ class Order(models.Model):
                 self.completed_at = timezone.now()
                 self.save(update_fields=["status", "completed_at", "updated_at"])
 
+    def sync_status_from_items(self):
+        """Recalcula el estado del pedido a partir del avance de preparación de
+        sus items (lo que marcan las cocinas en el KDS).
+
+        Un pedido con items en dos negocios queda 'listo' solo cuando TODAS las
+        cocinas terminaron su parte. No toca pedidos entregados ni cancelados:
+        esos estados son terminales y se manejan aparte.
+        """
+        if self.status in [self.Status.DELIVERED, self.Status.CANCELLED]:
+            return
+
+        items = list(
+            OrderItem.objects.filter(order_id=self.pk).values_list("prep_status", flat=True)
+        )
+        if not items:
+            return
+
+        if all(s == OrderItem.PrepStatus.READY for s in items):
+            new_status = self.Status.READY
+        elif any(s in (OrderItem.PrepStatus.PREPARING, OrderItem.PrepStatus.READY) for s in items):
+            new_status = self.Status.PREPARING
+        else:
+            new_status = self.Status.PENDING
+
+        if new_status != self.status:
+            self.status = new_status
+            self.save(update_fields=["status", "updated_at"])
+
+    @property
+    def business_breakdown(self):
+        """Resumen por negocio para la vista del mesero: cuántos items hay de
+        cada negocio y cuántos ya están listos. Permite mostrar un semáforo
+        ('Food: 2/3 listo') sin que el mesero entre a cada cocina.
+        """
+        from django.db.models import Count, Q
+
+        rows = (
+            OrderItem.objects.filter(order_id=self.pk, business__isnull=False)
+            .values("business__slug", "business__name", "business__color")
+            .annotate(
+                total=Count("id"),
+                ready=Count("id", filter=Q(prep_status=OrderItem.PrepStatus.READY)),
+                delivered=Count("id", filter=Q(is_delivered=True)),
+            )
+            .order_by("business__name")
+        )
+        return [
+            {
+                "slug": r["business__slug"],
+                "name": r["business__name"],
+                "color": r["business__color"],
+                "total_items": r["total"],
+                "ready_items": r["ready"],
+                "delivered_items": r["delivered"],
+            }
+            for r in rows
+        ]
+
 
 class OrderItem(models.Model):
     """Item individual de un pedido"""
+
+    class PrepStatus(models.TextChoices):
+        PENDING = "pending", "Pendiente"
+        PREPARING = "preparing", "Preparando"
+        READY = "ready", "Listo"
 
     order = models.ForeignKey(
         Order,
@@ -315,6 +379,23 @@ class OrderItem(models.Model):
         on_delete=models.PROTECT,
         related_name="order_items",
         verbose_name="Producto",
+    )
+    # Negocio al que pertenece el item (Frostbyte / Frostbyte Food). Se
+    # denormaliza desde product_variant.product.business al crear el item para
+    # que cada cocina (KDS) filtre por su negocio sin recorrer la relación.
+    business = models.ForeignKey(
+        Business,
+        on_delete=models.PROTECT,
+        related_name="order_items",
+        verbose_name="Negocio",
+    )
+    # Estado de preparación a nivel de item: cada cocina marca SOLO sus items.
+    # Es independiente del estado del pedido (que se deriva de aquí).
+    prep_status = models.CharField(
+        max_length=20,
+        choices=PrepStatus.choices,
+        default=PrepStatus.PENDING,
+        verbose_name="Estado de preparación",
     )
     quantity = models.PositiveIntegerField(
         default=1,
@@ -378,11 +459,29 @@ class OrderItem(models.Model):
         return f"{self.quantity}x {product_name} ({variant_name})"
 
     def save(self, *args, **kwargs):
+        # Heredar el negocio del producto si no se asignó explícitamente.
+        if not self.business_id and self.product_variant_id:
+            self.business_id = self.product_variant.product.business_id
         # Calcular subtotal si no se especificó update_fields
         if not kwargs.get('update_fields'):
             self.subtotal = self.unit_price * self.quantity
         super().save(*args, **kwargs)
-    
+
+    def mark_preparing(self):
+        """La cocina empezó a preparar este item"""
+        self.prep_status = self.PrepStatus.PREPARING
+        self.save(update_fields=["prep_status"])
+
+    def mark_ready(self):
+        """La cocina terminó este item"""
+        self.prep_status = self.PrepStatus.READY
+        self.save(update_fields=["prep_status"])
+
+    def reset_prep(self):
+        """Volver el item a pendiente de preparación"""
+        self.prep_status = self.PrepStatus.PENDING
+        self.save(update_fields=["prep_status"])
+
     def mark_as_paid(self, payment_method=""):
         """Marcar item como pagado"""
         self.is_paid = True

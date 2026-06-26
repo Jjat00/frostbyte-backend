@@ -34,6 +34,8 @@ class RecipeBookListSerializer(serializers.ModelSerializer):
     product_name = serializers.CharField(source="product.name", read_only=True, default=None)
     steps_count = serializers.SerializerMethodField()
     ingredients_count = serializers.SerializerMethodField()
+    business_name = serializers.SerializerMethodField()
+    business_slug = serializers.SerializerMethodField()
 
     class Meta:
         model = RecipeBook
@@ -49,6 +51,8 @@ class RecipeBookListSerializer(serializers.ModelSerializer):
             "category_name",
             "product",
             "product_name",
+            "business_name",
+            "business_slug",
             "is_active",
             "steps_count",
             "ingredients_count",
@@ -60,6 +64,14 @@ class RecipeBookListSerializer(serializers.ModelSerializer):
 
     def get_ingredients_count(self, obj):
         return obj.ingredients.count()
+
+    def get_business_name(self, obj):
+        b = obj.business
+        return b.name if b else None
+
+    def get_business_slug(self, obj):
+        b = obj.business
+        return b.slug if b else None
 
 
 class RecipeBookDetailSerializer(serializers.ModelSerializer):

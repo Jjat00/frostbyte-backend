@@ -22,6 +22,12 @@ class OrderItemSerializer(serializers.ModelSerializer):
     payment_method_display = serializers.CharField(
         source="get_payment_method_display", read_only=True
     )
+    business_name = serializers.CharField(source="business.name", read_only=True)
+    business_slug = serializers.CharField(source="business.slug", read_only=True)
+    business_color = serializers.CharField(source="business.color", read_only=True)
+    prep_status_display = serializers.CharField(
+        source="get_prep_status_display", read_only=True
+    )
 
     class Meta:
         model = OrderItem
@@ -31,6 +37,12 @@ class OrderItemSerializer(serializers.ModelSerializer):
             "product_variant_id",
             "product_name",
             "variant_name",
+            "business",
+            "business_name",
+            "business_slug",
+            "business_color",
+            "prep_status",
+            "prep_status_display",
             "quantity",
             "unit_price",
             "subtotal",
@@ -42,8 +54,8 @@ class OrderItemSerializer(serializers.ModelSerializer):
             "is_delivered",
             "delivered_at",
         ]
-        read_only_fields = ["subtotal",
-                            "product_variant", "paid_at", "delivered_at"]
+        read_only_fields = ["subtotal", "product_variant", "business",
+                            "paid_at", "delivered_at"]
 
 
 class AddItemToOrderSerializer(serializers.Serializer):
@@ -87,6 +99,7 @@ class OrderListSerializer(serializers.ModelSerializer):
         source="get_payment_method_display", read_only=True
     )
     items_count = serializers.IntegerField(read_only=True)
+    business_breakdown = serializers.ReadOnlyField()
 
     class Meta:
         model = Order
@@ -103,6 +116,7 @@ class OrderListSerializer(serializers.ModelSerializer):
             "payment_method_display",
             "total",
             "items_count",
+            "business_breakdown",
             "table_number",
             "created_at",
         ]
@@ -126,6 +140,7 @@ class OrderDetailSerializer(serializers.ModelSerializer):
     unpaid_items_count = serializers.IntegerField(read_only=True)
     delivered_items_count = serializers.IntegerField(read_only=True)
     undelivered_items_count = serializers.IntegerField(read_only=True)
+    business_breakdown = serializers.ReadOnlyField()
 
     class Meta:
         model = Order
@@ -150,6 +165,7 @@ class OrderDetailSerializer(serializers.ModelSerializer):
             "unpaid_items_count",
             "delivered_items_count",
             "undelivered_items_count",
+            "business_breakdown",
             "items",
             "items_count",
             "table_number",
@@ -163,7 +179,7 @@ class OrderDetailSerializer(serializers.ModelSerializer):
         representation = super().to_representation(instance)
 
         # Obtener los items ordenados alfabéticamente por nombre del producto
-        items = instance.items.select_related('product_variant__product').order_by(
+        items = instance.items.select_related('product_variant__product', 'business').order_by(
             'product_variant__product__name',
             'product_variant__name'
         )

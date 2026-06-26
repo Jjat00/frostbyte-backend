@@ -75,6 +75,24 @@ class RecipeBook(models.Model):
             self.slug = slugify(self.name)
         super().save(*args, **kwargs)
 
+    @property
+    def business(self):
+        """Negocio al que pertenece la receta, derivado de su producto.
+
+        La receta no tiene negocio propio: lo hereda del producto (o, en su
+        defecto, de la categoría o la variante). Puede ser None si la receta
+        no está ligada a nada (solo visible en consolidado).
+        """
+        if self.product_id and self.product.business_id:
+            return self.product.business
+        if self.category_id and self.category.business_id:
+            return self.category.business
+        if self.product_variant_id:
+            prod = self.product_variant.product
+            if prod and prod.business_id:
+                return prod.business
+        return None
+
 
 class RecipeBookStep(models.Model):
     """Paso de preparación de una receta"""
