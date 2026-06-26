@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from apps.business.models import Business
 from .models import UnitOfMeasure, RawMaterial, Recipe, PurchaseOrder, PurchaseOrderItem
 
 
@@ -19,6 +20,10 @@ class RawMaterialSerializer(serializers.ModelSerializer):
         source="unit",
         write_only=True,
     )
+    business = serializers.PrimaryKeyRelatedField(
+        queryset=Business.objects.all(), required=False
+    )
+    business_name = serializers.CharField(source="business.name", read_only=True)
     stock_status = serializers.CharField(read_only=True)
     is_low_stock = serializers.BooleanField(read_only=True)
 
@@ -27,6 +32,8 @@ class RawMaterialSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "name",
+            "business",
+            "business_name",
             "unit",
             "unit_id",
             "current_stock",
@@ -46,6 +53,7 @@ class RawMaterialListSerializer(serializers.ModelSerializer):
 
     unit_id = serializers.IntegerField(source="unit.id", read_only=True)
     unit_abbreviation = serializers.CharField(source="unit.abbreviation", read_only=True)
+    business_name = serializers.CharField(source="business.name", read_only=True)
     stock_status = serializers.CharField(read_only=True)
 
     class Meta:
@@ -53,6 +61,8 @@ class RawMaterialListSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "name",
+            "business",
+            "business_name",
             "unit_id",
             "unit_abbreviation",
             "current_stock",
@@ -73,6 +83,9 @@ class RecipeSerializer(serializers.ModelSerializer):
         source="raw_material",
         write_only=True,
     )
+    business_name = serializers.CharField(
+        source="product_variant.product.business.name", read_only=True
+    )
     cost = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
 
     class Meta:
@@ -82,6 +95,7 @@ class RecipeSerializer(serializers.ModelSerializer):
             "product_variant",
             "raw_material",
             "raw_material_id",
+            "business_name",
             "quantity",
             "notes",
             "cost",
@@ -167,6 +181,7 @@ class PurchaseOrderSerializer(serializers.ModelSerializer):
     items = PurchaseOrderItemSerializer(many=True, read_only=True)
     created_by_name = serializers.CharField(source="created_by.get_full_name", read_only=True)
     status_display = serializers.CharField(source="get_status_display", read_only=True)
+    business_name = serializers.CharField(source="business.name", read_only=True)
     items_count = serializers.SerializerMethodField()
 
     class Meta:
@@ -174,6 +189,8 @@ class PurchaseOrderSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "order_number",
+            "business",
+            "business_name",
             "status",
             "status_display",
             "created_by",
@@ -199,15 +216,25 @@ class PurchaseOrderCreateSerializer(serializers.ModelSerializer):
     """Serializer para crear órdenes de compra"""
 
     items = PurchaseOrderItemCreateSerializer(many=True, write_only=True)
+    business = serializers.PrimaryKeyRelatedField(
+        queryset=Business.objects.all(), required=False
+    )
 
     class Meta:
         model = PurchaseOrder
-        fields = ["notes", "items"]
+        fields = ["business", "notes", "items"]
 
     def create(self, validated_data):
         items_data = validated_data.pop("items")
         user = self.context["request"].user
-        
+        # Compatibilidad: si no se especifica negocio, usar el principal.
+        business = validated_data.get("business") or Business.get_main()
+        if business is None:
+            raise serializers.ValidationError(
+                {"business": "No hay negocio principal configurado; especifica business."}
+            )
+        validated_data["business"] = business
+
         order = PurchaseOrder.objects.create(
             created_by=user,
             **validated_data

@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from apps.business.models import Business
 from .models import ExpenseCategory, OperationalExpense, RecurringExpenseTemplate
 
 
@@ -29,12 +30,13 @@ class OperationalExpenseListSerializer(serializers.ModelSerializer):
     payment_method_display = serializers.CharField(
         source='get_payment_method_display', read_only=True
     )
+    business_name = serializers.CharField(source='business.name', read_only=True)
     created_by_name = serializers.SerializerMethodField()
 
     class Meta:
         model = OperationalExpense
         fields = [
-            'id', 'expense_number', 'category', 'category_name',
+            'id', 'expense_number', 'business', 'business_name', 'category', 'category_name',
             'category_icon', 'category_color', 'category_slug',
             'description', 'amount', 'expense_date', 'status',
             'status_display', 'payment_method', 'payment_method_display',
@@ -62,12 +64,15 @@ class OperationalExpenseDetailSerializer(serializers.ModelSerializer):
     recurrence_period_display = serializers.CharField(
         source='get_recurrence_period_display', read_only=True
     )
+    business_name = serializers.CharField(source='business.name', read_only=True)
     created_by_name = serializers.SerializerMethodField()
 
     class Meta:
         model = OperationalExpense
         fields = '__all__'
-        read_only_fields = ['expense_number', 'created_by', 'created_at', 'updated_at']
+        # business es de solo lectura aqui: se fija al crear y no se cambia en
+        # actualizaciones (asi un PUT del front actual sin business no rompe).
+        read_only_fields = ['expense_number', 'business', 'created_by', 'created_at', 'updated_at']
 
     def get_created_by_name(self, obj):
         if obj.created_by:
@@ -89,6 +94,9 @@ class OperationalExpenseCreateSerializer(serializers.ModelSerializer):
         queryset=ExpenseCategory.objects.filter(is_active=True),
         source='category'
     )
+    business = serializers.PrimaryKeyRelatedField(
+        queryset=Business.objects.all(), required=False
+    )
     payment_method = serializers.ChoiceField(
         choices=OperationalExpense.PaymentMethod.choices,
         required=False,
@@ -105,7 +113,7 @@ class OperationalExpenseCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = OperationalExpense
         fields = [
-            'category_id', 'description', 'amount', 'expense_date',
+            'business', 'category_id', 'description', 'amount', 'expense_date',
             'status', 'payment_method', 'reference_number', 'receipt_url',
             'notes', 'is_recurring', 'recurrence_period'
         ]
@@ -115,6 +123,13 @@ class OperationalExpenseCreateSerializer(serializers.ModelSerializer):
         request = self.context.get('request')
         if request and request.user.is_authenticated:
             validated_data['created_by'] = request.user
+        # Compatibilidad: si no se especifica negocio, usar el principal.
+        business = validated_data.get('business') or Business.get_main()
+        if business is None:
+            raise serializers.ValidationError(
+                {'business': 'No hay negocio principal configurado; especifica business.'}
+            )
+        validated_data['business'] = business
         # Si se crea con estado 'paid', establecer paid_at automáticamente
         if validated_data.get('status') == OperationalExpense.Status.PAID:
             validated_data['paid_at'] = timezone.now()
@@ -130,11 +145,15 @@ class RecurringExpenseTemplateSerializer(serializers.ModelSerializer):
         source='get_recurrence_type_display', read_only=True
     )
     created_by_name = serializers.SerializerMethodField()
+    business_name = serializers.CharField(source='business.name', read_only=True)
     category_id = serializers.PrimaryKeyRelatedField(
         queryset=ExpenseCategory.objects.filter(is_active=True),
         source='category',
         write_only=True,
         required=False
+    )
+    business = serializers.PrimaryKeyRelatedField(
+        queryset=Business.objects.all(), required=False
     )
 
     class Meta:
@@ -151,6 +170,13 @@ class RecurringExpenseTemplateSerializer(serializers.ModelSerializer):
         request = self.context.get('request')
         if request and request.user.is_authenticated:
             validated_data['created_by'] = request.user
+        # Compatibilidad: si no se especifica negocio, usar el principal.
+        business = validated_data.get('business') or Business.get_main()
+        if business is None:
+            raise serializers.ValidationError(
+                {'business': 'No hay negocio principal configurado; especifica business.'}
+            )
+        validated_data['business'] = business
         return super().create(validated_data)
 
 

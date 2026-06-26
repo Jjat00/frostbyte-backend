@@ -10,6 +10,8 @@ urlpatterns = [
     path('admin/', admin.site.urls),
     # Auth & Users
     path('api/v1/', include('apps.accounts.urls')),
+    # Business (negocios: Frostbyte, Frostbyte Food)
+    path('api/v1/', include('apps.business.urls')),
     # Products
     path('api/v1/', include('apps.products.urls')),
     # Inventory

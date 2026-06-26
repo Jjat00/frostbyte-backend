@@ -20,6 +20,7 @@ class RecipeInline(admin.TabularInline):
 class RawMaterialAdmin(admin.ModelAdmin):
     list_display = [
         "name",
+        "business",
         "unit",
         "current_stock",
         "minimum_stock",
@@ -28,13 +29,13 @@ class RawMaterialAdmin(admin.ModelAdmin):
         "supplier",
         "is_active",
     ]
-    list_filter = ["is_active", "unit", "supplier"]
+    list_filter = ["business", "is_active", "unit", "supplier"]
     search_fields = ["name", "supplier"]
     ordering = ["name"]
     list_editable = ["current_stock", "cost_per_unit"]
 
     fieldsets = (
-        (None, {"fields": ("name", "unit", "is_active")}),
+        (None, {"fields": ("name", "business", "unit", "is_active")}),
         ("Stock", {"fields": ("current_stock", "minimum_stock")}),
         ("Costos", {"fields": ("cost_per_unit",)}),
         ("Proveedor", {"fields": ("supplier",)}),
@@ -90,6 +91,7 @@ class PurchaseOrderItemInline(admin.TabularInline):
 class PurchaseOrderAdmin(admin.ModelAdmin):
     list_display = [
         "order_number",
+        "business",
         "status",
         "created_by",
         "items_count",
@@ -97,7 +99,7 @@ class PurchaseOrderAdmin(admin.ModelAdmin):
         "actual_total_display",
         "created_at",
     ]
-    list_filter = ["status", "created_at"]
+    list_filter = ["business", "status", "created_at"]
     search_fields = ["order_number", "created_by__username"]
     readonly_fields = ["order_number", "estimated_total", "actual_total", "created_at", "updated_at"]
     date_hierarchy = "created_at"
@@ -105,7 +107,7 @@ class PurchaseOrderAdmin(admin.ModelAdmin):
     inlines = [PurchaseOrderItemInline]
 
     fieldsets = (
-        ("Orden", {"fields": ("order_number", "status", "created_by")}),
+        ("Orden", {"fields": ("order_number", "business", "status", "created_by")}),
         ("Totales", {"fields": ("estimated_total", "actual_total")}),
         ("Notas", {"fields": ("notes",)}),
         ("Fechas", {"fields": ("purchased_at", "created_at", "updated_at")}),

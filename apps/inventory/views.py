@@ -8,7 +8,16 @@ from decimal import Decimal
 
 from apps.products.models import ProductVariant
 from apps.accounts.permissions import IsAdminUser
+from apps.business.models import Business
 from .models import UnitOfMeasure, RawMaterial, Recipe, PurchaseOrder, PurchaseOrderItem
+
+
+def apply_business_filter(queryset, request, lookup="business__slug"):
+    """Filtra un queryset por ?business=<slug> si viene en la peticion."""
+    business_slug = request.query_params.get("business")
+    if business_slug:
+        queryset = queryset.filter(**{lookup: business_slug})
+    return queryset
 from .serializers import (
     UnitOfMeasureSerializer,
     RawMaterialSerializer,
@@ -45,7 +54,7 @@ class RawMaterialViewSet(viewsets.ModelViewSet):
     """
 
     queryset = RawMaterial.objects.filter(
-        is_active=True).select_related("unit")
+        is_active=True).select_related("unit", "business")
     permission_classes = [IsAdminUser]
     pagination_class = None  # Deshabilitamos paginación para obtener todos los materiales
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
@@ -59,13 +68,29 @@ class RawMaterialViewSet(viewsets.ModelViewSet):
             return RawMaterialListSerializer
         return RawMaterialSerializer
 
+    def get_queryset(self):
+        return apply_business_filter(super().get_queryset(), self.request)
+
+    def perform_create(self, serializer):
+        # Compatibilidad: si no se especifica negocio, usar el principal.
+        business = serializer.validated_data.get("business") or Business.get_main()
+        if business is None:
+            from rest_framework.exceptions import ValidationError as DRFValidationError
+            raise DRFValidationError(
+                {"business": "No hay negocio principal configurado; especifica business."}
+            )
+        serializer.save(business=business)
+
     @action(detail=False, methods=["get"])
     def low_stock(self, request):
         """Obtener materia prima con stock bajo o sin stock"""
-        low_stock_items = RawMaterial.objects.filter(
-            is_active=True,
-            current_stock__lt=F("minimum_stock"),
-        ).select_related("unit").order_by("current_stock")
+        low_stock_items = apply_business_filter(
+            RawMaterial.objects.filter(
+                is_active=True,
+                current_stock__lt=F("minimum_stock"),
+            ).select_related("unit").order_by("current_stock"),
+            request,
+        )
 
         serializer = RawMaterialListSerializer(low_stock_items, many=True)
 
@@ -99,7 +124,10 @@ class RawMaterialViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=["get"])
     def all_materials(self, request):
         """Obtener todos los materiales incluyendo inactivos (para admin)"""
-        materials = RawMaterial.objects.all().select_related("unit").order_by("name")
+        materials = apply_business_filter(
+            RawMaterial.objects.all().select_related("unit", "business").order_by("name"),
+            request,
+        )
         serializer = RawMaterialListSerializer(materials, many=True)
         return Response(serializer.data)
 
@@ -152,19 +180,19 @@ class RawMaterialViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=["get"])
     def stats(self, request):
         """Estadísticas del inventario"""
-        total_materials = RawMaterial.objects.filter(is_active=True).count()
-        low_stock = RawMaterial.objects.filter(
-            is_active=True,
+        base = apply_business_filter(
+            RawMaterial.objects.filter(is_active=True), request
+        )
+        total_materials = base.count()
+        low_stock = base.filter(
             current_stock__lt=F("minimum_stock"),
         ).count()
-        zero_stock = RawMaterial.objects.filter(
-            is_active=True,
+        zero_stock = base.filter(
             current_stock__lte=0,
         ).count()
 
         # Valor total del inventario
-        materials = RawMaterial.objects.filter(is_active=True)
-        total_value = sum(m.current_stock * m.cost_per_unit for m in materials)
+        total_value = sum(m.current_stock * m.cost_per_unit for m in base)
 
         return Response({
             "total_materials": total_materials,
@@ -194,6 +222,11 @@ class RecipeViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         queryset = super().get_queryset()
+
+        # Filtrar por negocio (recipe hereda el negocio via product_variant->product)
+        queryset = apply_business_filter(
+            queryset, self.request, lookup="product_variant__product__business__slug"
+        )
 
         # Filtrar por producto
         product_slug = self.request.query_params.get("product")
@@ -257,7 +290,7 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
                 "raw_material", "raw_material__unit"
             )
         )
-    ).select_related("created_by").annotate(
+    ).select_related("created_by", "business").annotate(
         _items_count=Count("items")
     )
     permission_classes = [IsAdminUser]
@@ -273,6 +306,9 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         queryset = super().get_queryset()
+
+        # Filtrar por negocio (Frostbyte / Frostbyte Food)
+        queryset = apply_business_filter(queryset, self.request)
 
         # Filtrar por estado
         status_filter = self.request.query_params.get("status")
@@ -324,9 +360,27 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=["post"])
     def generate_from_low_stock(self, request):
         """Generar orden de compra automáticamente desde items con stock bajo"""
+        # Negocio objetivo: ?business=<slug> o body, default al principal.
+        business_slug = request.query_params.get("business") or request.data.get("business")
+        if business_slug:
+            business = Business.objects.filter(slug=business_slug).first()
+            if business is None:
+                return Response(
+                    {"error": f'Negocio "{business_slug}" no encontrado.'},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+        else:
+            business = Business.get_main()
+        if business is None:
+            return Response(
+                {"error": "No hay negocio principal configurado."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         low_stock_items = RawMaterial.objects.filter(
             is_active=True,
             current_stock__lt=F("minimum_stock"),
+            business=business,
         )
 
         if not low_stock_items.exists():
@@ -338,6 +392,7 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
         # Crear la orden
         order = PurchaseOrder.objects.create(
             created_by=request.user,
+            business=business,
             notes="Orden generada automáticamente desde stock bajo",
         )
 

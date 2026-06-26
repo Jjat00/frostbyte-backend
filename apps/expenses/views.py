@@ -29,12 +29,16 @@ class ExpenseCategoryViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         queryset = super().get_queryset()
+        # Las categorias son globales, pero los totales/conteos pueden filtrarse
+        # por negocio para el dashboard de cada uno.
+        business_slug = self.request.query_params.get('business')
+        count_filter = Q(expenses__business__slug=business_slug) if business_slug else Q()
+        paid_filter = Q(expenses__status='paid')
+        if business_slug:
+            paid_filter &= Q(expenses__business__slug=business_slug)
         queryset = queryset.annotate(
-            expenses_count=Count('expenses'),
-            total_amount=Sum(
-                'expenses__amount',
-                filter=Q(expenses__status='paid')
-            )
+            expenses_count=Count('expenses', filter=count_filter),
+            total_amount=Sum('expenses__amount', filter=paid_filter)
         )
         return queryset
 
@@ -48,7 +52,7 @@ class ExpenseCategoryViewSet(viewsets.ModelViewSet):
 
 class OperationalExpenseViewSet(viewsets.ModelViewSet):
     """ViewSet para gastos operativos"""
-    queryset = OperationalExpense.objects.select_related('category', 'created_by')
+    queryset = OperationalExpense.objects.select_related('category', 'created_by', 'business')
     permission_classes = [IsAdminUser]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ['expense_number', 'description', 'reference_number']
@@ -63,6 +67,11 @@ class OperationalExpenseViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         queryset = super().get_queryset()
+
+        # Filtrar por negocio (Frostbyte / Frostbyte Food)
+        business_slug = self.request.query_params.get('business')
+        if business_slug:
+            queryset = queryset.filter(business__slug=business_slug)
 
         # Filtrar por categoria
         category = self.request.query_params.get('category')
@@ -219,12 +228,16 @@ class OperationalExpenseViewSet(viewsets.ModelViewSet):
 
 class RecurringExpenseTemplateViewSet(viewsets.ModelViewSet):
     """ViewSet para plantillas de gastos recurrentes"""
-    queryset = RecurringExpenseTemplate.objects.select_related('category', 'created_by')
+    queryset = RecurringExpenseTemplate.objects.select_related('category', 'created_by', 'business')
     serializer_class = RecurringExpenseTemplateSerializer
     permission_classes = [IsAdminUser]
 
     def get_queryset(self):
         queryset = super().get_queryset()
+        # Filtrar por negocio (Frostbyte / Frostbyte Food)
+        business_slug = self.request.query_params.get('business')
+        if business_slug:
+            queryset = queryset.filter(business__slug=business_slug)
         # Filtrar solo activos por defecto
         active_only = self.request.query_params.get('active', 'true')
         if active_only.lower() == 'true':

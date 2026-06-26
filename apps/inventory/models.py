@@ -1,5 +1,6 @@
 from django.db import models
 from django.conf import settings
+from apps.business.models import Business
 from apps.products.models import ProductVariant
 
 
@@ -22,6 +23,12 @@ class RawMaterial(models.Model):
     """Materia prima / ingredientes"""
 
     name = models.CharField(max_length=200, verbose_name="Nombre")  # ej: "Pulpa de Mango"
+    business = models.ForeignKey(
+        Business,
+        on_delete=models.PROTECT,
+        related_name="raw_materials",
+        verbose_name="Negocio",
+    )
     unit = models.ForeignKey(
         UnitOfMeasure,
         on_delete=models.PROTECT,
@@ -135,6 +142,12 @@ class PurchaseOrder(models.Model):
         unique=True,
         blank=True,
         verbose_name="Número de orden",
+    )
+    business = models.ForeignKey(
+        Business,
+        on_delete=models.PROTECT,
+        related_name="purchase_orders",
+        verbose_name="Negocio",
     )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,

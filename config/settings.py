@@ -54,6 +54,7 @@ INSTALLED_APPS = [
     'channels',
     # Local apps - accounts first (custom user model)
     'apps.accounts',
+    'apps.business',
     'apps.products',
     'apps.inventory',
     'apps.orders',

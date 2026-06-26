@@ -1,6 +1,14 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from .views import CategoryViewSet, ProductViewSet, ProductVariantViewSet, ImageUploadView
+from .views import (
+    CategoryViewSet,
+    ModifierGroupViewSet,
+    ModifierOptionViewSet,
+    ProductModifierGroupViewSet,
+    ProductViewSet,
+    ProductVariantViewSet,
+    ImageUploadView,
+)
 from .services.image_generation_api import (
     ImageGenerationView,
     ImagePreviewView,
@@ -14,6 +22,9 @@ router = DefaultRouter()
 router.register(r"categories", CategoryViewSet, basename="category")
 router.register(r"products", ProductViewSet, basename="product")
 router.register(r"variants", ProductVariantViewSet, basename="variant")
+router.register(r"modifier-groups", ModifierGroupViewSet, basename="modifier-group")
+router.register(r"modifier-options", ModifierOptionViewSet, basename="modifier-option")
+router.register(r"product-modifiers", ProductModifierGroupViewSet, basename="product-modifier")
 
 urlpatterns = [
     path("", include(router.urls)),

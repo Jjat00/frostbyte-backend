@@ -1,6 +1,8 @@
 from django.db import models
 from django.conf import settings
 
+from apps.business.models import Business
+
 
 class ExpenseCategory(models.Model):
     """Categorias de gastos operativos"""
@@ -76,6 +78,12 @@ class OperationalExpense(models.Model):
         unique=True,
         blank=True,
         verbose_name="Numero de gasto"
+    )
+    business = models.ForeignKey(
+        Business,
+        on_delete=models.PROTECT,
+        related_name='operational_expenses',
+        verbose_name="Negocio"
     )
     category = models.ForeignKey(
         ExpenseCategory,
@@ -166,6 +174,7 @@ class OperationalExpense(models.Model):
             models.Index(fields=['expense_date']),
             models.Index(fields=['status']),
             models.Index(fields=['category']),
+            models.Index(fields=['business', '-expense_date'], name='expenses_op_business_idx'),
         ]
 
     def __str__(self):
@@ -209,6 +218,12 @@ class RecurringExpenseTemplate(models.Model):
         max_length=200,
         verbose_name="Nombre",
         help_text="Nombre descriptivo del gasto recurrente"
+    )
+    business = models.ForeignKey(
+        Business,
+        on_delete=models.PROTECT,
+        related_name='recurring_expense_templates',
+        verbose_name="Negocio"
     )
     category = models.ForeignKey(
         ExpenseCategory,
@@ -283,6 +298,7 @@ class RecurringExpenseTemplate(models.Model):
             expense_date = timezone.now().date()
 
         expense = OperationalExpense.objects.create(
+            business=self.business,
             category=self.category,
             description=self.description,
             amount=self.amount,
