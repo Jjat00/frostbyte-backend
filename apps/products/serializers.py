@@ -225,6 +225,7 @@ class ProductSerializer(serializers.ModelSerializer):
     variants = ProductVariantSerializer(many=True, read_only=True)
     category_name = serializers.CharField(source="category.name", read_only=True)
     business_name = serializers.CharField(source="business.name", read_only=True)
+    business_slug = serializers.CharField(source="business.slug", read_only=True)
     modifier_groups = serializers.SerializerMethodField()
 
     class Meta:
@@ -242,6 +243,7 @@ class ProductSerializer(serializers.ModelSerializer):
             "category_name",
             "business",
             "business_name",
+            "business_slug",
             "variants",
             "modifier_groups",
             "created_at",
@@ -289,6 +291,7 @@ class ProductListSerializer(serializers.ModelSerializer):
     category_name = serializers.CharField(source="category.name", read_only=True)
     category_slug = serializers.CharField(source="category.slug", read_only=True)
     business_name = serializers.CharField(source="business.name", read_only=True)
+    business_slug = serializers.CharField(source="business.slug", read_only=True)
     variants = ProductVariantSerializer(many=True, read_only=True)
     variants_count = serializers.SerializerMethodField()
     is_configurable = serializers.SerializerMethodField()
@@ -309,6 +312,7 @@ class ProductListSerializer(serializers.ModelSerializer):
             "category_slug",
             "business",
             "business_name",
+            "business_slug",
             "variants",
             "variants_count",
             "is_configurable",
