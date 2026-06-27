@@ -34,6 +34,7 @@ def send_email(
     reply_to=None,
     from_email=None,
     tags=None,
+    attachments=None,
     max_retries=4,
     timeout=20,
 ):
@@ -42,6 +43,10 @@ def send_email(
     Reintenta con backoff exponencial ante rate-limit (429) o errores 5xx;
     levanta ``EmailError`` en fallos 4xx no recuperables o tras agotar los
     reintentos.
+
+    ``attachments``: lista de dicts con el formato de la API REST de Resend
+    (``content`` en base64, ``filename``, ``content_type`` y, para imágenes
+    embebidas, ``content_id`` referenciado en el HTML como ``cid:<id>``).
     """
     api_key = getattr(settings, "RESEND_API_KEY", "")
     if not api_key:
@@ -62,6 +67,8 @@ def send_email(
         payload["headers"] = headers
     if tags:
         payload["tags"] = tags
+    if attachments:
+        payload["attachments"] = list(attachments)
 
     auth = {"Authorization": f"Bearer {api_key}"}
     backoff = 1.0

@@ -17,7 +17,16 @@ from django.core import signing
 from django.template.loader import render_to_string
 from django.utils import timezone
 
-from .models import Match, Mission, Prediction, UserMission, UserScore
+from .models import (
+    Award,
+    AwardPick,
+    Match,
+    Mission,
+    Prediction,
+    Tournament,
+    UserMission,
+    UserScore,
+)
 
 User = get_user_model()
 
@@ -55,6 +64,22 @@ def _fmt_time(dt):
     loc = timezone.localtime(dt)
     hora = loc.strftime("%I:%M %p").lstrip("0")
     return hora.replace("AM", "a. m.").replace("PM", "p. m.")
+
+
+_MESES_LARGO = [
+    "enero", "febrero", "marzo", "abril", "mayo", "junio",
+    "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre",
+]
+
+
+def _fmt_dt_long(dt):
+    """Fecha y hora legible en español, hora de Colombia.
+
+    P.ej. 'domingo 28 de junio a las 2:00 p. m.'.
+    """
+    loc = timezone.localtime(dt)
+    dia = _DIAS[loc.weekday()]
+    return f"{dia} {loc.day} de {_MESES_LARGO[loc.month - 1]} a las {_fmt_time(dt)}"
 
 
 def _is_colombia(match):
@@ -215,3 +240,83 @@ def unsub_headers(ctx):
         ),
         "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
     }
+
+
+# ── Recordatorio de MENCIONES (campeón, goleador, etc.) ─────────────────────
+def gather_menciones():
+    """Datos comunes del envío de menciones (una sola lectura).
+
+    El cierre de menciones coincide con el arranque de las eliminatorias: usa
+    ``Tournament.awards_lock_at`` y, si está vacío, el pitazo del primer cruce
+    de eliminación.
+    """
+    now = timezone.now()
+    tournament = Tournament.get_active()
+    deadline = tournament.awards_lock_at if tournament else None
+    if deadline is None:
+        first_elim = (
+            Match.objects.exclude(stage=Match.Stage.GROUP)
+            .order_by("kickoff")
+            .first()
+        )
+        deadline = first_elim.kickoff if first_elim else None
+
+    awards = list(Award.objects.order_by("display_order"))
+    return {
+        "now": now,
+        "deadline": deadline,
+        "awards": awards,
+        "total_awards": len(awards),
+        "awards_points": sum(a.points for a in awards),
+    }
+
+
+def build_menciones_context(score, shared):
+    """Contexto personalizado del correo de menciones para un participante."""
+    user = score.user
+    set_count = (
+        AwardPick.objects.filter(user=user)
+        .filter(team__isnull=False)
+        .count()
+        + AwardPick.objects.filter(user=user, team__isnull=True, player__isnull=False).count()
+    )
+    total = shared["total_awards"]
+    deadline = shared["deadline"]
+    return {
+        "name": _first_name(user),
+        "points": score.points,
+        "position": score.position or 0,
+        "awards": [{"title": a.title, "points": a.points} for a in shared["awards"]],
+        "total_awards": total,
+        "awards_points": shared["awards_points"],
+        "set_count": set_count,
+        "missing_count": max(0, total - set_count),
+        "deadline_long": _fmt_dt_long(deadline) if deadline else "",
+        "polla_url": settings.POLLA_PUBLIC_URL,
+        "unsub_url": unsubscribe_url(user),
+        "reply_to": settings.POLLA_EMAIL_REPLY_TO,
+        "brand_site": settings.SITE_URL,
+        "year": shared["now"].year,
+    }
+
+
+def menciones_subject_for(ctx):
+    # Asunto personal y sin palabras "gancho" para no caer en Promociones.
+    name = ctx["name"]
+    if ctx["set_count"] == 0:
+        core = "aún puedes elegir tus menciones del Mundial"
+    elif ctx["missing_count"] > 0:
+        core = "te faltan menciones por elegir en el Mundial"
+    else:
+        core = "puedes ajustar tus menciones antes de las eliminatorias"
+    if name:
+        return f"{name}, {core}"
+    return core[0].upper() + core[1:]
+
+
+def render_menciones(ctx):
+    """Devuelve (asunto, html, texto) del correo de menciones."""
+    subject = menciones_subject_for(ctx)
+    html = render_to_string("polla/email/menciones.html", ctx)
+    text = render_to_string("polla/email/menciones.txt", ctx)
+    return subject, html, text
