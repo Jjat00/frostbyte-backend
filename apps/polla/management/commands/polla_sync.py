@@ -401,6 +401,13 @@ class Command(BaseCommand):
         foto y el ``player_id``; conserva asistencias/PJ/foto de la fila previa
         cuando existan, para no degradarlas entre refrescos del endpoint
         agregado.
+
+        IMPORTANTE: agrupamos por el JUGADOR resuelto, no por el nombre crudo
+        del evento. La API escribe al mismo jugador con grafías distintas entre
+        partidos (p.ej. "K. Mbappe" y "Kylian Mbappé"); si agrupáramos por el
+        texto del evento, sus goles quedarían partidos en filas separadas. Por
+        eso resolvemos el ``Player`` ANTES de acumular y usamos su id como clave
+        (con fallback al nombre normalizado solo cuando no hay match).
         """
         matches = list(
             Match.objects.filter(
@@ -416,15 +423,33 @@ class Command(BaseCommand):
         players_by_team = {}
         for p in Player.objects.all():
             players_by_team.setdefault(p.team_id, []).append(p)
-        prev = {_norm(ts.name): ts for ts in TopScorer.objects.all()}
+        prev_by_player = {}
+        prev_by_name = {}
+        for ts in TopScorer.objects.all():
+            if ts.player_id:
+                prev_by_player[ts.player_id] = ts
+            prev_by_name[_norm(ts.name)] = ts
 
-        tally = {}  # (nombre normalizado, team_id) -> {name, team, goals, assists}
+        # clave -> {name, team, player, goals, assists}
+        # clave = ("p", player_id) cuando se resuelve el jugador sembrado;
+        #         ("n", nombre_norm, team_id) como respaldo si no hay match.
+        tally = {}
 
         def slot(name, team):
-            key = (_norm(name), team.id if team else None)
+            player = _match_player(name, team, players_by_team)
+            if player is not None:
+                key = ("p", player.id)
+            else:
+                key = ("n", _norm(name), team.id if team else None)
             acc = tally.get(key)
             if acc is None:
-                acc = {"name": name, "team": team, "goals": 0, "assists": 0}
+                acc = {
+                    "name": player.name if player else name,
+                    "team": team,
+                    "player": player,
+                    "goals": 0,
+                    "assists": 0,
+                }
                 tally[key] = acc
             return acc
 
@@ -444,12 +469,13 @@ class Command(BaseCommand):
                     slot(assist, team)["assists"] += 1
 
         out = []
-        for (nname, _tid), acc in tally.items():
+        for acc in tally.values():
             # Tabla de GOLEADORES: quien solo asistió (0 goles) no entra.
             if acc["goals"] <= 0:
                 continue
-            player = _match_player(acc["name"], acc["team"], players_by_team)
-            old = prev.get(nname)
+            player = acc["player"]
+            old = (prev_by_player.get(player.id) if player else None) \
+                or prev_by_name.get(_norm(acc["name"]))
             photo = (player.photo_url if player else "") or (old.photo_url if old else "")
             out.append(TopScorer(
                 rank=0,
