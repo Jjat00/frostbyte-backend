@@ -11,6 +11,7 @@ from .models import (
     Team,
     Tournament,
 )
+from .scoring import stage_points
 
 
 class TournamentSerializer(serializers.ModelSerializer):
@@ -63,6 +64,8 @@ class MatchSerializer(serializers.ModelSerializer):
     away = serializers.SerializerMethodField()
     is_locked = serializers.BooleanField(read_only=True)
     my_prediction = serializers.SerializerMethodField()
+    points_outcome = serializers.SerializerMethodField()
+    points_exact = serializers.SerializerMethodField()
 
     class Meta:
         model = Match
@@ -71,7 +74,16 @@ class MatchSerializer(serializers.ModelSerializer):
             "home", "away", "kickoff", "venue_city", "venue_stadium",
             "status", "minute", "home_score", "away_score",
             "featured", "is_locked", "my_prediction",
+            "points_outcome", "points_exact",
         ]
+
+    def get_points_outcome(self, obj):
+        """Puntos por acertar el resultado (ganador/empate) en la fase del partido."""
+        return stage_points(obj.stage)[0]
+
+    def get_points_exact(self, obj):
+        """Puntos por acertar el marcador exacto en la fase del partido."""
+        return stage_points(obj.stage)[1]
 
     def get_home(self, obj):
         return _side(obj.home_team, obj.home_placeholder)
