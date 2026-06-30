@@ -2,7 +2,37 @@ from rest_framework import serializers
 from decimal import Decimal
 
 from apps.products.models import ProductVariant
-from .models import Order, OrderItem
+from .models import Order, OrderItem, Table
+
+
+class TableSerializer(serializers.ModelSerializer):
+    """Serializer para gestionar mesas y barras (CRUD)."""
+
+    label = serializers.CharField(read_only=True)
+
+    class Meta:
+        model = Table
+        fields = [
+            "id",
+            "table_number",
+            "floor",
+            "table_name",
+            "label",
+            "is_active",
+            "visit_count",
+        ]
+        read_only_fields = ["id", "visit_count"]
+
+    def validate_table_number(self, value):
+        if value < 0:
+            raise serializers.ValidationError(
+                "El número de mesa no puede ser negativo (0 = Barra).")
+        return value
+
+    def validate_floor(self, value):
+        if value < 1:
+            raise serializers.ValidationError("El piso debe ser 1 o mayor.")
+        return value
 
 
 class OrderItemSerializer(serializers.ModelSerializer):
@@ -90,6 +120,18 @@ class OrderItemCreateSerializer(serializers.Serializer):
         max_length=200, required=False, allow_blank=True)
 
 
+def build_table_label(order):
+    """Etiqueta de mesa lista para mostrar, ej: 'Mesa 1 · Piso 3'."""
+    if order.table_id and order.table:
+        return order.table.label
+    number = order.table_number
+    if number is None:
+        return None
+    name = "Barra" if number == 0 else f"Mesa {number}"
+    floor = order.table_floor
+    return f"{name} · Piso {floor}" if floor else name
+
+
 class OrderListSerializer(serializers.ModelSerializer):
     """Serializer para listar pedidos"""
 
@@ -100,6 +142,11 @@ class OrderListSerializer(serializers.ModelSerializer):
     )
     items_count = serializers.IntegerField(read_only=True)
     business_breakdown = serializers.ReadOnlyField()
+    floor = serializers.IntegerField(source="table_floor", read_only=True)
+    table_label = serializers.SerializerMethodField()
+
+    def get_table_label(self, obj):
+        return build_table_label(obj)
 
     class Meta:
         model = Order
@@ -118,6 +165,9 @@ class OrderListSerializer(serializers.ModelSerializer):
             "items_count",
             "business_breakdown",
             "table_number",
+            "table_floor",
+            "floor",
+            "table_label",
             "created_at",
         ]
 
@@ -141,6 +191,11 @@ class OrderDetailSerializer(serializers.ModelSerializer):
     delivered_items_count = serializers.IntegerField(read_only=True)
     undelivered_items_count = serializers.IntegerField(read_only=True)
     business_breakdown = serializers.ReadOnlyField()
+    floor = serializers.IntegerField(source="table_floor", read_only=True)
+    table_label = serializers.SerializerMethodField()
+
+    def get_table_label(self, obj):
+        return build_table_label(obj)
 
     class Meta:
         model = Order
@@ -168,7 +223,11 @@ class OrderDetailSerializer(serializers.ModelSerializer):
             "business_breakdown",
             "items",
             "items_count",
+            "table",
             "table_number",
+            "table_floor",
+            "floor",
+            "table_label",
             "created_at",
             "updated_at",
             "completed_at",
@@ -194,7 +253,15 @@ class OrderCreateSerializer(serializers.ModelSerializer):
     """Serializer para crear pedidos"""
 
     items = OrderItemCreateSerializer(many=True, write_only=True)
-    table_number = serializers.IntegerField(min_value=0, max_value=5, required=True)
+    table_id = serializers.PrimaryKeyRelatedField(
+        queryset=Table.objects.filter(is_active=True),
+        source="table",
+        write_only=True,
+        required=False,
+        allow_null=True,
+    )
+    # Compatibilidad: clientes que aún envían solo el número de mesa.
+    table_number = serializers.IntegerField(min_value=0, required=False)
 
     class Meta:
         model = Order
@@ -208,25 +275,42 @@ class OrderCreateSerializer(serializers.ModelSerializer):
             "payment_method",
             "discount",
             "total",
+            "table_id",
             "table_number",
             "items",
         ]
         read_only_fields = ["id", "order_number", "access_code", "total"]
 
-    def validate_table_number(self, value):
-        if value is None:
-            raise serializers.ValidationError(
-                "Debe seleccionar una mesa o barra.")
-        if value < 0 or value > 5:
-            raise serializers.ValidationError(
-                "El valor debe estar entre 0 (Barra) y 5.")
-        return value
+    def _resolve_table(self, attrs):
+        """Determina la mesa a partir de table_id o (fallback) del número."""
+        table = attrs.get("table")
+        if table is None:
+            number = attrs.get("table_number")
+            if number is None:
+                raise serializers.ValidationError(
+                    {"table_id": "Debe seleccionar una mesa o barra."})
+            table = (
+                Table.objects.filter(table_number=number, is_active=True)
+                .order_by("floor")
+                .first()
+            )
+            if table is None:
+                raise serializers.ValidationError(
+                    {"table_number": "Mesa no encontrada o inactiva."})
+        return table
 
     def validate_items(self, value):
         if not value:
             raise serializers.ValidationError(
                 "El pedido debe tener al menos un item.")
         return value
+
+    def validate(self, attrs):
+        table = self._resolve_table(attrs)
+        attrs["table"] = table
+        attrs["table_number"] = table.table_number
+        attrs["table_floor"] = table.floor
+        return attrs
 
     def create(self, validated_data):
         items_data = validated_data.pop("items")
@@ -262,7 +346,15 @@ class OrderCreateSerializer(serializers.ModelSerializer):
 class OrderUpdateSerializer(serializers.ModelSerializer):
     """Serializer para actualizar pedidos"""
 
-    table_number = serializers.IntegerField(min_value=0, max_value=5, required=False)
+    table_id = serializers.PrimaryKeyRelatedField(
+        queryset=Table.objects.filter(is_active=True),
+        source="table",
+        write_only=True,
+        required=False,
+        allow_null=True,
+    )
+    # Compatibilidad: aún se acepta el número suelto.
+    table_number = serializers.IntegerField(min_value=0, required=False)
 
     class Meta:
         model = Order
@@ -273,15 +365,28 @@ class OrderUpdateSerializer(serializers.ModelSerializer):
             "payment_method",
             "is_paid",
             "discount",
+            "table_id",
             "table_number",
         ]
 
-    def validate_table_number(self, value):
-        if value is not None:
-            if value < 0 or value > 5:
-                raise serializers.ValidationError(
-                    "El valor debe estar entre 0 (Barra) y 5.")
-        return value
+    def update(self, instance, validated_data):
+        table = validated_data.get("table")
+        if table is None:
+            number = validated_data.get("table_number")
+            if number is not None:
+                table = (
+                    Table.objects.filter(table_number=number, is_active=True)
+                    .order_by("floor")
+                    .first()
+                )
+                if table is None:
+                    raise serializers.ValidationError(
+                        {"table_number": "Mesa no encontrada o inactiva."})
+        if table is not None:
+            validated_data["table"] = table
+            validated_data["table_number"] = table.table_number
+            validated_data["table_floor"] = table.floor
+        return super().update(instance, validated_data)
 
 
 class OrderStatusUpdateSerializer(serializers.Serializer):
@@ -330,6 +435,11 @@ class PublicOrderDetailSerializer(serializers.ModelSerializer):
     items_count = serializers.IntegerField(read_only=True)
     delivered_items_count = serializers.IntegerField(read_only=True)
     undelivered_items_count = serializers.IntegerField(read_only=True)
+    floor = serializers.IntegerField(source="table_floor", read_only=True)
+    table_label = serializers.SerializerMethodField()
+
+    def get_table_label(self, obj):
+        return build_table_label(obj)
 
     class Meta:
         model = Order
@@ -346,5 +456,8 @@ class PublicOrderDetailSerializer(serializers.ModelSerializer):
             "delivered_items_count",
             "undelivered_items_count",
             "table_number",
+            "table_floor",
+            "floor",
+            "table_label",
             "created_at",
         ]

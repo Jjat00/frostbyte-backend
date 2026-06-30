@@ -12,17 +12,21 @@ from apps.business.models import Business
 
 
 class Table(models.Model):
-    """Mesa del restaurante para tracking de visitas"""
+    """Mesa o barra del restaurante. Identifica el punto de atención por piso."""
 
     table_number = models.IntegerField(
-        unique=True,
         verbose_name="Número de mesa",
-        help_text="Número de la mesa (0=Barra, 1-N=Mesas)"
+        help_text="Número de la mesa dentro del piso (0=Barra, 1-N=Mesas)"
+    )
+    floor = models.PositiveSmallIntegerField(
+        default=2,
+        verbose_name="Piso",
+        help_text="Piso donde está ubicada la mesa o barra"
     )
     table_name = models.CharField(
         max_length=50,
         verbose_name="Nombre",
-        help_text="Nombre descriptivo de la mesa"
+        help_text="Nombre descriptivo de la mesa (ej: Mesa 1, Barra)"
     )
     visit_count = models.PositiveIntegerField(
         default=0,
@@ -39,12 +43,17 @@ class Table(models.Model):
     class Meta:
         verbose_name = "Mesa"
         verbose_name_plural = "Mesas"
-        ordering = ["table_number"]
+        ordering = ["floor", "table_number"]
+        # El número se reinicia por piso: "Mesa 1" puede existir en piso 2 y piso 3.
+        unique_together = (("table_number", "floor"),)
+
+    @property
+    def label(self):
+        """Etiqueta legible con piso, ej: 'Mesa 1 · Piso 3' o 'Barra · Piso 2'."""
+        return f"{self.table_name} · Piso {self.floor}"
 
     def __str__(self):
-        if self.table_number == 0:
-            return self.table_name
-        return f"{self.table_name} (#{self.table_number})"
+        return self.label
 
     def register_visit(self):
         """Incrementa el contador de visitas"""
@@ -99,11 +108,28 @@ class Order(models.Model):
         verbose_name="Notas del cliente",
         help_text="Instrucciones especiales o alergias",
     )
+    # Mesa/barra donde se atiende al cliente. La FK es la referencia real
+    # (los números se repiten por piso); table_number y table_floor quedan
+    # denormalizados para mostrar y para no romper consumidores existentes.
+    table = models.ForeignKey(
+        "orders.Table",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="orders",
+        verbose_name="Mesa",
+    )
     table_number = models.IntegerField(
         null=True,
         blank=True,
         verbose_name="Número de mesa",
-        help_text="Número de mesa donde se atiende al cliente (0=Barra, 1-5=Mesas)",
+        help_text="Número de mesa dentro del piso (0=Barra, 1-N=Mesas)",
+    )
+    table_floor = models.PositiveSmallIntegerField(
+        null=True,
+        blank=True,
+        verbose_name="Piso",
+        help_text="Piso de la mesa donde se atiende al cliente",
     )
 
     # Estado y pago

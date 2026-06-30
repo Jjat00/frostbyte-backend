@@ -20,6 +20,7 @@ from .serializers import (
     AddItemToOrderSerializer,
     MarkItemPaidSerializer,
     PublicOrderDetailSerializer,
+    TableSerializer,
 )
 
 
@@ -34,7 +35,7 @@ class OrderViewSet(viewsets.ModelViewSet):
     destroy: Eliminar pedido
     """
 
-    queryset = Order.objects.prefetch_related(
+    queryset = Order.objects.select_related("table").prefetch_related(
         "items", "items__product_variant__product", "items__business")
     permission_classes = [IsAuthenticated]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
@@ -1041,27 +1042,45 @@ class OrderItemViewSet(viewsets.ModelViewSet):
         return Response(OrderItemSerializer(item).data)
 
 
-class TableViewSet(viewsets.ViewSet):
-    """ViewSet para tracking de visitas a mesas"""
-    permission_classes = [AllowAny]
+class TableViewSet(viewsets.ModelViewSet):
+    """
+    CRUD de mesas y barras.
 
-    def list(self, request):
-        """Lista todas las mesas activas"""
-        tables = Table.objects.filter(is_active=True).order_by("table_number")
-        data = [
-            {
-                "id": table.id,
-                "table_number": table.table_number,
-                "table_name": table.table_name,
-            }
-            for table in tables
-        ]
-        return Response(data)
+    Lectura pública (alimenta los selectores de mesa); creación, edición y
+    desactivación restringidas a staff. La eliminación es lógica (is_active=False)
+    para preservar el historial de pedidos que referencian la mesa.
+    """
+    serializer_class = TableSerializer
+    # Sin paginación: los consumidores (selectores de mesa y juegos) esperan
+    # una lista plana, no la respuesta paginada de DRF.
+    pagination_class = None
+
+    def get_queryset(self):
+        qs = Table.objects.all().order_by("floor", "table_number")
+        include_inactive = str(
+            self.request.query_params.get("include_inactive", "")
+        ).lower()
+        if self.action == "list" and include_inactive not in ("1", "true", "yes"):
+            qs = qs.filter(is_active=True)
+        return qs
+
+    def get_permissions(self):
+        if self.action in ("create", "update", "partial_update", "destroy", "stats"):
+            return [IsAdminUser()]
+        return [AllowAny()]
+
+    def destroy(self, request, *args, **kwargs):
+        """Baja lógica: desactiva la mesa en vez de borrarla."""
+        table = self.get_object()
+        table.is_active = False
+        table.save(update_fields=["is_active", "updated_at"])
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     @action(detail=False, methods=["post"], url_path="register-visit")
     def register_visit(self, request):
-        """Registra una visita a una mesa"""
+        """Registra una visita a una mesa (carta pública por QR)."""
         table_number = request.data.get("table_number")
+        floor = request.data.get("floor", 2)
 
         if table_number is None or table_number == "":
             return Response(
@@ -1071,16 +1090,18 @@ class TableViewSet(viewsets.ViewSet):
 
         try:
             table_number = int(table_number)
+            floor = int(floor)
         except (ValueError, TypeError):
             return Response(
-                {"error": "table_number debe ser un número"},
+                {"error": "table_number y floor deben ser números"},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Buscar o crear la mesa (0 = Barra)
+        # Buscar o crear la mesa (0 = Barra) dentro del piso
         table_name = "Barra" if table_number == 0 else f"Mesa {table_number}"
         table, created = Table.objects.get_or_create(
             table_number=table_number,
+            floor=floor,
             defaults={
                 "table_name": table_name,
                 "is_active": True
@@ -1092,11 +1113,13 @@ class TableViewSet(viewsets.ViewSet):
 
         return Response({
             "table_number": table.table_number,
+            "floor": table.floor,
             "table_name": table.table_name,
+            "label": table.label,
             "visit_count": table.visit_count
         })
 
-    @action(detail=False, methods=["get"], url_path="stats", permission_classes=[IsAdminUser])
+    @action(detail=False, methods=["get"], url_path="stats")
     def stats(self, request):
         """Obtiene estadísticas de visitas por mesa"""
         tables = Table.objects.filter(is_active=True).order_by("-visit_count")
@@ -1104,7 +1127,9 @@ class TableViewSet(viewsets.ViewSet):
         data = [
             {
                 "table_number": table.table_number,
+                "floor": table.floor,
                 "table_name": table.table_name,
+                "label": table.label,
                 "visit_count": table.visit_count
             }
             for table in tables

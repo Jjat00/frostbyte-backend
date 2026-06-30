@@ -33,7 +33,7 @@ class OrderAdmin(admin.ModelAdmin):
 
     fieldsets = (
         ("Pedido", {"fields": ("order_number", "access_code", "status")}),
-        ("Cliente", {"fields": ("customer_name", "customer_phone", "customer_notes", "table_number")}),
+        ("Cliente", {"fields": ("customer_name", "customer_phone", "customer_notes", "table", "table_number", "table_floor")}),
         ("Pago", {"fields": ("payment_method", "is_paid")}),
         ("Totales", {"fields": ("subtotal", "discount", "total")}),
         ("Fechas", {"fields": ("created_at", "updated_at", "completed_at")}),
@@ -98,6 +98,7 @@ class OrderItemAdmin(admin.ModelAdmin):
 @admin.register(Table)
 class TableAdmin(admin.ModelAdmin):
     list_display = [
+        "floor",
         "table_number",
         "table_name",
         "visit_count",
@@ -105,13 +106,13 @@ class TableAdmin(admin.ModelAdmin):
         "created_at",
         "updated_at",
     ]
-    list_filter = ["is_active", "created_at"]
+    list_filter = ["floor", "is_active", "created_at"]
     search_fields = ["table_name", "table_number"]
     readonly_fields = ["visit_count", "created_at", "updated_at"]
-    ordering = ["table_number"]
+    ordering = ["floor", "table_number"]
 
     fieldsets = (
-        ("Información de Mesa", {"fields": ("table_number", "table_name", "is_active")}),
+        ("Información de Mesa", {"fields": ("floor", "table_number", "table_name", "is_active")}),
         ("Estadísticas", {"fields": ("visit_count",)}),
         ("Fechas", {"fields": ("created_at", "updated_at")}),
     )
