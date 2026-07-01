@@ -43,31 +43,52 @@ class FinancialAnalyticsViewSet(viewsets.ViewSet):
         )
         return start_date, end_date
 
-    def _get_current_month_range(self):
-        """Obtiene el rango del mes actual"""
-        local_now = timezone.localtime()
-        start_of_month = local_now.replace(
-            day=1, hour=0, minute=0, second=0, microsecond=0
-        )
-        end_of_month = local_now.replace(
-            hour=23, minute=59, second=59, microsecond=999999
-        )
-        return start_of_month, end_of_month
+    def _resolve_month_anchor(self, request):
+        """Primer dia del mes a analizar.
 
-    def _get_previous_month_range(self):
-        """Obtiene el rango del mes anterior"""
+        Lee ?year= y ?month= (1-12); sin parametros validos devuelve el
+        primer dia del mes en curso. Este es el unico gancho temporal que
+        necesita el frontend para ver cualquier mes.
+        """
         local_now = timezone.localtime()
-        first_day_this_month = local_now.replace(
-            day=1, hour=0, minute=0, second=0, microsecond=0
-        )
-        last_day_last_month = first_day_this_month - timedelta(days=1)
-        start_of_last_month = last_day_last_month.replace(
-            day=1, hour=0, minute=0, second=0, microsecond=0
-        )
-        end_of_last_month = last_day_last_month.replace(
-            hour=23, minute=59, second=59, microsecond=999999
-        )
-        return start_of_last_month, end_of_last_month
+        year = request.query_params.get('year')
+        month = request.query_params.get('month')
+        if year and month:
+            try:
+                y, m = int(year), int(month)
+                if 1 <= m <= 12:
+                    return local_now.replace(
+                        year=y, month=m, day=1,
+                        hour=0, minute=0, second=0, microsecond=0
+                    )
+            except (ValueError, TypeError):
+                pass
+        return local_now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+    def _month_range_for(self, anchor):
+        """Rango (start, end) del mes del ancla.
+
+        Si el ancla es el mes en curso, el fin es 'ahora' (no cuenta dias
+        futuros); si es un mes pasado, el fin es el ultimo instante del mes.
+        """
+        start = anchor.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        local_now = timezone.localtime()
+        if start.year == local_now.year and start.month == local_now.month:
+            end = local_now.replace(hour=23, minute=59, second=59, microsecond=999999)
+        else:
+            next_month = start + relativedelta(months=1)
+            end = (next_month - timedelta(days=1)).replace(
+                hour=23, minute=59, second=59, microsecond=999999
+            )
+        return start, end
+
+    def _previous_month_range_for(self, anchor):
+        """Rango del mes anterior al ancla (mes completo)."""
+        return self._month_range_for(anchor - relativedelta(months=1))
+
+    def _year_ago_month_range_for(self, anchor):
+        """Rango del mismo mes del ano anterior al ancla (mes completo)."""
+        return self._month_range_for(anchor - relativedelta(years=1))
 
     def _calculate_revenue(self, start_date, end_date, business_slug=None):
         """Calcula ingresos de items pagados excluyendo ordenes canceladas,
@@ -168,6 +189,24 @@ class FinancialAnalyticsViewSet(viewsets.ViewSet):
             expenses = expenses.filter(business__slug=business_slug)
         return expenses.aggregate(total=Sum('amount'))['total'] or Decimal('0')
 
+    def _calculate_orders_count(self, start_date, end_date, business_slug=None):
+        """Cuenta pedidos distintos con items pagados en el rango.
+
+        Usa el mismo criterio que _calculate_revenue (items pagados,
+        excluyendo pedidos cancelados). Por negocio cuenta los pedidos que
+        tengan al menos un item pagado de ese negocio.
+        """
+        paid_items = OrderItem.objects.filter(
+            is_paid=True,
+            order__created_at__gte=start_date,
+            order__created_at__lte=end_date
+        ).exclude(order__status=Order.Status.CANCELLED)
+        if business_slug:
+            paid_items = paid_items.filter(
+                product_variant__product__business__slug=business_slug
+            )
+        return paid_items.values('order_id').distinct().count()
+
     def _calculate_percentage_change(self, current, previous):
         """Calcula el porcentaje de cambio entre dos valores"""
         if previous == 0:
@@ -177,62 +216,66 @@ class FinancialAnalyticsViewSet(viewsets.ViewSet):
     @action(detail=False, methods=['get'])
     def summary(self, request):
         """
-        KPIs principales: ingresos, gastos, ganancia neta, margen
+        KPIs principales: ingresos, gastos, ganancia neta, margen, pedidos y
+        ticket promedio. Compara el mes ancla contra el mes anterior y contra
+        el mismo mes del ano pasado (interanual).
         """
         business_slug = request.query_params.get('business')
-        # Rango del mes actual
-        current_start, current_end = self._get_current_month_range()
-        # Rango del mes anterior
-        prev_start, prev_end = self._get_previous_month_range()
+        anchor = self._resolve_month_anchor(request)
+        current_start, current_end = self._month_range_for(anchor)
+        prev_start, prev_end = self._previous_month_range_for(anchor)
+        ya_start, ya_end = self._year_ago_month_range_for(anchor)
 
-        # Calculos mes actual
-        current_revenue = self._calculate_revenue(current_start, current_end, business_slug)
-        current_inventory = self._calculate_inventory_expenses(current_start, current_end, business_slug)
-        current_operational = self._calculate_operational_expenses(current_start, current_end, business_slug)
-        current_total_expenses = current_inventory + current_operational
-        current_profit = current_revenue - current_total_expenses
-        current_margin = round((current_profit / current_revenue * 100), 1) if current_revenue > 0 else 0
+        def compute(start, end):
+            revenue = self._calculate_revenue(start, end, business_slug)
+            inventory = self._calculate_inventory_expenses(start, end, business_slug)
+            operational = self._calculate_operational_expenses(start, end, business_slug)
+            total_expenses = inventory + operational
+            profit = revenue - total_expenses
+            orders = self._calculate_orders_count(start, end, business_slug)
+            avg_ticket = (revenue / orders) if orders > 0 else Decimal('0')
+            margin = round((profit / revenue * 100), 1) if revenue > 0 else 0
+            return {
+                'revenue': revenue,
+                'inventory_expenses': inventory,
+                'operational_expenses': operational,
+                'total_expenses': total_expenses,
+                'net_profit': profit,
+                'orders_count': orders,
+                'avg_ticket': avg_ticket,
+                'profit_margin': margin,
+            }
 
-        # Calculos mes anterior
-        prev_revenue = self._calculate_revenue(prev_start, prev_end, business_slug)
-        prev_inventory = self._calculate_inventory_expenses(prev_start, prev_end, business_slug)
-        prev_operational = self._calculate_operational_expenses(prev_start, prev_end, business_slug)
-        prev_total_expenses = prev_inventory + prev_operational
-        prev_profit = prev_revenue - prev_total_expenses
+        cur = compute(current_start, current_end)
+        prev = compute(prev_start, prev_end)
+        ya = compute(ya_start, ya_end)
+
+        def block(key):
+            return {
+                'value': float(cur[key]),
+                'previous': float(prev[key]),
+                'change': self._calculate_percentage_change(cur[key], prev[key]),
+                'year_ago': float(ya[key]),
+                'change_yoy': self._calculate_percentage_change(cur[key], ya[key]),
+            }
 
         return Response({
-            'revenue': {
-                'value': float(current_revenue),
-                'previous': float(prev_revenue),
-                'change': self._calculate_percentage_change(current_revenue, prev_revenue),
-            },
-            'total_expenses': {
-                'value': float(current_total_expenses),
-                'previous': float(prev_total_expenses),
-                'change': self._calculate_percentage_change(current_total_expenses, prev_total_expenses),
-            },
-            'inventory_expenses': {
-                'value': float(current_inventory),
-                'previous': float(prev_inventory),
-                'change': self._calculate_percentage_change(current_inventory, prev_inventory),
-            },
-            'operational_expenses': {
-                'value': float(current_operational),
-                'previous': float(prev_operational),
-                'change': self._calculate_percentage_change(current_operational, prev_operational),
-            },
-            'net_profit': {
-                'value': float(current_profit),
-                'previous': float(prev_profit),
-                'change': self._calculate_percentage_change(current_profit, prev_profit),
-            },
+            'revenue': block('revenue'),
+            'total_expenses': block('total_expenses'),
+            'inventory_expenses': block('inventory_expenses'),
+            'operational_expenses': block('operational_expenses'),
+            'net_profit': block('net_profit'),
+            'orders_count': block('orders_count'),
+            'avg_ticket': block('avg_ticket'),
             'profit_margin': {
-                'value': current_margin,
-                'previous': round((prev_profit / prev_revenue * 100), 1) if prev_revenue > 0 else 0,
+                'value': cur['profit_margin'],
+                'previous': prev['profit_margin'],
+                'year_ago': ya['profit_margin'],
             },
             'period': {
                 'current_month': current_start.strftime('%B %Y'),
                 'previous_month': prev_start.strftime('%B %Y'),
+                'year_ago_month': ya_start.strftime('%B %Y'),
             }
         })
 
@@ -296,7 +339,8 @@ class FinancialAnalyticsViewSet(viewsets.ViewSet):
         Incluye gastos operativos por categoria y gastos de inventario.
         """
         business_slug = request.query_params.get('business')
-        current_start, current_end = self._get_current_month_range()
+        anchor = self._resolve_month_anchor(request)
+        current_start, current_end = self._month_range_for(anchor)
 
         # Gastos operativos por categoria
         # Usa expense_date para determinar el período del gasto
@@ -365,10 +409,11 @@ class FinancialAnalyticsViewSet(viewsets.ViewSet):
     @action(detail=False, methods=['get'])
     def daily_trend(self, request):
         """
-        Datos dia a dia para el mes actual.
+        Datos dia a dia del mes ancla (hasta hoy si es el mes en curso).
         """
         business_slug = request.query_params.get('business')
-        current_start, current_end = self._get_current_month_range()
+        anchor = self._resolve_month_anchor(request)
+        current_start, current_end = self._month_range_for(anchor)
 
         data = []
         current_date = current_start
@@ -410,72 +455,68 @@ class FinancialAnalyticsViewSet(viewsets.ViewSet):
     @action(detail=False, methods=['get'])
     def comparison(self, request):
         """
-        Comparacion este mes vs mes anterior.
-        Datos para bar chart comparativo.
+        Comparacion del mes ancla vs el mes anterior y vs el mismo mes del
+        ano pasado. Datos para bar chart comparativo.
         """
         business_slug = request.query_params.get('business')
-        current_start, current_end = self._get_current_month_range()
-        prev_start, prev_end = self._get_previous_month_range()
+        anchor = self._resolve_month_anchor(request)
+        current_start, current_end = self._month_range_for(anchor)
+        prev_start, prev_end = self._previous_month_range_for(anchor)
+        ya_start, ya_end = self._year_ago_month_range_for(anchor)
 
-        # Este mes
-        current_revenue = float(self._calculate_revenue(current_start, current_end, business_slug))
-        current_inventory = float(self._calculate_inventory_expenses(current_start, current_end, business_slug))
-        current_operational = float(self._calculate_operational_expenses(current_start, current_end, business_slug))
-        current_expenses = current_inventory + current_operational
-        current_profit = current_revenue - current_expenses
+        def month_block(start, end):
+            revenue = float(self._calculate_revenue(start, end, business_slug))
+            inventory = float(self._calculate_inventory_expenses(start, end, business_slug))
+            operational = float(self._calculate_operational_expenses(start, end, business_slug))
+            expenses = inventory + operational
+            profit = revenue - expenses
+            return {
+                'label': start.strftime('%B %Y'),
+                'revenue': revenue,
+                'expenses': expenses,
+                'inventory_expenses': inventory,
+                'operational_expenses': operational,
+                'profit': profit,
+            }
 
-        # Mes anterior
-        prev_revenue = float(self._calculate_revenue(prev_start, prev_end, business_slug))
-        prev_inventory = float(self._calculate_inventory_expenses(prev_start, prev_end, business_slug))
-        prev_operational = float(self._calculate_operational_expenses(prev_start, prev_end, business_slug))
-        prev_expenses = prev_inventory + prev_operational
-        prev_profit = prev_revenue - prev_expenses
+        current = month_block(current_start, current_end)
+        previous = month_block(prev_start, prev_end)
+        year_ago = month_block(ya_start, ya_end)
 
         return Response({
-            'current_month': {
-                'label': current_start.strftime('%B %Y'),
-                'revenue': current_revenue,
-                'expenses': current_expenses,
-                'inventory_expenses': current_inventory,
-                'operational_expenses': current_operational,
-                'profit': current_profit,
-            },
-            'previous_month': {
-                'label': prev_start.strftime('%B %Y'),
-                'revenue': prev_revenue,
-                'expenses': prev_expenses,
-                'inventory_expenses': prev_inventory,
-                'operational_expenses': prev_operational,
-                'profit': prev_profit,
-            },
+            'current_month': current,
+            'previous_month': previous,
+            'year_ago_month': year_ago,
             'changes': {
-                'revenue': self._calculate_percentage_change(current_revenue, prev_revenue),
-                'expenses': self._calculate_percentage_change(current_expenses, prev_expenses),
-                'profit': self._calculate_percentage_change(current_profit, prev_profit),
+                'revenue': self._calculate_percentage_change(current['revenue'], previous['revenue']),
+                'expenses': self._calculate_percentage_change(current['expenses'], previous['expenses']),
+                'profit': self._calculate_percentage_change(current['profit'], previous['profit']),
+                'revenue_yoy': self._calculate_percentage_change(current['revenue'], year_ago['revenue']),
+                'expenses_yoy': self._calculate_percentage_change(current['expenses'], year_ago['expenses']),
+                'profit_yoy': self._calculate_percentage_change(current['profit'], year_ago['profit']),
             }
         })
 
     @action(detail=False, methods=['get'])
     def by_business(self, request):
         """
-        Desglose del mes actual por cada negocio (Frostbyte vs Frostbyte Food)
+        Desglose del mes ancla por cada negocio (Frostbyte vs Frostbyte Food)
         + el consolidado. Pensado para el dashboard del dueño.
-        Parametro opcional: months_offset (0 = mes actual, 1 = mes anterior, ...).
+        Parametros: year + month (mes concreto) tienen prioridad; si no,
+        months_offset (0 = mes actual, 1 = mes anterior, ...) por compatibilidad.
         """
-        try:
-            months_offset = max(0, min(int(request.query_params.get('months_offset', 0)), 36))
-        except (ValueError, TypeError):
-            return Response({'error': 'months_offset debe ser un entero >= 0.'}, status=400)
-
-        if months_offset == 0:
-            current_start, current_end = self._get_current_month_range()
+        if request.query_params.get('year') and request.query_params.get('month'):
+            anchor = self._resolve_month_anchor(request)
         else:
-            target = timezone.localtime() - relativedelta(months=months_offset)
-            current_start = target.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-            next_month = current_start + relativedelta(months=1)
-            current_end = (next_month - timedelta(days=1)).replace(
-                hour=23, minute=59, second=59, microsecond=999999
-            )
+            try:
+                months_offset = max(0, min(int(request.query_params.get('months_offset', 0)), 36))
+            except (ValueError, TypeError):
+                return Response({'error': 'months_offset debe ser un entero >= 0.'}, status=400)
+            anchor = timezone.localtime().replace(
+                day=1, hour=0, minute=0, second=0, microsecond=0
+            ) - relativedelta(months=months_offset)
+
+        current_start, current_end = self._month_range_for(anchor)
 
         def metrics(business_slug):
             revenue = float(self._calculate_revenue(current_start, current_end, business_slug))
