@@ -14,14 +14,22 @@ Ejemplos:
     # Prueba real solo a tu correo (debes ser cliente registrado en la Polla)
     python manage.py polla_email_reminder --only tucorreo@gmail.com --yes
 
+    # A todos los que les falta algún pronóstico y YA tienen puntos (excluye 0 pts)
+    python manage.py polla_email_reminder --only-pending --min-points 1
+
     # Envío masivo real (pide confirmación; usa --yes para omitirla)
     python manage.py polla_email_reminder
 
 Filtros y opciones:
     --only-pending    solo a quienes tienen partidos sin pronosticar
+    --min-points N    excluir a quienes tengan menos de N puntos (1 = omite los de 0)
     --colombia-only   solo a quienes no han pronosticado el próximo Colombia
     --limit N         tope de destinatarios (seguridad)
     --sleep S         pausa entre envíos (def. 0.6s; respeta el rate limit)
+
+Nota: "partidos sin pronosticar" solo cuenta los que ya tienen ambos equipos
+definidos y aún no arrancan; en eliminatorias se van habilitando conforme se
+juegan, así que los cruces futuros con cupos por definir no se cuentan.
 """
 import time
 
@@ -55,6 +63,10 @@ class Command(BaseCommand):
         parser.add_argument(
             "--only-pending", action="store_true",
             help="Solo a quienes tienen partidos sin pronosticar.",
+        )
+        parser.add_argument(
+            "--min-points", type=int, default=0,
+            help="Excluir a quienes tengan menos de N puntos (1 = omite a los de 0 puntos).",
         )
         parser.add_argument(
             "--colombia-only", action="store_true",
@@ -95,6 +107,8 @@ class Command(BaseCommand):
         # Construir contextos y aplicar los filtros que dependen del usuario.
         plan = []
         for score in recipients:
+            if opts["min_points"] and score.points < opts["min_points"]:
+                continue
             ctx = er.build_context(score, shared)
             if opts["only_pending"] and ctx["pending_count"] == 0:
                 continue
