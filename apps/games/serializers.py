@@ -112,10 +112,14 @@ class GameRoundResultCreateSerializer(serializers.Serializer):
 
 class GameRoomListSerializer(serializers.ModelSerializer):
     """Serializer para listar salas (versión resumida)"""
-    
-    table_number = serializers.IntegerField(source="table.table_number", read_only=True)
+
+    table_number = serializers.SerializerMethodField()
     participant_count = serializers.IntegerField(source="participants.count", read_only=True)
-    
+
+    def get_table_number(self, obj):
+        """Número de mesa (None para salas libres sin mesa)"""
+        return obj.table.table_number if obj.table_id else None
+
     class Meta:
         model = GameRoom
         fields = [
@@ -134,10 +138,18 @@ class GameRoomListSerializer(serializers.ModelSerializer):
 
 class GameRoomDetailSerializer(serializers.ModelSerializer):
     """Serializer para detalle de sala"""
-    
-    table_number = serializers.IntegerField(source="table.table_number", read_only=True)
-    order_number = serializers.CharField(source="order.order_number", read_only=True)
+
+    table_number = serializers.SerializerMethodField()
+    order_number = serializers.SerializerMethodField()
     order_is_active = serializers.SerializerMethodField()
+
+    def get_table_number(self, obj):
+        """Número de mesa (None para salas libres sin mesa)"""
+        return obj.table.table_number if obj.table_id else None
+
+    def get_order_number(self, obj):
+        """Número de pedido (None para salas libres sin pedido)"""
+        return obj.order.order_number if obj.order_id else None
     participants = GameParticipantSerializer(many=True, read_only=True)
     participant_count = serializers.IntegerField(source="participants.count", read_only=True)
     rounds = GameRoundSerializer(many=True, read_only=True)
@@ -211,8 +223,15 @@ class GameRoomDetailSerializer(serializers.ModelSerializer):
 
 class GameRoomCreateSerializer(serializers.Serializer):
     """Serializer para crear sala desde QR"""
-    
+
     qr_code = serializers.CharField(max_length=100)
+    player_name = serializers.CharField(max_length=50)
+    player_device_id = serializers.CharField(max_length=200)
+
+
+class GameRoomFreeCreateSerializer(serializers.Serializer):
+    """Serializer para crear una sala libre (sin mesa ni pedido)"""
+
     player_name = serializers.CharField(max_length=50)
     player_device_id = serializers.CharField(max_length=200)
 

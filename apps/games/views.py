@@ -16,6 +16,7 @@ from .serializers import (
     GameRoomListSerializer,
     GameRoomDetailSerializer,
     GameRoomCreateSerializer,
+    GameRoomFreeCreateSerializer,
     GameRoomJoinSerializer,
     GameRoomConfigSerializer,
     GameRoomStartSerializer,
@@ -34,6 +35,9 @@ def order_allows_game(order):
     Si el pedido está entregado pero aún no está pagado, el juego sigue disponible.
     Solo cuando está entregado Y pagado, el juego ya no está disponible.
     """
+    # Las salas libres no tienen pedido: siempre permiten el juego
+    if order is None:
+        return True
     # Si está cancelado, no permite juego
     if order.status == Order.Status.CANCELLED:
         return False
@@ -157,6 +161,40 @@ class GameRoomViewSet(viewsets.ModelViewSet):
                 )
 
         return queryset
+
+    @action(detail=False, methods=["post"], url_path="create-room")
+    def create_room(self, request):
+        """
+        Crea una sala de juego libre, SIN mesa ni pedido asociado.
+
+        Solo requiere el nombre del jugador. Devuelve el código y el link de la
+        sala para que otros se unan. Es el flujo por defecto: los juegos ya no
+        dependen de una mesa ni de un pedido activo.
+        """
+        serializer = GameRoomFreeCreateSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        player_name = serializer.validated_data["player_name"]
+        player_device_id = serializer.validated_data["player_device_id"]
+
+        with transaction.atomic():
+            room = GameRoom.objects.create(
+                table=None,
+                order=None,
+                status=GameRoom.Status.WAITING,
+                total_rounds=3,  # Por defecto 3 rondas
+            )
+            GameParticipant.objects.create(
+                room=room,
+                player_name=player_name,
+                player_device_id=player_device_id,
+            )
+
+        broadcast_room_update(room.id)
+        broadcast_games_admin_update()
+        serializer_response = GameRoomDetailSerializer(room)
+        return Response(serializer_response.data, status=status.HTTP_201_CREATED)
 
     @action(detail=False, methods=["post"], url_path="create-from-qr")
     def create_from_qr(self, request):
@@ -397,12 +435,9 @@ class GameRoomViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Verificar que el pedido permita el juego
-        order_allows = not (room.order.status ==
-                            Order.Status.DELIVERED and room.order.is_paid)
-        order_allows = order_allows and room.order.status != Order.Status.CANCELLED
-
-        if not order_allows:
+        # Verificar que el pedido permita el juego (solo si la sala tiene pedido;
+        # las salas libres no dependen de un pedido)
+        if room.order_id and not order_allows_game(room.order):
             return Response(
                 {"error": "El pedido no permite iniciar el juego. Verifica que el pedido esté activo"},
                 status=status.HTTP_400_BAD_REQUEST
@@ -787,11 +822,17 @@ class GameRoomViewSet(viewsets.ModelViewSet):
         # Estadísticas generales
         total_games = usages.count()
         
+        def _table_label(usage):
+            """Etiqueta de mesa tolerante a salas libres (sin mesa)"""
+            if not usage.table_id:
+                return None, "Sala libre"
+            table_num = usage.table.table_number
+            return table_num, ("Barra" if table_num == 0 else f"Mesa {table_num}")
+
         # Estadísticas por mesa
         by_table = {}
         for usage in usages:
-            table_num = usage.table.table_number
-            table_label = "Barra" if table_num == 0 else f"Mesa {table_num}"
+            table_num, table_label = _table_label(usage)
             if table_label not in by_table:
                 by_table[table_label] = {
                     "table_number": table_num,
@@ -804,10 +845,11 @@ class GameRoomViewSet(viewsets.ModelViewSet):
         last_game = None
         if usages.exists():
             last_usage = usages.first()
+            last_num, last_label = _table_label(last_usage)
             last_game = {
                 "room_code": last_usage.room.room_code,
-                "table": last_usage.table.table_number,
-                "table_label": "Barra" if last_usage.table.table_number == 0 else f"Mesa {last_usage.table.table_number}",
+                "table": last_num,
+                "table_label": last_label,
                 "total_rounds": last_usage.total_rounds,
                 "finished_at": last_usage.game_finished_at.isoformat() if last_usage.game_finished_at else None,
                 "player_name": last_usage.player_name,
@@ -816,10 +858,11 @@ class GameRoomViewSet(viewsets.ModelViewSet):
         # Historial reciente (últimos 10 juegos)
         recent_games = []
         for usage in usages[:10]:
+            usage_num, usage_label = _table_label(usage)
             recent_games.append({
                 "room_code": usage.room.room_code,
-                "table": usage.table.table_number,
-                "table_label": "Barra" if usage.table.table_number == 0 else f"Mesa {usage.table.table_number}",
+                "table": usage_num,
+                "table_label": usage_label,
                 "total_rounds": usage.total_rounds,
                 "finished_at": usage.game_finished_at.isoformat() if usage.game_finished_at else None,
                 "player_name": usage.player_name,

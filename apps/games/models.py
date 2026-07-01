@@ -88,18 +88,25 @@ class GameRoom(models.Model):
     )
 
     # Relaciones
+    # NOTA: table y order son OPCIONALES. Las salas libres (creadas solo con el
+    # nombre del jugador) no dependen de una mesa ni de un pedido activo.
     table = models.ForeignKey(
         Table,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
         related_name="game_rooms",
         verbose_name="Mesa",
+        null=True,
+        blank=True,
+        help_text="Mesa asociada (opcional; las salas libres no tienen mesa)",
     )
     order = models.ForeignKey(
         "orders.Order",
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
         related_name="game_rooms",
         verbose_name="Pedido",
-        help_text="Pedido activo asociado a esta sala",
+        null=True,
+        blank=True,
+        help_text="Pedido asociado (opcional; las salas libres no dependen de un pedido)",
     )
 
     # Campos para apuestas (NULL para juegos CHILL)
@@ -164,7 +171,9 @@ class GameRoom(models.Model):
         ordering = ["-created_at"]
 
     def __str__(self):
-        return f"Sala {self.room_code} - Mesa {self.table.table_number}"
+        if self.table_id:
+            return f"Sala {self.room_code} - Mesa {self.table.table_number}"
+        return f"Sala {self.room_code}"
 
     def save(self, *args, **kwargs):
         if not self.room_code:
@@ -203,10 +212,15 @@ class GameRoom(models.Model):
     @property
     def can_play(self):
         """Verifica si la sala puede iniciar el juego"""
-        # Verificar que el pedido permita el juego (no entregado y pagado)
-        order_allows = not (self.order.status ==
-                            self.order.Status.DELIVERED and self.order.is_paid)
-        order_allows = order_allows and self.order.status != self.order.Status.CANCELLED
+        # Si la sala tiene pedido asociado, este debe permitir el juego (no
+        # entregado y pagado). Las salas libres (sin pedido) no tienen esa
+        # restricción.
+        if self.order_id:
+            order_allows = not (self.order.status ==
+                                self.order.Status.DELIVERED and self.order.is_paid)
+            order_allows = order_allows and self.order.status != self.order.Status.CANCELLED
+        else:
+            order_allows = True
 
         return (
             self.status in [self.Status.WAITING, self.Status.CONFIGURING]
@@ -414,10 +428,12 @@ class GameUsage(models.Model):
     )
     table = models.ForeignKey(
         Table,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
         related_name="game_usages",
         verbose_name="Mesa",
-        help_text="Mesa donde se jugó",
+        null=True,
+        blank=True,
+        help_text="Mesa donde se jugó (opcional para salas libres)",
     )
 
     # Información del participante
