@@ -736,13 +736,9 @@ class RankingView(APIView):
                 "exact": s.exact_hits,
                 "is_you": s.user_id == me_id,
             }
-            if i <= 100:
-                rows.append(row)
-            if row["is_you"]:
-                my_row = row
-        # Si ya aparece dentro del top 100, no hace falta mandarlo aparte.
-        if my_row and any(r["is_you"] for r in rows):
-            my_row = None
+            rows.append(row)
+        # La tabla va completa, asi que la fila propia ya viene en `rows`;
+        # `me` se conserva en el payload por compatibilidad con el front.
         return Response({"ranking": rows, "me": my_row, "total": len(ordered)})
 
 
