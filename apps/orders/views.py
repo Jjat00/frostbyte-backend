@@ -104,6 +104,14 @@ class OrderViewSet(viewsets.ModelViewSet):
             month_ago = local_now - timedelta(days=30)
             queryset = queryset.filter(created_at__gte=month_ago)
 
+        # Los no-admin (meseros/cocina) solo pueden listar pedidos de hoy y
+        # ayer, sin importar el filtro de fecha que pidan por query param.
+        user = self.request.user
+        if self.action == "list" and not getattr(user, "is_admin", False):
+            start_of_yesterday = (local_now - timedelta(days=1)).replace(
+                hour=0, minute=0, second=0, microsecond=0)
+            queryset = queryset.filter(created_at__gte=start_of_yesterday)
+
         # Filtrar solo activos
         active_only = self.request.query_params.get("active")
         if active_only == "true":
