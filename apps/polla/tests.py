@@ -473,6 +473,61 @@ def _customer(username):
     )
 
 
+class ParticipantAwardsVisibilityTests(TestCase):
+    """Las menciones ajenas solo se publican cuando ya no se pueden cambiar."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = _customer("diego")
+        self.team = _make_team("ARG")
+        self.award = Award.objects.create(
+            code="champion", title="Campeón", points=25,
+            award_type=Award.AwardType.TEAM, display_order=1,
+        )
+        AwardPick.objects.create(user=self.user, award=self.award, team=self.team)
+
+    def _profile(self):
+        r = self.client.get(f"/api/v1/polla/participants/{self.user.id}/")
+        self.assertEqual(r.status_code, 200)
+        return r.data
+
+    def test_open_awards_stay_hidden(self):
+        # Menciones aún abiertas: mostrarlas dejaría copiarse del rival.
+        Tournament.objects.create(
+            kickoff=timezone.now(),
+            awards_lock_at=timezone.now() + timedelta(days=1),
+        )
+        data = self._profile()
+        self.assertFalse(data["awards_locked"])
+        self.assertEqual(data["awards"], [])
+
+    def test_locked_awards_go_public(self):
+        Tournament.objects.create(
+            kickoff=timezone.now(),
+            awards_lock_at=timezone.now() - timedelta(hours=1),
+        )
+        data = self._profile()
+        self.assertTrue(data["awards_locked"])
+        [a] = data["awards"]
+        self.assertEqual(a["code"], "champion")
+        self.assertEqual(a["pick"]["team_code"], "ARG")
+        self.assertFalse(a["resolved"])
+        self.assertIsNone(a["result"])
+        self.assertFalse(a["won"])
+
+    def test_resolved_award_shows_result_and_points(self):
+        # Sin cierre global: la mención individualmente resuelta sí se publica.
+        self.award.resolved = True
+        self.award.resolved_team = self.team
+        self.award.save()
+        recompute_all()
+        data = self._profile()
+        [a] = data["awards"]
+        self.assertTrue(a["won"])
+        self.assertEqual(a["points_earned"], 25)
+        self.assertEqual(a["result"]["team_code"], "ARG")
+
+
 class ReferralTests(TestCase):
     def setUp(self):
         self.client = APIClient()

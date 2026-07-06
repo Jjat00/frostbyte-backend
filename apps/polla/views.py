@@ -742,6 +742,19 @@ class RankingView(APIView):
         return Response({"ranking": rows, "me": my_row, "total": len(ordered)})
 
 
+def _award_choice_lite(team, player):
+    """Forma pública de una elección de mención (selección o jugador)."""
+    if team:
+        return {"kind": "team", "name": team.name, "team_code": team.code, "iso2": team.iso2}
+    if player:
+        t = player.team
+        return {
+            "kind": "player", "name": player.name,
+            "team_code": t.code if t else None, "iso2": t.iso2 if t else None,
+        }
+    return None
+
+
 def _public_breakdown(score, pos):
     """Desglose de puntos para el perfil público (sin datos sensibles)."""
     return {
@@ -762,11 +775,13 @@ class PlayerProfileView(APIView):
     """Perfil público de un participante del ranking.
 
     Cualquiera puede abrirlo al tocar a una persona en la tabla. Muestra de
-    dónde salieron sus puntos: desglose por fuente, misiones completadas y el
-    historial de sus pronósticos en partidos EN VIVO o YA TERMINADOS con lo que
-    sumó en cada uno (en los de en vivo, el marcador parcial). Nunca revela
-    pronósticos de partidos sin empezar (UPCOMING): sería un spoiler/ventaja. No
-    expone email ni otros datos sensibles, a diferencia del detalle de admin.
+    dónde salieron sus puntos: desglose por fuente, misiones completadas, sus
+    menciones (solo las que ya no se pueden cambiar) y el historial de sus
+    pronósticos en partidos EN VIVO o YA TERMINADOS con lo que sumó en cada uno
+    (en los de en vivo, el marcador parcial). Nunca revela pronósticos de
+    partidos sin empezar (UPCOMING) ni menciones aún abiertas: sería un
+    spoiler/ventaja. No expone email ni otros datos sensibles, a diferencia del
+    detalle de admin.
     """
 
     permission_classes = [AllowAny]
@@ -863,6 +878,43 @@ class PlayerProfileView(APIView):
             "points": min(ref_qualified, REFERRAL_CAP) * REFERRAL_POINTS_PER,
         }
 
+        # Menciones del participante. Una mención solo se hace pública cuando ya
+        # NO se puede cambiar (cierre global del torneo o mención resuelta):
+        # antes de eso mostrar el pick ajeno sería regalarlo para copiar. Las que
+        # aún están abiertas simplemente no viajan en la lista.
+        tournament = Tournament.get_active()
+        picks_locked = bool(tournament and tournament.awards_locked)
+        pick_by_award = {
+            p.award_id: p
+            for p in AwardPick.objects.filter(user=user).select_related(
+                "team", "player", "player__team"
+            )
+        }
+        awards = []
+        for a in Award.objects.select_related(
+            "resolved_team", "resolved_player", "resolved_player__team"
+        ):
+            if not (picks_locked or a.resolved):
+                continue
+            p = pick_by_award.get(a.id)
+            awards.append({
+                "code": a.code,
+                "title": a.title,
+                "points": a.points,
+                "type": a.award_type,
+                "resolved": a.resolved,
+                "pick": _award_choice_lite(
+                    p.team if p else None, p.player if p else None
+                ),
+                "won": bool(p and p.scored and p.points_earned > 0),
+                "points_earned": p.points_earned if p else 0,
+                # La respuesta real, para contrastar el pick cuando ya se sabe.
+                "result": (
+                    _award_choice_lite(a.resolved_team, a.resolved_player)
+                    if a.resolved else None
+                ),
+            })
+
         return Response({
             "user": {
                 "id": user.id,
@@ -872,6 +924,8 @@ class PlayerProfileView(APIView):
             "score": _public_breakdown(score, pos),
             "missions": missions,
             "referral": referral,
+            "awards": awards,
+            "awards_locked": picks_locked,
             "predictions": predictions,
             "is_you": request.user.is_authenticated and request.user.id == user.id,
         })
