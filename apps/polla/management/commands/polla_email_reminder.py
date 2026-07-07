@@ -24,6 +24,7 @@ Filtros y opciones:
     --only-pending    solo a quienes tienen partidos sin pronosticar
     --min-points N    excluir a quienes tengan menos de N puntos (1 = omite los de 0)
     --colombia-only   solo a quienes no han pronosticado el próximo Colombia
+    --exclude EMAIL   excluir ese correo del envío (repetible)
     --limit N         tope de destinatarios (seguridad)
     --sleep S         pausa entre envíos (def. 0.6s; respeta el rate limit)
 
@@ -73,6 +74,10 @@ class Command(BaseCommand):
             help="Solo a quienes no han pronosticado el próximo partido de Colombia.",
         )
         parser.add_argument(
+            "--exclude", metavar="EMAIL", action="append", default=[],
+            help="Excluir ese correo del envío. Se puede repetir.",
+        )
+        parser.add_argument(
             "--limit", type=int, default=0,
             help="Máximo de destinatarios (0 = sin tope).",
         )
@@ -105,8 +110,11 @@ class Command(BaseCommand):
             )
 
         # Construir contextos y aplicar los filtros que dependen del usuario.
+        excluded = {e.strip().lower() for e in opts["exclude"]}
         plan = []
         for score in recipients:
+            if score.user.email.lower() in excluded:
+                continue
             if opts["min_points"] and score.points < opts["min_points"]:
                 continue
             ctx = er.build_context(score, shared)
