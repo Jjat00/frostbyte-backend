@@ -4,7 +4,7 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.exceptions import ValidationError
 from rest_framework.throttling import UserRateThrottle
-from apps.accounts.permissions import IsAdminUser
+from apps.accounts.permissions import IsAdminUser, IsStaffMember
 from django.db.models import Sum, Count, Q
 from django.db.models.functions import TruncDate, ExtractHour, ExtractWeekDay
 from django.utils import timezone
@@ -58,6 +58,47 @@ class OrderViewSet(viewsets.ModelViewSet):
         elif self.action == "update_status":
             return OrderStatusUpdateSerializer
         return OrderDetailSerializer
+
+    @action(
+        detail=False,
+        methods=["get", "patch"],
+        url_path="store-settings",
+        permission_classes=[IsStaffMember],
+    )
+    def store_settings(self, request):
+        """Estado operativo del local para el staff (abierto/cerrado, domicilios).
+
+        GET  -> estado actual.
+        PATCH-> actualiza `is_open` y/o `customer_ordering_enabled`. Al cambiar
+                `is_open` se registra quién y cuándo.
+        """
+        cfg = StoreSettings.load()
+
+        if request.method == "PATCH":
+            update_fields = []
+
+            if "is_open" in request.data:
+                new_value = bool(request.data.get("is_open"))
+                if new_value != cfg.is_open:
+                    cfg.is_open = new_value
+                    cfg.status_changed_at = timezone.now()
+                    cfg.status_changed_by = request.user
+                    update_fields += ["is_open", "status_changed_at", "status_changed_by"]
+
+            if "customer_ordering_enabled" in request.data:
+                cfg.customer_ordering_enabled = bool(request.data.get("customer_ordering_enabled"))
+                update_fields.append("customer_ordering_enabled")
+
+            if update_fields:
+                cfg.save(update_fields=update_fields + ["updated_at"])
+
+        return Response({
+            "is_open": cfg.is_open,
+            "customer_ordering_enabled": cfg.customer_ordering_enabled,
+            "can_order": cfg.is_open and cfg.customer_ordering_enabled,
+            "delivery_fee": str(cfg.delivery_fee),
+            "status_changed_at": cfg.status_changed_at,
+        })
 
     def perform_create(self, serializer):
         """Crear pedido y notificar via WebSocket"""
@@ -1344,6 +1385,9 @@ class CustomerOrderViewSet(mixins.CreateModelMixin,
 
     def perform_create(self, serializer):
         cfg = StoreSettings.load()
+        if not cfg.is_open:
+            raise ValidationError(
+                "El local está cerrado en este momento. No es posible hacer pedidos.")
         if not cfg.customer_ordering_enabled:
             raise ValidationError(
                 "Los pedidos a domicilio están deshabilitados por el momento.")
@@ -1356,9 +1400,11 @@ class CustomerOrderViewSet(mixins.CreateModelMixin,
 
     @action(detail=False, methods=["get"], permission_classes=[AllowAny])
     def config(self, request):
-        """Configuración pública para que el checkout muestre tarifa y disponibilidad."""
+        """Configuración pública: estado del local, tarifa y disponibilidad de pedidos."""
         cfg = StoreSettings.load()
         return Response({
+            "is_open": cfg.is_open,
             "customer_ordering_enabled": cfg.customer_ordering_enabled,
+            "can_order": cfg.is_open and cfg.customer_ordering_enabled,
             "delivery_fee": str(cfg.delivery_fee),
         })

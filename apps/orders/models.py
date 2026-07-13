@@ -658,10 +658,15 @@ class PageVisit(models.Model):
 class StoreSettings(models.Model):
     """Configuración operativa del local (singleton, editable desde el admin).
 
-    Permite ajustar la tarifa de domicilio y activar/desactivar los pedidos a
-    domicilio del cliente sin necesidad de redeploy.
+    Permite abrir/cerrar el local, ajustar la tarifa de domicilio y
+    activar/desactivar los pedidos a domicilio del cliente sin redeploy.
     """
 
+    is_open = models.BooleanField(
+        default=True,
+        verbose_name="Local abierto",
+        help_text="Si está cerrado, el cliente ve el estado 'Cerrado' y no puede hacer pedidos.",
+    )
     delivery_fee = models.DecimalField(
         max_digits=10,
         decimal_places=2,
@@ -670,9 +675,23 @@ class StoreSettings(models.Model):
         help_text="Costo fijo del domicilio que se suma al total del pedido",
     )
     customer_ordering_enabled = models.BooleanField(
-        default=True,
+        default=False,
         verbose_name="Domicilios en línea activos",
         help_text="Interruptor general para habilitar/pausar los pedidos a domicilio del cliente",
+    )
+    status_changed_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name="Estado cambiado el",
+        help_text="Última vez que se abrió/cerró el local.",
+    )
+    status_changed_by = models.ForeignKey(
+        "accounts.User",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+        verbose_name="Estado cambiado por",
     )
     updated_at = models.DateTimeField(auto_now=True, verbose_name="Actualizado")
 
@@ -681,7 +700,8 @@ class StoreSettings(models.Model):
         verbose_name_plural = "Configuración de la tienda"
 
     def __str__(self):
-        return "Configuración de la tienda"
+        estado = "abierto" if self.is_open else "cerrado"
+        return f"Configuración de la tienda ({estado})"
 
     def save(self, *args, **kwargs):
         # Fuerza singleton: siempre la misma fila

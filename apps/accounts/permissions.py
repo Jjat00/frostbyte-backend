@@ -26,6 +26,22 @@ class IsEmployeeOrAdmin(permissions.BasePermission):
         return bool(request.user and request.user.is_authenticated)
 
 
+class IsStaffMember(permissions.BasePermission):
+    """
+    Allows access only to internal staff (admin or employee), never customers.
+
+    A diferencia de IsEmployeeOrAdmin (que solo valida is_authenticated), esta
+    clase excluye a los clientes autenticados con Google. Úsala para acciones
+    operativas del local (abrir/cerrar, activar domicilios).
+    """
+    def has_permission(self, request, view):
+        return bool(
+            request.user
+            and request.user.is_authenticated
+            and getattr(request.user, "is_staff_member", False)
+        )
+
+
 class IsAdminOrReadOnly(permissions.BasePermission):
     """
     Public read access, write access only for admin users.
