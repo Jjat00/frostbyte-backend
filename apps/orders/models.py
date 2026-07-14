@@ -670,7 +670,7 @@ class StoreSettings(models.Model):
     delivery_fee = models.DecimalField(
         max_digits=10,
         decimal_places=2,
-        default=Decimal("3000.00"),
+        default=Decimal("2000.00"),
         verbose_name="Tarifa de envío",
         help_text="Costo fijo del domicilio que se suma al total del pedido",
     )
