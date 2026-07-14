@@ -86,6 +86,7 @@ class Order(models.Model):
     class Source(models.TextChoices):
         STAFF = "staff", "Staff"
         CUSTOMER = "customer", "Cliente"
+        WHATSAPP = "whatsapp", "WhatsApp"
 
     # Tipo y origen del pedido
     order_type = models.CharField(
