@@ -88,6 +88,22 @@ def send_text(phone_number_id, to, body):
     return results[-1] if results else None
 
 
+def send_typing_indicator(phone_number_id, message_id):
+    """Marca el mensaje como leído y muestra 'escribiendo…'.
+
+    El indicador dura ~25 s o hasta que se envíe la respuesta.
+    """
+    return _post_message(
+        phone_number_id,
+        {
+            "messaging_product": "whatsapp",
+            "status": "read",
+            "message_id": message_id,
+            "typing_indicator": {"type": "text"},
+        },
+    )
+
+
 def send_buttons(phone_number_id, to, body, buttons):
     """Envía un mensaje con botones de respuesta rápida.
 

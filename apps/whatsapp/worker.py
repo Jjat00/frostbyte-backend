@@ -119,9 +119,22 @@ def extract_inbound_messages(payload):
                 "contact_name": (conversation.get("contact_name") or "").strip(),
                 "text": text.strip(),
                 "phone_number_id": phone_number_id,
+                "message_id": message.get("id") or "",
             }
         )
     return results
+
+
+def _keep_typing(phone_number_id, message_id, stop_event, max_renewals=4):
+    """Muestra 'escribiendo…' mientras el agente genera la respuesta.
+
+    El indicador de WhatsApp expira a los ~25 s, así que se renueva hasta
+    max_renewals veces o hasta que stop_event se active (respuesta lista).
+    """
+    for _ in range(max_renewals):
+        kapso.send_typing_indicator(phone_number_id, message_id)
+        if stop_event.wait(20):
+            return
 
 
 def enqueue_event(event_id):
@@ -206,8 +219,21 @@ def _process_event(event):
         from .agent import run_agent
 
         text = "\n".join(m["text"] for m in messages)
-        with _phone_lock(contact.phone):
-            reply = run_agent(contact, text)
+        last_message_id = next(
+            (m["message_id"] for m in reversed(messages) if m["message_id"]), ""
+        )
+        stop_typing = threading.Event()
+        if phone_number_id and last_message_id:
+            threading.Thread(
+                target=_keep_typing,
+                args=(phone_number_id, last_message_id, stop_typing),
+                daemon=True,
+            ).start()
+        try:
+            with _phone_lock(contact.phone):
+                reply = run_agent(contact, text)
+        finally:
+            stop_typing.set()
 
         kapso.send_text(phone_number_id, contact.phone, reply)
 
