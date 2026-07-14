@@ -517,6 +517,14 @@ class OrderViewSet(viewsets.ModelViewSet):
         total_paid_items = paid_items.count()
         total_unpaid_items = unpaid_items.count()
 
+        # Domicilios: la tarifa de envío es del domiciliario, NO ingreso del
+        # local, por eso va aparte y no se suma a total_revenue
+        delivery_orders = orders.filter(
+            order_type=Order.OrderType.DELIVERY
+        ).exclude(status=Order.Status.CANCELLED)
+        delivery_paid = delivery_orders.filter(is_paid=True).aggregate(
+            total=Sum("delivery_fee"), count=Count("id"))
+
         return Response(
             {
                 "period": date_filter,
@@ -525,6 +533,11 @@ class OrderViewSet(viewsets.ModelViewSet):
                 "unpaid_total": str(unpaid_total),
                 "total_paid_items": total_paid_items,
                 "total_unpaid_items": total_unpaid_items,
+                "delivery": {
+                    "orders_count": delivery_orders.count(),
+                    "paid_count": delivery_paid["count"] or 0,
+                    "fees_total": str(delivery_paid["total"] or 0),
+                },
                 "by_status": {
                     "pending": pending_count,
                     "preparing": preparing_count,
