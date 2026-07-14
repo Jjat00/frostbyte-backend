@@ -58,6 +58,15 @@ class WhatsAppContact(models.Model):
         verbose_name="Atendido por humano",
         help_text="Si está activo, el agente NO responde a este contacto hasta desactivarlo",
     )
+    human_until = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name="Pausa humana hasta",
+        help_text=(
+            "Mientras esta hora esté en el futuro el agente no responde: un humano del "
+            "equipo intervino en el chat. Se renueva con cada mensaje del humano"
+        ),
+    )
     is_blocked = models.BooleanField(
         default=False,
         verbose_name="Bloqueado",
@@ -79,6 +88,28 @@ class WhatsAppContact(models.Model):
     def __str__(self):
         name = self.customer_name or self.profile_name or "sin nombre"
         return f"{self.phone} ({name})"
+
+
+class SentMessage(models.Model):
+    """Mensaje saliente enviado por el propio backend vía la API de Kapso.
+
+    Registra el wamid de todo lo que envía el sistema (agente y notificaciones)
+    para distinguirlo de los mensajes que un humano del equipo manda desde el
+    inbox de Kapso o la app de WhatsApp Business: un evento message.sent cuyo
+    id no esté aquí se trata como intervención humana y pausa al agente.
+    """
+
+    wamid = models.CharField(max_length=128, unique=True, verbose_name="ID de mensaje")
+    to_phone = models.CharField(max_length=30, blank=True, verbose_name="Destinatario")
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True, verbose_name="Enviado")
+
+    class Meta:
+        verbose_name = "Mensaje enviado por el sistema"
+        verbose_name_plural = "Mensajes enviados por el sistema"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.to_phone} · {self.wamid[:40]}"
 
 
 class WebhookEvent(models.Model):

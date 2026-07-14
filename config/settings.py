@@ -304,6 +304,9 @@ WHATSAPP_AGENT_ENABLED = os.getenv('WHATSAPP_AGENT_ENABLED', 'True').lower() == 
 WHATSAPP_AGENT_MODEL = os.getenv('WHATSAPP_AGENT_MODEL', 'gpt-4o-mini')
 # Datos de pago por transferencia que el agente comparte (Nequi/cuenta/etc.)
 WHATSAPP_TRANSFER_INFO = os.getenv('WHATSAPP_TRANSFER_INFO', '')
+# Minutos que el agente queda pausado tras cada mensaje que un humano del
+# equipo envía al cliente (desde el inbox de Kapso o la app de WhatsApp)
+WHATSAPP_HUMAN_PAUSE_MINUTES = int(os.getenv('WHATSAPP_HUMAN_PAUSE_MINUTES', '30'))
 BACKEND_PUBLIC_URL = os.getenv(
     'BACKEND_PUBLIC_URL', 'https://frostbyte-backend-production.up.railway.app'
 )

@@ -22,6 +22,25 @@ MAX_RETRIES = 2
 RETRY_BACKOFF_SECONDS = 2
 
 
+def _record_sent(data, to_phone):
+    """Guarda el wamid de un mensaje enviado por el sistema.
+
+    Los eventos whatsapp.message.sent cuyo id no esté registrado se tratan
+    como intervención humana (worker._handle_outbound), así que aquí debe
+    quedar TODO lo que envía el backend (agente y notificaciones).
+    """
+    try:
+        wamid = ((data or {}).get("messages") or [{}])[0].get("id")
+        if wamid:
+            from .models import SentMessage
+
+            SentMessage.objects.get_or_create(
+                wamid=wamid[:128], defaults={"to_phone": str(to_phone or "")[:30]}
+            )
+    except Exception:
+        logger.exception("No se pudo registrar el wamid del mensaje enviado")
+
+
 def _post_message(phone_number_id, payload):
     """Envía un payload a la API de mensajes con reintentos ante 429/5xx."""
     if not settings.KAPSO_API_KEY:
@@ -39,7 +58,10 @@ def _post_message(phone_number_id, payload):
         try:
             response = requests.post(url, json=payload, headers=headers, timeout=15)
             if response.status_code < 300:
-                return response.json()
+                data = response.json()
+                if payload.get("to"):
+                    _record_sent(data, payload.get("to"))
+                return data
             last_error = f"HTTP {response.status_code}: {response.text[:300]}"
             # Solo reintenta errores transitorios
             if response.status_code not in (429, 500, 502, 503, 504):

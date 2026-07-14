@@ -58,6 +58,17 @@ Cliente WhatsApp
 - **Handoff humano**: la tool `solicitar_humano` activa
   `WhatsAppContact.human_handoff` y el agente deja de responder a ese contacto.
   Se reactiva desde el admin de Django (Contactos de WhatsApp).
+- **Intervención humana (auto-pausa)**: si alguien del equipo le responde al
+  cliente desde el inbox de Kapso o la app de WhatsApp Business, el agente se
+  pausa solo para ese contacto (`human_until`, ventana deslizante de
+  `WHATSAPP_HUMAN_PAUSE_MINUTES`, default 30 min, renovada con cada mensaje
+  humano) y se reanuda automáticamente al expirar. Cómo detecta al humano: el
+  backend registra el wamid de todo lo que envía (`SentMessage`); un evento
+  `whatsapp.message.sent` con wamid desconocido (u `origin=business_app`) es
+  un humano. Mientras dura la pausa, tanto los mensajes del humano (como
+  respuestas del asistente) como los del cliente quedan guardados en el hilo
+  de LangGraph (`record_messages`), así el agente retoma con el contexto
+  completo. Requiere suscribir el webhook también a `whatsapp.message.sent`.
 - **Memoria**: la conversación del día persiste en Postgres (tablas de
   LangGraph, se crean solas). Lo duradero (nombre, dirección habitual,
   preferencias) vive en `WhatsAppContact` y el historial real en `Order`.
@@ -72,6 +83,7 @@ Cliente WhatsApp
 | `WHATSAPP_AGENT_ENABLED` | `False` apaga al agente (los webhooks se registran igual) |
 | `WHATSAPP_AGENT_MODEL` | Modelo de OpenAI (default `gpt-4o-mini`) |
 | `WHATSAPP_TRANSFER_INFO` | Datos de pago por transferencia que comparte el agente |
+| `WHATSAPP_HUMAN_PAUSE_MINUTES` | Minutos de pausa del agente tras cada mensaje de un humano del equipo (default 30) |
 | `OPENAI_API_KEY` | Ya existente (la usa también el generador de imágenes) |
 
 ## Puesta en marcha en Kapso
@@ -82,7 +94,9 @@ Cliente WhatsApp
    de 6 caracteres. El sandbox soporta texto, interactivos y webhooks propios.
 3. Crear el webhook apuntando a
    `https://<backend>/api/v1/whatsapp/webhook/` suscrito a
-   `whatsapp.message.received`, y copiar el secret a `KAPSO_WEBHOOK_SECRET`.
+   `whatsapp.message.received` **y** `whatsapp.message.sent` (este último
+   permite detectar cuando un humano del equipo interviene y pausar al
+   agente), y copiar el secret a `KAPSO_WEBHOOK_SECRET`.
 4. Recomendado: activar el *message buffering* de Kapso (3–5 s) para que los
    mensajes partidos del cliente lleguen agrupados.
 5. Copiar los `phone_number_id` a `KAPSO_PHONE_NUMBER_IDS`.

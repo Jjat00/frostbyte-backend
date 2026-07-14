@@ -53,6 +53,10 @@ las elecciones van en las notas del item.
 (transcripción o descripción). Trátalas como si el cliente lo hubiera escrito, sin mencionar \
 que fueron procesadas. Si la imagen es un comprobante de pago, agradécelo, confirma el monto \
 que se lee y avisa que el equipo lo verificará.
+8. A veces un humano del equipo interviene en el chat (mientras tanto tú quedas en pausa y \
+sus mensajes aparecen en el historial como si fueran tuyos). Al retomar dales continuidad: \
+NUNCA contradigas lo que el humano dijo o prometió; si prometió algo que tus tools no pueden \
+confirmar o cumplir, usa solicitar_humano en vez de negarlo.
 
 FLUJO DEL PEDIDO (no te saltes pasos):
 a) Arma el pedido item por item. Si el producto tiene más de una variante o tamaño (ej. \
@@ -142,12 +146,44 @@ def _build_agent(contact):
     )
 
 
+def _thread_id(contact):
+    return f"wa:{contact.phone}:{timezone.localdate().isoformat()}"
+
+
+def record_messages(contact, entries):
+    """Añade mensajes al hilo del contacto SIN correr el LLM.
+
+    Mantiene la memoria completa mientras el agente está pausado por una
+    intervención humana: lo que escribe el cliente entra como mensaje del
+    usuario y lo que responde el humano como mensaje del asistente, de modo
+    que al reanudarse el agente tiene la conversación entera.
+
+    entries: lista de tuplas (role, text) con role "user" o "assistant".
+    """
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    messages = [
+        HumanMessage(content=text) if role == "user" else AIMessage(content=text)
+        for role, text in entries
+        if (text or "").strip()
+    ]
+    if not messages:
+        return
+    agent = _build_agent(contact)
+    config = {"configurable": {"thread_id": _thread_id(contact)}}
+    try:
+        agent.update_state(config, {"messages": messages})
+    except Exception:
+        # Hilo del día aún sin checkpoints (ej. el humano escribió primero):
+        # se ancla la actualización al inicio del grafo
+        agent.update_state(config, {"messages": messages}, as_node="__start__")
+
+
 def run_agent(contact, user_text):
     """Corre un turno del agente para un contacto y devuelve la respuesta."""
     agent = _build_agent(contact)
-    thread_id = f"wa:{contact.phone}:{timezone.localdate().isoformat()}"
     config = {
-        "configurable": {"thread_id": thread_id},
+        "configurable": {"thread_id": _thread_id(contact)},
         "recursion_limit": 20,
     }
     result = agent.invoke(

@@ -8,8 +8,10 @@ de un mismo cliente se procesen en orden.
 
 import logging
 import threading
+import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
+from datetime import timedelta
 
 from django.conf import settings
 from django.db import close_old_connections
@@ -17,7 +19,7 @@ from django.utils import timezone
 
 from . import kapso
 from . import media as wa_media
-from .models import WebhookEvent, WhatsAppContact
+from .models import SentMessage, WebhookEvent, WhatsAppContact
 from .tools import normalize_phone
 
 logger = logging.getLogger(__name__)
@@ -145,6 +147,58 @@ def extract_inbound_messages(payload):
     return results
 
 
+def extract_outbound_messages(payload):
+    """Extrae los mensajes salientes (whatsapp.message.sent) de un webhook.
+
+    Devuelve dicts con phone (el cliente destinatario), wamid, origin
+    (cloud_api | business_app | history_sync), text y phone_number_id; vacía
+    si el evento no trae salientes.
+    """
+    event_type = str(
+        payload.get("event_type") or payload.get("event") or payload.get("type") or ""
+    )
+    results = []
+    for entry in _iter_entries(payload):
+        message = entry.get("message")
+        if not isinstance(message, dict) or not message:
+            continue
+        kapso_meta = message.get("kapso") or {}
+        direction = kapso_meta.get("direction")
+        if direction != "outbound" and not event_type.endswith("message.sent"):
+            continue
+        if direction and direction != "outbound":
+            continue
+
+        conversation = entry.get("conversation") or {}
+        phone = normalize_phone(
+            message.get("to")
+            or kapso_meta.get("to_phone")
+            or conversation.get("phone_number")
+        )
+        msg_type = message.get("type")
+        if msg_type == "text":
+            text = (message.get("text") or {}).get("body", "")
+        else:
+            text = kapso_meta.get("content") or ""
+        if not text.strip() and msg_type:
+            text = f"[El equipo le envió un(a) {msg_type} al cliente]"
+        results.append(
+            {
+                "phone": phone,
+                "wamid": message.get("id") or "",
+                "origin": kapso_meta.get("origin") or "",
+                "text": text.strip(),
+                "phone_number_id": str(
+                    entry.get("phone_number_id")
+                    or payload.get("phone_number_id")
+                    or conversation.get("phone_number_id")
+                    or ""
+                ),
+            }
+        )
+    return results
+
+
 def _resolve_media(msg, phone_number_id):
     """Convierte el media de un mensaje en texto para el agente.
 
@@ -207,10 +261,84 @@ def _process_event_safe(event_id):
         close_old_connections()
 
 
+def _handle_outbound(event, outbounds):
+    """Detecta intervención humana en los eventos whatsapp.message.sent.
+
+    Un saliente cuyo wamid no registró el backend (SentMessage) lo envió un
+    humano del equipo (inbox de Kapso o app de WhatsApp Business): se pausa
+    el agente para ese contacto (ventana deslizante) y el mensaje queda
+    guardado en el hilo como respuesta del asistente.
+    """
+    human, unmatched = [], []
+    for msg in outbounds:
+        if msg["origin"] == "history_sync":
+            continue
+        if msg["wamid"] and SentMessage.objects.filter(wamid=msg["wamid"]).exists():
+            continue
+        if msg["origin"] == "business_app":
+            human.append(msg)  # la app del celular siempre es un humano
+        else:
+            unmatched.append(msg)
+
+    # El webhook puede llegar antes de que _record_sent guarde el wamid de un
+    # envío del propio sistema: gracia corta y segunda verificación
+    if unmatched:
+        time.sleep(3)
+        close_old_connections()
+        for msg in unmatched:
+            if msg["wamid"] and SentMessage.objects.filter(wamid=msg["wamid"]).exists():
+                continue
+            human.append(msg)
+
+    if not human:
+        event.status = WebhookEvent.Status.IGNORED
+        event.error = "salientes del propio sistema"
+        event.save(update_fields=["status", "error"])
+        return
+
+    from .agent import record_messages
+
+    pause = timedelta(minutes=settings.WHATSAPP_HUMAN_PAUSE_MINUTES)
+    groups = {}
+    for msg in human:
+        if msg["phone"]:
+            groups.setdefault(msg["phone"], []).append(msg)
+
+    for phone, messages in groups.items():
+        contact, _ = WhatsAppContact.objects.get_or_create(phone=phone)
+        contact.human_until = timezone.now() + pause
+        contact.save(update_fields=["human_until", "updated_at"])
+        event.contact_phone = phone
+        try:
+            with _phone_lock(contact.phone):
+                record_messages(
+                    contact, [("assistant", m["text"]) for m in messages]
+                )
+        except Exception:
+            logger.exception("No se pudo guardar el mensaje humano en el hilo de %s", phone)
+
+    # Los wamids viejos ya no se necesitan (los eventos llegan en segundos)
+    SentMessage.objects.filter(created_at__lt=timezone.now() - timedelta(days=7)).delete()
+
+    event.status = WebhookEvent.Status.PROCESSED
+    event.error = ""
+    event.save(update_fields=["status", "error", "contact_phone"])
+
+
 def _process_event(event):
+    allowed = settings.KAPSO_PHONE_NUMBER_IDS
+
+    outbounds = extract_outbound_messages(event.payload)
+    if allowed:
+        outbounds = [
+            m for m in outbounds if not m["phone_number_id"] or m["phone_number_id"] in allowed
+        ]
+    if outbounds:
+        _handle_outbound(event, outbounds)
+        return
+
     inbounds = extract_inbound_messages(event.payload)
 
-    allowed = settings.KAPSO_PHONE_NUMBER_IDS
     if allowed:
         known = [m for m in inbounds if not m["phone_number_id"] or m["phone_number_id"] in allowed]
         if inbounds and not known:
@@ -256,9 +384,26 @@ def _process_event(event):
         event.contact_phone = contact.phone
         event.phone_number_id = phone_number_id
 
-        if contact.is_blocked or contact.human_handoff or not settings.WHATSAPP_AGENT_ENABLED:
+        if contact.is_blocked or not settings.WHATSAPP_AGENT_ENABLED:
             event.status = WebhookEvent.Status.IGNORED
-            event.error = "contacto bloqueado" if contact.is_blocked else "agente pausado para este contacto"
+            event.error = "contacto bloqueado" if contact.is_blocked else "agente desactivado"
+            event.save(update_fields=["status", "error", "contact_phone", "phone_number_id"])
+            continue
+
+        paused_by_human = contact.human_until and contact.human_until > timezone.now()
+        if contact.human_handoff or paused_by_human:
+            # Un humano está atendiendo: no se responde, pero lo que dice el
+            # cliente queda en el hilo para que el agente retome con contexto
+            from .agent import record_messages
+
+            try:
+                text = "\n".join(_resolve_media(m, phone_number_id) for m in messages)
+                with _phone_lock(contact.phone):
+                    record_messages(contact, [("user", text)])
+            except Exception:
+                logger.exception("No se pudo guardar el mensaje del cliente %s en pausa", contact.phone)
+            event.status = WebhookEvent.Status.IGNORED
+            event.error = "agente pausado: humano atendiendo"
             event.save(update_fields=["status", "error", "contact_phone", "phone_number_id"])
             continue
 
