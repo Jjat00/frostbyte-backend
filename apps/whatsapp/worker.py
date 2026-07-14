@@ -31,64 +31,97 @@ def _phone_lock(phone):
         return _locks[phone]
 
 
-def extract_inbound_message(payload):
-    """Extrae (phone, wa_user_id, text, phone_number_id) de un webhook de Kapso.
+def _iter_entries(payload):
+    """Normaliza el sobre del webhook de Kapso a una lista de entries.
 
-    Devuelve None si el evento no es un mensaje entrante procesable (estados de
-    entrega, mensajes salientes, tipos sin texto útil).
+    Con message buffering Kapso manda lotes: {"type": "...", "batch": true,
+    "data": [{message, conversation, phone_number_id}, ...]}. Sin lote puede
+    venir el entry directo en el payload o en data como dict.
     """
-    message = payload.get("message") or payload.get("data", {}).get("message") or {}
-    if not message:
-        return None
-    kapso_meta = message.get("kapso") or {}
-    if kapso_meta.get("direction") == "outbound":
-        return None
+    data = payload.get("data")
+    if isinstance(data, list):
+        return [entry for entry in data if isinstance(entry, dict)]
+    if isinstance(data, dict):
+        return [data]
+    return [payload]
 
-    conversation = payload.get("conversation") or payload.get("data", {}).get("conversation") or {}
-    phone = normalize_phone(
-        message.get("from")
-        or kapso_meta.get("from_phone")
-        or conversation.get("phone_number")
-    )
-    wa_user_id = kapso_meta.get("from_user_id") or ""
-    phone_number_id = str(
-        payload.get("phone_number_id")
-        or payload.get("data", {}).get("phone_number_id")
-        or ""
-    )
-    if not phone and not wa_user_id:
-        return None
 
-    msg_type = message.get("type")
-    text = ""
-    if msg_type == "text":
-        text = (message.get("text") or {}).get("body", "")
-    elif msg_type == "interactive":
-        interactive = message.get("interactive") or {}
-        reply = interactive.get("button_reply") or interactive.get("list_reply") or {}
-        text = reply.get("title") or reply.get("id") or ""
-    elif msg_type == "location":
-        location = message.get("location") or {}
-        text = (
-            "[El cliente compartió su ubicación por WhatsApp: "
-            f"lat {location.get('latitude')}, lng {location.get('longitude')}, "
-            f"nombre: {location.get('name') or 'N/A'}, dirección: {location.get('address') or 'N/A'}]"
+def extract_inbound_messages(payload):
+    """Extrae los mensajes entrantes procesables de un webhook de Kapso.
+
+    Devuelve una lista (en orden) de dicts con phone, wa_user_id,
+    contact_name, text y phone_number_id; vacía si el evento no trae mensajes
+    entrantes útiles (estados de entrega, salientes, etc.).
+    """
+    results = []
+    for entry in _iter_entries(payload):
+        message = entry.get("message")
+        if not isinstance(message, dict) or not message:
+            continue
+        kapso_meta = message.get("kapso") or {}
+        if kapso_meta.get("direction") == "outbound":
+            continue
+
+        conversation = entry.get("conversation") or {}
+        phone = normalize_phone(
+            message.get("from")
+            or kapso_meta.get("from_phone")
+            or conversation.get("phone_number")
         )
-    elif msg_type in ("image", "video", "document", "sticker"):
-        caption = (message.get(msg_type) or {}).get("caption", "")
-        text = (
-            f"[El cliente envió un(a) {msg_type} que no puedes ver"
-            + (f'; escribió: "{caption}"' if caption else "")
-            + ". Si esperabas un comprobante de pago, dile que el equipo lo verificará.]"
+        wa_user_id = (
+            message.get("from_user_id")
+            or kapso_meta.get("from_user_id")
+            or conversation.get("business_scoped_user_id")
+            or ""
         )
-    elif msg_type == "audio":
-        text = "[El cliente envió un audio que no puedes escuchar. Pídele amablemente que lo escriba.]"
-    else:
-        text = kapso_meta.get("content") or ""
+        phone_number_id = str(
+            entry.get("phone_number_id")
+            or payload.get("phone_number_id")
+            or conversation.get("phone_number_id")
+            or ""
+        )
+        if not phone and not wa_user_id:
+            continue
 
-    if not text.strip():
-        return None
-    return phone, wa_user_id, text.strip(), phone_number_id
+        msg_type = message.get("type")
+        text = ""
+        if msg_type == "text":
+            text = (message.get("text") or {}).get("body", "")
+        elif msg_type == "interactive":
+            interactive = message.get("interactive") or {}
+            reply = interactive.get("button_reply") or interactive.get("list_reply") or {}
+            text = reply.get("title") or reply.get("id") or ""
+        elif msg_type == "location":
+            location = message.get("location") or {}
+            text = (
+                "[El cliente compartió su ubicación por WhatsApp: "
+                f"lat {location.get('latitude')}, lng {location.get('longitude')}, "
+                f"nombre: {location.get('name') or 'N/A'}, dirección: {location.get('address') or 'N/A'}]"
+            )
+        elif msg_type in ("image", "video", "document", "sticker"):
+            caption = (message.get(msg_type) or {}).get("caption", "")
+            text = (
+                f"[El cliente envió un(a) {msg_type} que no puedes ver"
+                + (f'; escribió: "{caption}"' if caption else "")
+                + ". Si esperabas un comprobante de pago, dile que el equipo lo verificará.]"
+            )
+        elif msg_type == "audio":
+            text = "[El cliente envió un audio que no puedes escuchar. Pídele amablemente que lo escriba.]"
+        else:
+            text = kapso_meta.get("content") or ""
+
+        if not text.strip():
+            continue
+        results.append(
+            {
+                "phone": phone,
+                "wa_user_id": wa_user_id,
+                "contact_name": (conversation.get("contact_name") or "").strip(),
+                "text": text.strip(),
+                "phone_number_id": phone_number_id,
+            }
+        )
+    return results
 
 
 def enqueue_event(event_id):
@@ -116,50 +149,68 @@ def _process_event_safe(event_id):
 
 
 def _process_event(event):
-    inbound = extract_inbound_message(event.payload)
-    if inbound is None:
+    inbounds = extract_inbound_messages(event.payload)
+
+    allowed = settings.KAPSO_PHONE_NUMBER_IDS
+    if allowed:
+        known = [m for m in inbounds if not m["phone_number_id"] or m["phone_number_id"] in allowed]
+        if inbounds and not known:
+            event.status = WebhookEvent.Status.IGNORED
+            event.error = f"phone_number_id desconocido: {inbounds[0]['phone_number_id']}"
+            event.save(update_fields=["status", "error"])
+            return
+        inbounds = known
+
+    if not inbounds:
         event.status = WebhookEvent.Status.IGNORED
         event.save(update_fields=["status"])
         return
 
-    phone, wa_user_id, text, phone_number_id = inbound
+    # Agrupa el lote por contacto conservando el orden: los mensajes seguidos
+    # de una misma persona (buffering de Kapso) van en UN solo turno del agente
+    groups = {}
+    for msg in inbounds:
+        key = msg["phone"] or msg["wa_user_id"]
+        groups.setdefault(key, []).append(msg)
 
-    allowed = settings.KAPSO_PHONE_NUMBER_IDS
-    if allowed and phone_number_id and phone_number_id not in allowed:
-        event.status = WebhookEvent.Status.IGNORED
-        event.error = f"phone_number_id desconocido: {phone_number_id}"
-        event.save(update_fields=["status", "error"])
-        return
+    for key, messages in groups.items():
+        first = messages[0]
+        phone_number_id = next((m["phone_number_id"] for m in messages if m["phone_number_id"]), "")
 
-    contact, _ = WhatsAppContact.objects.get_or_create(
-        phone=phone or wa_user_id,
-        defaults={"wa_user_id": wa_user_id},
-    )
-    updates = ["last_message_at", "updated_at"]
-    contact.last_message_at = timezone.now()
-    if wa_user_id and contact.wa_user_id != wa_user_id:
-        contact.wa_user_id = wa_user_id
-        updates.append("wa_user_id")
-    if phone_number_id and contact.last_phone_number_id != phone_number_id:
-        contact.last_phone_number_id = phone_number_id
-        updates.append("last_phone_number_id")
-    contact.save(update_fields=updates)
+        contact, _ = WhatsAppContact.objects.get_or_create(
+            phone=key,
+            defaults={"wa_user_id": first["wa_user_id"]},
+        )
+        updates = ["last_message_at", "updated_at"]
+        contact.last_message_at = timezone.now()
+        if first["wa_user_id"] and contact.wa_user_id != first["wa_user_id"]:
+            contact.wa_user_id = first["wa_user_id"]
+            updates.append("wa_user_id")
+        if first["contact_name"] and contact.profile_name != first["contact_name"]:
+            contact.profile_name = first["contact_name"][:200]
+            updates.append("profile_name")
+        if phone_number_id and contact.last_phone_number_id != phone_number_id:
+            contact.last_phone_number_id = phone_number_id
+            updates.append("last_phone_number_id")
+        contact.save(update_fields=updates)
 
-    event.contact_phone = contact.phone
-    event.phone_number_id = phone_number_id
+        event.contact_phone = contact.phone
+        event.phone_number_id = phone_number_id
 
-    if contact.is_blocked or contact.human_handoff or not settings.WHATSAPP_AGENT_ENABLED:
-        event.status = WebhookEvent.Status.IGNORED
-        event.error = "agente pausado para este contacto" if not contact.is_blocked else "contacto bloqueado"
+        if contact.is_blocked or contact.human_handoff or not settings.WHATSAPP_AGENT_ENABLED:
+            event.status = WebhookEvent.Status.IGNORED
+            event.error = "contacto bloqueado" if contact.is_blocked else "agente pausado para este contacto"
+            event.save(update_fields=["status", "error", "contact_phone", "phone_number_id"])
+            continue
+
+        from .agent import run_agent
+
+        text = "\n".join(m["text"] for m in messages)
+        with _phone_lock(contact.phone):
+            reply = run_agent(contact, text)
+
+        kapso.send_text(phone_number_id, contact.phone, reply)
+
+        event.status = WebhookEvent.Status.PROCESSED
+        event.error = ""
         event.save(update_fields=["status", "error", "contact_phone", "phone_number_id"])
-        return
-
-    from .agent import run_agent
-
-    with _phone_lock(contact.phone):
-        reply = run_agent(contact, text)
-
-    kapso.send_text(phone_number_id, phone or contact.phone, reply)
-
-    event.status = WebhookEvent.Status.PROCESSED
-    event.save(update_fields=["status", "contact_phone", "phone_number_id"])

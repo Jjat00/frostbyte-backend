@@ -170,11 +170,17 @@ def build_tools(contact):
             .prefetch_related("items__product_variant__product")
             .order_by("-created_at")[:5]
         )
+        known_name = contact.customer_name or contact.profile_name
         if not orders:
+            if known_name:
+                return (
+                    f"Este cliente no tiene pedidos anteriores, pero su nombre de perfil "
+                    f"de WhatsApp es: {known_name}."
+                )
             return "Este cliente no tiene pedidos anteriores registrados."
         lines = []
-        if contact.customer_name:
-            lines.append(f"Nombre conocido: {contact.customer_name}")
+        if known_name:
+            lines.append(f"Nombre conocido: {known_name}")
         if contact.default_address:
             lines.append(
                 f"Dirección habitual: {contact.default_address}"
