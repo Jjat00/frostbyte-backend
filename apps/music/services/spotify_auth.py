@@ -31,6 +31,10 @@ def get_authorize_url(state=None):
         "response_type": "code",
         "redirect_uri": config["redirect_uri"],
         "scope": " ".join(SPOTIFY_SCOPES),
+        # Sin esto, Spotify reutiliza la sesión del navegador y auto-autoriza
+        # sin preguntar: imposible conectar una cuenta distinta por piso.
+        # Con show_dialog el diálogo siempre aparece y ofrece "¿No eres tú?".
+        "show_dialog": "true",
     }
     if state:
         params["state"] = state
