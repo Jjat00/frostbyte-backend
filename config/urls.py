@@ -40,6 +40,8 @@ urlpatterns = [
     path('api/v1/', include('apps.youtube.urls')),
     # Polla Mundialista 2026
     path('api/v1/polla/', include('apps.polla.urls')),
+    # Agente de pedidos por WhatsApp (webhook de Kapso)
+    path('api/v1/whatsapp/', include('apps.whatsapp.urls')),
 ]
 
 # Servir archivos media en desarrollo

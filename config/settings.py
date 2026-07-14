@@ -69,6 +69,7 @@ INSTALLED_APPS = [
     'apps.recetarios',
     'apps.youtube',
     'apps.polla',
+    'apps.whatsapp',
 ]
 
 # Custom User Model
@@ -286,6 +287,23 @@ POLLA_EMAIL_FROM = os.getenv('POLLA_EMAIL_FROM', 'Frostbyte Polla <polla@frostby
 POLLA_EMAIL_REPLY_TO = os.getenv('POLLA_EMAIL_REPLY_TO', 'frostbyte.col@gmail.com')
 # URL pública de la Polla (botón del correo) y del backend (enlace de baja).
 POLLA_PUBLIC_URL = os.getenv('POLLA_PUBLIC_URL', 'https://frostbyte.com.co/polla-mundial')
+
+# Agente de pedidos por WhatsApp (Kapso + LangGraph)
+# -------------------------------------------------------------------------
+# Kapso recibe los mensajes de WhatsApp y nos los reenvía por webhook a
+# /api/v1/whatsapp/webhook/. El agente (apps.whatsapp) responde vía la API de
+# Kapso. KAPSO_PHONE_NUMBER_IDS lista los números propios (separados por coma)
+# para ignorar eventos de números desconocidos.
+KAPSO_API_KEY = os.getenv('KAPSO_API_KEY', '')
+KAPSO_WEBHOOK_SECRET = os.getenv('KAPSO_WEBHOOK_SECRET', '')
+KAPSO_PHONE_NUMBER_IDS = [
+    s.strip() for s in os.getenv('KAPSO_PHONE_NUMBER_IDS', '').split(',') if s.strip()
+]
+# Interruptor general del agente (los webhooks se registran igual, sin responder)
+WHATSAPP_AGENT_ENABLED = os.getenv('WHATSAPP_AGENT_ENABLED', 'True').lower() == 'true'
+WHATSAPP_AGENT_MODEL = os.getenv('WHATSAPP_AGENT_MODEL', 'gpt-4o-mini')
+# Datos de pago por transferencia que el agente comparte (Nequi/cuenta/etc.)
+WHATSAPP_TRANSFER_INFO = os.getenv('WHATSAPP_TRANSFER_INFO', '')
 BACKEND_PUBLIC_URL = os.getenv(
     'BACKEND_PUBLIC_URL', 'https://frostbyte-backend-production.up.railway.app'
 )
