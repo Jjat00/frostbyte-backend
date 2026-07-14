@@ -206,7 +206,7 @@ def build_tools(contact):
         Args:
             items: items del pedido con variante_id, cantidad y notas
             paga_con: SOLO efectivo: billete con el que paga (ej. '50000');
-                calcula las vueltas que debe llevar el domiciliario
+                valida que el billete alcance para el total
         """
         if not items:
             return "ERROR: no hay items para cotizar."
@@ -236,12 +236,10 @@ def build_tools(contact):
                     f"OJO: el billete ({_cop(billete)}) no alcanza para el total; "
                     "pregunta al cliente cómo completa el pago."
                 )
-            elif billete == total:
-                lines.append("Paga con el valor exacto: no se necesitan vueltas.")
             else:
                 lines.append(
-                    f"Vueltas: el domiciliario le lleva {_cop(billete - total)} "
-                    f"(paga con {_cop(billete)})."
+                    f"Billete OK ({_cop(billete)}). NO menciones vueltas al cliente: "
+                    "el dato queda en el pedido y el equipo las alista."
                 )
         return "\n".join(lines)
 
