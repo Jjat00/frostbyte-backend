@@ -9,7 +9,7 @@
 
   <!-- Preheader (vista previa en la bandeja, oculto) -->
   <div style="display:none; max-height:0; overflow:hidden; opacity:0; color:#eef1f4;">
-    Tu resumen de la Polla: puntaje, partidos por jugar y misiones pendientes.
+    {% if semis %}Aún no hay nada escrito: quedan hasta {{ points_in_play }} puntos en juego en la Polla.{% else %}Tu resumen de la Polla: puntaje, partidos por jugar y misiones pendientes.{% endif %}
   </div>
 
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#eef1f4;">
@@ -34,7 +34,11 @@
           <tr>
             <td style="padding:22px 28px 0 28px;">
               <p style="margin:0; font-size:18px; color:#1b2430; font-weight:700;">{% if name %}Hola, {{ name }}.{% else %}Hola.{% endif %}</p>
+              {% if semis %}
+              <p style="margin:10px 0 0 0; font-size:15px; line-height:1.55; color:#46525f;"><strong>Mañana empiezan las semifinales del Mundial</strong> y en la Polla aún no hay nada escrito: quedan hasta <strong>{{ points_in_play }} puntos en juego</strong>. Así vas:</p>
+              {% else %}
               <p style="margin:10px 0 0 0; font-size:15px; line-height:1.55; color:#46525f;">Un recordatorio para que no se te pasen los próximos partidos del Mundial. Así vas:</p>
+              {% endif %}
             </td>
           </tr>
 
@@ -88,6 +92,20 @@
             </td>
           </tr>
 
+          {% if semis %}
+          <!-- Semifinales: aún no hay nada escrito (recuadro sutil) -->
+          <tr>
+            <td style="padding:18px 28px 0 28px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#fbf5e0; border-left:3px solid #d39e00; border-radius:6px;">
+                <tr>
+                  <td style="padding:12px 16px;">
+                    <p style="margin:0; font-size:14px; line-height:1.6; color:#5a4500;">Las fases finales son las que más puntos reparten: cada <strong>semifinal</strong> da <strong>{{ sf_points.0 }} puntos</strong> por acertar el resultado y <strong>{{ sf_points.1 }}</strong> por el marcador exacto, y la <strong>final</strong> da {{ final_points.0 }} y {{ final_points.1 }}. <strong>Todavía puedes ganar la Polla</strong>: deja tus marcadores antes del pitazo.</p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          {% else %}
           <!-- Recordatorio Colombia (recuadro sutil) -->
           <tr>
             <td style="padding:18px 28px 0 28px;">
@@ -104,6 +122,7 @@
               </table>
             </td>
           </tr>
+          {% endif %}
 
           <!-- Misiones (una línea) -->
           {% if pending_missions_count %}

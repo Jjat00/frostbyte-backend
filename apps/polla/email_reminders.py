@@ -27,6 +27,7 @@ from .models import (
     UserMission,
     UserScore,
 )
+from .scoring import stage_points
 
 User = get_user_model()
 
@@ -129,12 +130,23 @@ def gather():
     # Misiones que se completan pronosticando (la de invitar es social aparte).
     missions = list(Mission.objects.exclude(kind=Mission.Kind.INVITE))
     total = UserScore.objects.count()
+    # Máximo de puntos aún en juego por marcadores (incluye cruces sin equipos
+    # definidos, p. ej. tercer puesto y final): sustenta el "no hay nada escrito".
+    points_in_play = sum(
+        stage_points(stage)[1]
+        for stage in Match.objects.filter(
+            status=Match.Status.UPCOMING, kickoff__gt=now
+        ).values_list("stage", flat=True)
+    )
     return {
         "now": now,
         "upcoming": upcoming,
         "colombia_upcoming": colombia_upcoming,
         "missions": missions,
         "total": total,
+        "points_in_play": points_in_play,
+        "sf_points": stage_points(Match.Stage.SF),
+        "final_points": stage_points(Match.Stage.FINAL),
     }
 
 
@@ -152,8 +164,12 @@ def eligible_recipients(only_email=None):
     return qs
 
 
-def build_context(score, shared):
-    """Contexto personalizado para el correo de un participante."""
+def build_context(score, shared, semis=False):
+    """Contexto personalizado para el correo de un participante.
+
+    Con ``semis=True`` el correo cambia el gancho: mañana empiezan las
+    semifinales, quedan muchos puntos en juego y nada está escrito.
+    """
     user = score.user
     predicted_ids = set(
         Prediction.objects.filter(user=user).values_list("match_id", flat=True)
@@ -194,6 +210,10 @@ def build_context(score, shared):
         "colombia_today_pending": colombia_today_pending,
         "pending_missions": [m.title for m in pending_missions[:MAX_MISSIONS_SHOWN]],
         "pending_missions_count": len(pending_missions),
+        "semis": semis,
+        "points_in_play": shared["points_in_play"],
+        "sf_points": shared["sf_points"],
+        "final_points": shared["final_points"],
         "polla_url": settings.POLLA_PUBLIC_URL,
         "unsub_url": unsubscribe_url(user),
         "reply_to": settings.POLLA_EMAIL_REPLY_TO,
@@ -206,7 +226,13 @@ def subject_for(ctx):
     # Asuntos personales y sin palabras "gancho" (gratis, premio, $) para evitar
     # que Gmail lo mande a Promociones; suben la chance de llegar a Principal.
     name = ctx["name"]
-    if ctx["colombia_today"]:
+    if ctx.get("semis"):
+        core = (
+            "mañana empiezan las semifinales, no te quedes sin pronosticar"
+            if ctx["pending_count"] > 0
+            else "mañana empiezan las semifinales del Mundial"
+        )
+    elif ctx["colombia_today"]:
         core = (
             "hoy juega Colombia, no te quedes sin pronóstico"
             if ctx["colombia_today_pending"]
