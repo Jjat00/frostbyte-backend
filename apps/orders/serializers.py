@@ -2,6 +2,7 @@ from rest_framework import serializers
 from decimal import Decimal
 
 from apps.products.models import ProductVariant
+from .coverage import is_within_delivery_area, radius_label
 from .models import Order, OrderItem, Table
 
 
@@ -557,6 +558,13 @@ class CustomerOrderCreateSerializer(serializers.ModelSerializer):
         if attrs.get("delivery_lat") is None or attrs.get("delivery_lng") is None:
             raise serializers.ValidationError({
                 "delivery_lat": "Marca tu ubicación en el mapa."
+            })
+        if not is_within_delivery_area(attrs["delivery_lat"], attrs["delivery_lng"]):
+            raise serializers.ValidationError({
+                "delivery_lat": (
+                    "Tu ubicación está fuera de nuestra zona de domicilios "
+                    f"({radius_label()} alrededor del local)."
+                )
             })
         return attrs
 

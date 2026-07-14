@@ -311,3 +311,10 @@ BACKEND_PUBLIC_URL = os.getenv(
     'BACKEND_PUBLIC_URL', 'https://frostbyte-backend-production.up.railway.app'
 )
 SITE_URL = os.getenv('SITE_URL', 'https://frostbyte.com.co')
+
+# Zona de cobertura de domicilios: el local (Cra. 8 #18-13, Cumbal) y el radio
+# máximo de entrega. Deben coincidir con STORE_LOCATION/DELIVERY_RADIUS_KM del
+# frontend (src/lib/deliveryArea.js)
+DELIVERY_CENTER_LAT = float(os.getenv('DELIVERY_CENTER_LAT', '0.9082643'))
+DELIVERY_CENTER_LNG = float(os.getenv('DELIVERY_CENTER_LNG', '-77.7904203'))
+DELIVERY_RADIUS_KM = float(os.getenv('DELIVERY_RADIUS_KM', '1.5'))

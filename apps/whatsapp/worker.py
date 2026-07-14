@@ -12,6 +12,7 @@ import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
+from decimal import Decimal
 
 from django.conf import settings
 from django.db import close_old_connections
@@ -89,6 +90,7 @@ def extract_inbound_messages(payload):
         msg_type = message.get("type")
         text = ""
         media = None  # audio/imagen a resolver después (descarga + OpenAI)
+        location_coords = None  # lat/lng compartidos, se guardan en el contacto
         if msg_type == "text":
             text = (message.get("text") or {}).get("body", "")
         elif msg_type == "interactive":
@@ -99,9 +101,16 @@ def extract_inbound_messages(payload):
             location = message.get("location") or {}
             text = (
                 "[El cliente compartió su ubicación por WhatsApp: "
-                f"lat {location.get('latitude')}, lng {location.get('longitude')}, "
-                f"nombre: {location.get('name') or 'N/A'}, dirección: {location.get('address') or 'N/A'}]"
+                f"nombre: {location.get('name') or 'N/A'}, dirección: {location.get('address') or 'N/A'}. "
+                "Ya quedó registrada: verifícala con verificar_cobertura.]"
             )
+            try:
+                location_coords = {
+                    "lat": float(location["latitude"]),
+                    "lng": float(location["longitude"]),
+                }
+            except (KeyError, TypeError, ValueError):
+                location_coords = None
         elif msg_type == "image":
             image = message.get("image") or {}
             caption = image.get("caption", "")
@@ -140,6 +149,7 @@ def extract_inbound_messages(payload):
                 "contact_name": (conversation.get("contact_name") or "").strip(),
                 "text": text.strip(),
                 "media": media,
+                "location": location_coords,
                 "phone_number_id": phone_number_id,
                 "message_id": message.get("id") or "",
             }
@@ -379,6 +389,14 @@ def _process_event(event):
         if phone_number_id and contact.last_phone_number_id != phone_number_id:
             contact.last_phone_number_id = phone_number_id
             updates.append("last_phone_number_id")
+        location = next(
+            (m["location"] for m in reversed(messages) if m.get("location")), None
+        )
+        if location:
+            contact.last_location_lat = Decimal(str(round(location["lat"], 7)))
+            contact.last_location_lng = Decimal(str(round(location["lng"], 7)))
+            contact.last_location_at = timezone.now()
+            updates += ["last_location_lat", "last_location_lng", "last_location_at"]
         contact.save(update_fields=updates)
 
         event.contact_phone = contact.phone

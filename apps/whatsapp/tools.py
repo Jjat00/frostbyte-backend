@@ -13,6 +13,7 @@ from django.utils import timezone
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 
+from apps.orders.coverage import is_within_delivery_area, radius_label
 from apps.orders.models import Order, OrderItem, StoreSettings
 from apps.products.models import Category, Product, ProductVariant
 
@@ -296,12 +297,12 @@ def build_tools(contact):
         referencia: str = "",
         paga_con: str = "",
         notas: str = "",
-        latitud: float = 0.0,
-        longitud: float = 0.0,
     ) -> str:
         """Crea el pedido a domicilio DEFINITIVO. Llámala SOLO después de que el
         cliente confirmó explícitamente el resumen completo (items, dirección,
-        total con envío y método de pago).
+        total con envío y método de pago). La ubicación de WhatsApp del cliente
+        es OBLIGATORIA y la toma el sistema por su cuenta (verifícala antes con
+        verificar_cobertura): tú no manejas coordenadas.
 
         Args:
             items: items del pedido con variante_id, cantidad y notas
@@ -313,8 +314,6 @@ def build_tools(contact):
                 o 'exacto' si dice que paga completo/justo. PROHIBIDO inventar
                 un valor que el cliente no mencionó.
             notas: aclaraciones generales del pedido
-            latitud: SOLO si el cliente compartió su ubicación de WhatsApp (lat del mensaje)
-            longitud: SOLO si el cliente compartió su ubicación de WhatsApp (lng del mensaje)
         """
         cfg = StoreSettings.load()
         if not cfg.is_open:
@@ -327,6 +326,20 @@ def build_tools(contact):
             return "ERROR: el pedido no tiene items."
         if metodo_pago == Order.PaymentMethod.CASH and not paga_con:
             return "ERROR: para pago en efectivo pregunta primero con qué billete paga (paga_con)."
+        contact.refresh_from_db()
+        if contact.last_location_lat is None or contact.last_location_lng is None:
+            return (
+                "ERROR: falta la ubicación de WhatsApp del cliente y es OBLIGATORIA "
+                "para el domicilio. Pídele que la comparta (clip de adjuntar → "
+                "Ubicación → Enviar ubicación actual); si no puede compartirla, usa "
+                "solicitar_humano."
+            )
+        if not is_within_delivery_area(contact.last_location_lat, contact.last_location_lng):
+            return (
+                f"ERROR: la ubicación del cliente está FUERA de la zona de domicilios "
+                f"({radius_label()} alrededor del local). NO crees el pedido: explícale "
+                "con amabilidad que por ahora no llegamos hasta allá."
+            )
 
         variants = {}
         for item in items:
@@ -357,8 +370,8 @@ def build_tools(contact):
                 payment_method=metodo_pago,
                 delivery_address=direccion.strip()[:300],
                 delivery_reference=referencia.strip()[:300],
-                delivery_lat=Decimal(str(round(latitud, 7))) if (latitud or longitud) else None,
-                delivery_lng=Decimal(str(round(longitud, 7))) if (latitud or longitud) else None,
+                delivery_lat=contact.last_location_lat,
+                delivery_lng=contact.last_location_lng,
                 delivery_fee=cfg.delivery_fee,
             )
             for item in items:
@@ -522,6 +535,44 @@ def build_tools(contact):
         return "Preferencia guardada."
 
     @tool
+    def verificar_cobertura() -> str:
+        """Verifica si la ubicación de WhatsApp que compartió el cliente está
+        dentro de la zona de domicilios. Úsala APENAS el cliente comparta su
+        ubicación, y siempre antes de crear el pedido (la ubicación es
+        OBLIGATORIA para todo domicilio). Lee la ubicación registrada por el
+        sistema: no necesita coordenadas.
+        """
+        contact.refresh_from_db()
+        if contact.last_location_lat is None or contact.last_location_lng is None:
+            return (
+                "El cliente NO ha compartido su ubicación de WhatsApp todavía. "
+                "Pídele que la comparta (clip de adjuntar → Ubicación → Enviar "
+                "ubicación actual): sin ella no se puede crear el pedido."
+            )
+        lines = []
+        if is_within_delivery_area(contact.last_location_lat, contact.last_location_lng):
+            lines.append(
+                "DENTRO de la zona de domicilios: se puede entregar en esa ubicación."
+            )
+        else:
+            lines.append(
+                f"FUERA de la zona de domicilios ({radius_label()} alrededor del "
+                "local): NO se puede hacer el domicilio a esa ubicación. Explícalo "
+                "con amabilidad y no tomes el pedido; si el cliente comparte otra "
+                "ubicación que sí esté dentro, se puede."
+            )
+        if contact.last_location_at and timezone.localtime(
+            contact.last_location_at
+        ).date() < timezone.localdate():
+            fecha = timezone.localtime(contact.last_location_at).strftime("%d/%m/%Y")
+            lines.append(
+                f"OJO: la ubicación es del {fecha} (conversación anterior). Confirma "
+                "con el cliente que la entrega es en ese mismo punto; si es otro "
+                "lugar, pídele que comparta la ubicación nueva."
+            )
+        return "\n".join(lines)
+
+    @tool
     def solicitar_humano(motivo: str) -> str:
         """Pausa al agente para este cliente y deja la conversación en manos del
         equipo humano. Úsala si el cliente lo pide o si la situación te supera
@@ -549,5 +600,6 @@ def build_tools(contact):
         cancelar_pedido,
         consultar_pedido,
         guardar_preferencia,
+        verificar_cobertura,
         solicitar_humano,
     ]

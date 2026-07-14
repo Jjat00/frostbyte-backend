@@ -14,6 +14,8 @@ import threading
 from django.conf import settings
 from django.utils import timezone
 
+from apps.orders.coverage import radius_label
+
 from .tools import build_tools
 
 logger = logging.getLogger(__name__)
@@ -62,9 +64,15 @@ FLUJO DEL PEDIDO (no te saltes pasos):
 a) Arma el pedido item por item. Si el producto tiene más de una variante o tamaño (ej. \
 Personal y Para 2), pregunta SIEMPRE cuál quiere antes de agregarlo: NUNCA asumas la variante. \
 Confirma también la cantidad.
-b) Pide nombre de quien recibe, dirección completa y un punto de referencia. Si el cliente \
-comparte su ubicación de WhatsApp, usa esas coordenadas como latitud/longitud en crear_pedido \
-(el domiciliario las abre en el mapa) y pídele igual la dirección escrita y la referencia.
+b) Pide nombre de quien recibe, la dirección escrita EXACTA y un punto de referencia. La \
+ubicación de WhatsApp es OBLIGATORIA para todo domicilio: pídele que la comparta (clip de \
+adjuntar → Ubicación → Enviar ubicación actual) y al recibirla revísala con \
+verificar_cobertura. Solo entregamos hasta {delivery_radius} alrededor del local: si queda \
+fuera de la zona, explícaselo con amabilidad y NO tomes el pedido. Si la tool avisa que la \
+ubicación registrada es de un día anterior, confirma con el cliente que la entrega es en ese \
+mismo punto (si es otro lugar, que comparta la nueva). Las coordenadas las registra el \
+sistema por su cuenta: tú NUNCA las escribes ni las inventas. Si el cliente no puede \
+compartir su ubicación, usa solicitar_humano para que el equipo lo atienda.
 c) Pregunta el método de pago: efectivo, transferencia, Nequi o Daviplata.
    - Efectivo: pregunta SIEMPRE con qué billete paga y nada más. NO hables de vueltas ni de \
 cuánto recibirá de vuelta: ese dato queda registrado en el pedido y el equipo las alista. \
@@ -141,6 +149,7 @@ def _build_agent(contact):
             now=now,
             transfer_info=transfer_info,
             site_url=settings.SITE_URL,
+            delivery_radius=radius_label(),
         ),
         checkpointer=get_checkpointer(),
     )

@@ -21,7 +21,7 @@ Cliente WhatsApp
                                ▼
                          Tools → ORM (tools.py): menú activo, búsqueda
                          aproximada de productos, estado tienda, historial,
-                         cotizar pedido (totales exactos),
+                         cotizar pedido (totales exactos), verificar cobertura,
                          crear/modificar/cancelar pedido, handoff
 ```
 
@@ -41,6 +41,19 @@ Cliente WhatsApp
   Especial Frostbyte"). Y nunca vuelca el menú completo al chat (omitiría
   productos): para "qué hay" responde categorías + link a la carta, y solo
   lista completa una categoría concreta si se la piden.
+- **Cobertura (ubicación obligatoria)**: solo se entrega dentro de
+  `DELIVERY_RADIUS_KM` (default 1.5 km) alrededor del local
+  (`DELIVERY_CENTER_LAT/LNG`, compartidos con el checkout web). La ubicación de
+  WhatsApp es OBLIGATORIA para crear el pedido: el geocoding por dirección no
+  es fiable en Cumbal (las abreviaturas caen en otros municipios y las veredas
+  caen al centro del pueblo), así que la única fuente válida es el GPS
+  compartido. El worker guarda las coordenadas en
+  `WhatsAppContact.last_location_*` cuando llega el mensaje de ubicación y
+  `verificar_cobertura`/`crear_pedido` las leen de ahí: el LLM nunca maneja
+  coordenadas (no puede inventarlas, como sí hizo con el billete). Si la
+  ubicación guardada es de un día anterior, el agente confirma que la entrega
+  es en el mismo punto; si el cliente no puede compartir su ubicación, escala
+  con `solicitar_humano`.
 - **Efectivo**: solo se registra el billete que el cliente DIJO (o
   `paga_con='exacto'` si paga completo); prohibido inventarlo. El dato llega
   al domiciliario en `customer_notes` y el agente no habla de vueltas.
@@ -84,6 +97,8 @@ Cliente WhatsApp
 | `WHATSAPP_AGENT_MODEL` | Modelo de OpenAI (default `gpt-4o-mini`) |
 | `WHATSAPP_TRANSFER_INFO` | Datos de pago por transferencia que comparte el agente |
 | `WHATSAPP_HUMAN_PAUSE_MINUTES` | Minutos de pausa del agente tras cada mensaje de un humano del equipo (default 30) |
+| `DELIVERY_CENTER_LAT` / `DELIVERY_CENTER_LNG` | Coordenadas del local, centro de la zona de domicilios (default Cra. 8 #18-13, Cumbal) |
+| `DELIVERY_RADIUS_KM` | Radio máximo de entrega en km (default 1.5); si se cambia, actualizar también `src/lib/deliveryArea.js` del frontend |
 | `OPENAI_API_KEY` | Ya existente (la usa también el generador de imágenes) |
 
 ## Puesta en marcha en Kapso
@@ -128,9 +143,11 @@ Para probar el webhook con Kapso real en local se necesita un túnel
 - **Imágenes**: se descargan igual y se describen con el modelo de visión
   (`WHATSAPP_AGENT_MODEL`). Si es un comprobante de pago, la descripción extrae
   monto, fecha, remitente y referencia. El caption del cliente se conserva.
-- **Ubicación compartida**: llega como texto con lat/lng; el agente pasa esas
-  coordenadas a `crear_pedido` (`delivery_lat/lng`) y el staff ve el botón
-  "Cómo llegar" (Google Maps) en la tarjeta del pedido.
+- **Ubicación compartida**: el worker guarda lat/lng en el contacto
+  (`last_location_*`) y el agente solo recibe el aviso de que quedó
+  registrada; `crear_pedido` copia esas coordenadas al pedido
+  (`delivery_lat/lng`) y el staff ve el botón "Cómo llegar" (Google Maps) en
+  la tarjeta del pedido. Es obligatoria para el domicilio (ver Cobertura).
 - Si la descarga o el modelo fallan, el agente recibe un texto de respaldo y
   pide el contenido por escrito. Videos, documentos y stickers no se procesan.
 - Todo el procesado ocurre en `apps/whatsapp/media.py` + `worker.py`, con el

@@ -53,6 +53,29 @@ class WhatsAppContact(models.Model):
         verbose_name="Último número Kapso",
         help_text="phone_number_id por el que escribió la última vez; se usa para notificarle",
     )
+    last_location_lat = models.DecimalField(
+        max_digits=10,
+        decimal_places=7,
+        null=True,
+        blank=True,
+        verbose_name="Última ubicación (lat)",
+        help_text=(
+            "Última ubicación de WhatsApp que compartió el cliente. La lee "
+            "crear_pedido: el agente nunca maneja coordenadas (no puede inventarlas)"
+        ),
+    )
+    last_location_lng = models.DecimalField(
+        max_digits=10,
+        decimal_places=7,
+        null=True,
+        blank=True,
+        verbose_name="Última ubicación (lng)",
+    )
+    last_location_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name="Ubicación compartida el",
+    )
     human_handoff = models.BooleanField(
         default=False,
         verbose_name="Atendido por humano",

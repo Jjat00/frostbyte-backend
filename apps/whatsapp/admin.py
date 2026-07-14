@@ -17,7 +17,15 @@ class WhatsAppContactAdmin(admin.ModelAdmin):
     list_editable = ("human_handoff", "is_blocked")
     search_fields = ("phone", "customer_name", "profile_name")
     list_filter = ("human_handoff", "is_blocked")
-    readonly_fields = ("created_at", "updated_at", "last_message_at", "last_phone_number_id")
+    readonly_fields = (
+        "created_at",
+        "updated_at",
+        "last_message_at",
+        "last_phone_number_id",
+        "last_location_lat",
+        "last_location_lng",
+        "last_location_at",
+    )
 
 
 @admin.register(SentMessage)
