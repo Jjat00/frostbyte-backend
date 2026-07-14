@@ -198,6 +198,36 @@ def build_tools(contact):
         return "\n".join(lines)
 
     @tool
+    def cotizar_pedido(items: list[ItemPedido]) -> str:
+        """Calcula el total EXACTO de un pedido (items + envío) sin crearlo.
+        Úsala SIEMPRE antes de mostrar el resumen al cliente y copia sus cifras
+        tal cual: nunca sumes precios por tu cuenta.
+
+        Args:
+            items: items del pedido con variante_id, cantidad y notas
+        """
+        if not items:
+            return "ERROR: no hay items para cotizar."
+        cfg = StoreSettings.load()
+        lines = []
+        subtotal = Decimal("0.00")
+        for item in items:
+            try:
+                variant = ProductVariant.objects.select_related("product").get(
+                    pk=item.variante_id, is_active=True, product__is_active=True
+                )
+            except ProductVariant.DoesNotExist:
+                return f"ERROR: la variante {item.variante_id} no existe o no está activa. Revisa el menú."
+            line_total = (variant.price or Decimal("0.00")) * item.cantidad
+            subtotal += line_total
+            lines.append(
+                f"- {item.cantidad}x {variant.product.name} {variant.name} · {_cop(line_total)}"
+            )
+        lines.append(f"Envío: {_cop(cfg.delivery_fee)}")
+        lines.append(f"TOTAL: {_cop(subtotal + cfg.delivery_fee)}")
+        return "\n".join(lines)
+
+    @tool
     def crear_pedido(
         items: list[ItemPedido],
         nombre_cliente: str,
@@ -446,6 +476,7 @@ def build_tools(contact):
         consultar_menu,
         consultar_producto,
         consultar_historial_cliente,
+        cotizar_pedido,
         crear_pedido,
         modificar_pedido,
         cancelar_pedido,

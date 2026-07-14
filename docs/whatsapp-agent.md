@@ -20,7 +20,8 @@ Cliente WhatsApp
                                │   memoria: PostgresSaver, thread por contacto+día
                                ▼
                          Tools → ORM (tools.py): menú activo, estado tienda,
-                         historial, crear/modificar/cancelar pedido, handoff
+                         historial, cotizar pedido (totales exactos),
+                         crear/modificar/cancelar pedido, handoff
 ```
 
 - **Pedidos**: se crean como `Order` normales (`source=whatsapp`, `order_type=delivery`),
@@ -29,9 +30,18 @@ Cliente WhatsApp
   `source=whatsapp` y avisa al cliente: preparando → "en preparación",
   **listo → "va en camino" 🛵**, entregado y cancelado. Salen dentro de la
   ventana de 24 h de WhatsApp (gratis, sin templates).
+- **Totales**: el LLM tiene prohibido sumar por su cuenta; antes de mostrar el
+  resumen llama la tool `cotizar_pedido`, que calcula items + envío en el
+  backend y devuelve las cifras exactas. También debe preguntar la variante
+  cuando el producto tiene más de un tamaño (nunca asumirla).
 - **Pago**: el agente pregunta efectivo/transferencia/Nequi/Daviplata; con
   efectivo pregunta el billete (queda en `customer_notes` como "Paga en
   efectivo con $X"); con transferencia comparte `WHATSAPP_TRANSFER_INFO`.
+  Los pedidos por transferencia/Nequi/Daviplata nacen con `is_paid=False` y el
+  staff ve un chip ámbar **"Pago por verificar"** (activos, detalle, historial
+  y KDS) hasta que alguien confirme la plata en la app del banco y cobre el
+  pedido. El comprobante (imagen) solo sirve para cruzar monto/hora: la
+  verificación real siempre es el movimiento en la cuenta.
 - **Dos números**: ambos atienden el catálogo completo. El webhook trae
   `phone_number_id`; el agente responde por el mismo número por el que
   escribió el cliente (guardado en `WhatsAppContact.last_phone_number_id`).

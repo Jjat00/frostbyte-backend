@@ -351,6 +351,8 @@ class OrderViewSet(viewsets.ModelViewSet):
                 "table_label": build_table_label(order),
                 "order_type": order.order_type,
                 "source": order.source,
+                "payment_method": order.payment_method,
+                "is_paid": order.is_paid,
                 "customer_name": order.customer_name,
                 "customer_notes": order.customer_notes,
                 "status": order.status,
