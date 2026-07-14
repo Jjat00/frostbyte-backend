@@ -29,13 +29,18 @@ FECHA Y HORA ACTUAL: {now}
 
 REGLAS DE ORO:
 1. Al empezar una conversación usa consultar_estado_tienda. Si el local está cerrado o los \
-domicilios están pausados, dilo con amabilidad y NO tomes el pedido (puedes mostrar la carta \
-e invitar a escribir más tarde).
-2. Ofrece SOLO lo que devuelven consultar_menu y consultar_producto. Nunca inventes productos, \
+domicilios están pausados, dilo con amabilidad y NO tomes el pedido (invita a escribir más tarde).
+2. Habla SOLO de lo que devuelven consultar_menu y consultar_producto. Nunca inventes productos, \
 precios ni promociones. No menciones gramos ni pesos de los productos.
-3. Usa consultar_historial_cliente al inicio: si el cliente ya es conocido, salúdalo por su \
-nombre y sugiérele lo que suele pedir o algo afín a sus gustos.
-4. Para productos personalizables revisa consultar_producto y guía al cliente por sus opciones; \
+3. NO ofrezcas productos ni sugerencias por iniciativa propia: responde exactamente lo que el \
+cliente pregunta y deja que él lleve la conversación. Solo recomienda (por ejemplo "lo de \
+siempre" según su historial) cuando el cliente pida ideas o esté indeciso.
+4. Usa consultar_historial_cliente al inicio para saber con quién hablas y saludarlo por su \
+nombre si se conoce.
+5. Si el cliente pide ver la carta o el menú completo, compártele el enlace {site_url} (ahí \
+está la carta completa con fotos) y dile que puede pedir por aquí mismo cuando decida. Usa \
+consultar_menu solo para responder preguntas puntuales y validar lo que pida.
+6. Para productos personalizables revisa consultar_producto y guía al cliente por sus opciones; \
 las elecciones van en las notas del item.
 
 FLUJO DEL PEDIDO (no te saltes pasos):
@@ -108,7 +113,11 @@ def _build_agent(contact):
     return create_agent(
         model=model,
         tools=build_tools(contact),
-        system_prompt=SYSTEM_PROMPT.format(now=now, transfer_info=transfer_info),
+        system_prompt=SYSTEM_PROMPT.format(
+            now=now,
+            transfer_info=transfer_info,
+            site_url=settings.SITE_URL,
+        ),
         checkpointer=get_checkpointer(),
     )
 
@@ -130,7 +139,9 @@ def run_agent(contact, user_text):
         reply = " ".join(
             block.get("text", "") for block in reply if isinstance(block, dict)
         ).strip()
-    # WhatsApp no renderiza Markdown: **negrilla** -> *negrilla*, sin encabezados
+    # WhatsApp no renderiza Markdown: **negrilla** -> *negrilla*, links planos,
+    # sin encabezados
     reply = re.sub(r"\*\*(.+?)\*\*", r"*\1*", reply)
+    reply = re.sub(r"\[[^\]]*\]\((https?://[^)]+)\)", r"\1", reply)
     reply = re.sub(r"^#{1,6}\s*", "", reply, flags=re.MULTILINE)
     return reply or "Perdón, ¿me lo repites?"
