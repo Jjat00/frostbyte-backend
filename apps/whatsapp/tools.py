@@ -159,6 +159,49 @@ def build_tools(contact):
         return "\n".join(lines)
 
     @tool
+    def buscar_producto(texto: str) -> str:
+        """Busca en el menú productos que se parezcan a lo que el cliente pidió.
+        Úsala SIEMPRE antes de decir que algo "no está disponible": los clientes
+        casi nunca escriben el nombre exacto (ej. 'salchipapa especial' es la
+        'Salchipapa Especial Frostbyte').
+
+        Args:
+            texto: lo que el cliente pidió, con sus palabras
+        """
+        words = {w for w in re.findall(r"[a-záéíóúüñ]+", texto.lower()) if len(w) >= 3}
+        words -= {
+            "una", "uno", "unas", "unos", "quiero", "quisiera", "para", "con",
+            "por", "favor", "del", "los", "las", "que", "pedir", "domicilio",
+        }
+        if not words:
+            return "ERROR: dame palabras del producto a buscar."
+        products = Product.objects.filter(
+            is_active=True,
+            is_coming_soon=False,
+            category__is_active=True,
+            category__business__is_active=True,
+        ).prefetch_related("variants", "modifier_links")
+        scored = []
+        for product in products:
+            name = product.name.lower()
+            score = sum(1 for w in words if w in name)
+            if score:
+                scored.append((score, product))
+        scored.sort(key=lambda pair: -pair[0])
+        lines = []
+        for _score, product in scored[:6]:
+            variants = [v for v in product.variants.all() if v.is_active]
+            if not variants:
+                continue
+            prices = "; ".join(f"{v.name} {_cop(v.price)} [variante_id={v.id}]" for v in variants)
+            configurable = any(pm.is_active for pm in product.modifier_links.all())
+            extra = f" (personalizable, slug='{product.slug}')" if configurable else ""
+            lines.append(f"- {product.name}: {prices}{extra}")
+        if not lines:
+            return "Sin coincidencias en el menú: eso no está disponible hoy."
+        return "Coincidencias en el menú:\n" + "\n".join(lines)
+
+    @tool
     def consultar_historial_cliente() -> str:
         """Últimos pedidos de ESTE cliente: qué pidió, cuándo y por cuánto.
         Úsala para saludar por su nombre, sugerir 'lo de siempre' o recomendar
@@ -205,8 +248,9 @@ def build_tools(contact):
 
         Args:
             items: items del pedido con variante_id, cantidad y notas
-            paga_con: SOLO efectivo: billete con el que paga (ej. '50000');
-                valida que el billete alcance para el total
+            paga_con: SOLO efectivo: billete que DIJO el cliente (ej. '50000'),
+                o 'exacto' si dice que paga completo/justo. PROHIBIDO inventar
+                un valor que el cliente no mencionó.
         """
         if not items:
             return "ERROR: no hay items para cotizar."
@@ -265,7 +309,9 @@ def build_tools(contact):
             direccion: dirección de entrega completa
             metodo_pago: uno de: cash, transfer, nequi, daviplata
             referencia: punto de referencia o indicaciones para el domiciliario
-            paga_con: SOLO efectivo: billete con el que paga (ej. '50000')
+            paga_con: SOLO efectivo: billete que DIJO el cliente (ej. '50000'),
+                o 'exacto' si dice que paga completo/justo. PROHIBIDO inventar
+                un valor que el cliente no mencionó.
             notas: aclaraciones generales del pedido
             latitud: SOLO si el cliente compartió su ubicación de WhatsApp (lat del mensaje)
             longitud: SOLO si el cliente compartió su ubicación de WhatsApp (lng del mensaje)
@@ -294,8 +340,12 @@ def build_tools(contact):
         customer_notes = notas.strip()
         if metodo_pago == Order.PaymentMethod.CASH and paga_con:
             billete = re.sub(r"\D", "", paga_con)
-            billete_txt = _cop(Decimal(billete)) if billete else paga_con
-            customer_notes = (customer_notes + f"\nPaga en efectivo con {billete_txt}.").strip()
+            billete_txt = (
+                f"Paga en efectivo con {_cop(Decimal(billete))}."
+                if billete
+                else "Paga en efectivo con el valor exacto."
+            )
+            customer_notes = (customer_notes + "\n" + billete_txt).strip()
 
         with transaction.atomic():
             order = Order.objects.create(
@@ -491,6 +541,7 @@ def build_tools(contact):
         consultar_estado_tienda,
         consultar_menu,
         consultar_producto,
+        buscar_producto,
         consultar_historial_cliente,
         cotizar_pedido,
         crear_pedido,

@@ -19,8 +19,9 @@ Cliente WhatsApp
                                │   modelo: OPENAI (WHATSAPP_AGENT_MODEL)
                                │   memoria: PostgresSaver, thread por contacto+día
                                ▼
-                         Tools → ORM (tools.py): menú activo, estado tienda,
-                         historial, cotizar pedido (totales exactos),
+                         Tools → ORM (tools.py): menú activo, búsqueda
+                         aproximada de productos, estado tienda, historial,
+                         cotizar pedido (totales exactos),
                          crear/modificar/cancelar pedido, handoff
 ```
 
@@ -34,6 +35,15 @@ Cliente WhatsApp
   resumen llama la tool `cotizar_pedido`, que calcula items + envío en el
   backend y devuelve las cifras exactas. También debe preguntar la variante
   cuando el producto tiene más de un tamaño (nunca asumirla).
+- **Disponibilidad**: antes de decir que algo "no está disponible" el agente
+  debe llamar `buscar_producto` (búsqueda por palabras contra el menú activo):
+  los clientes no usan nombres exactos ("salchipapa especial" = "Salchipapa
+  Especial Frostbyte"). Y nunca vuelca el menú completo al chat (omitiría
+  productos): para "qué hay" responde categorías + link a la carta, y solo
+  lista completa una categoría concreta si se la piden.
+- **Efectivo**: solo se registra el billete que el cliente DIJO (o
+  `paga_con='exacto'` si paga completo); prohibido inventarlo. El dato llega
+  al domiciliario en `customer_notes` y el agente no habla de vueltas.
 - **Pago**: el agente pregunta efectivo/transferencia/Nequi/Daviplata; con
   efectivo pregunta el billete (queda en `customer_notes` como "Paga en
   efectivo con $X"); con transferencia comparte `WHATSAPP_TRANSFER_INFO`.
