@@ -350,6 +350,7 @@ class OrderViewSet(viewsets.ModelViewSet):
                 "table_number": order.table_number,
                 "table_label": build_table_label(order),
                 "order_type": order.order_type,
+                "source": order.source,
                 "customer_name": order.customer_name,
                 "customer_notes": order.customer_notes,
                 "status": order.status,

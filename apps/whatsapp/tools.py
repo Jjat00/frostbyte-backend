@@ -206,6 +206,8 @@ def build_tools(contact):
         referencia: str = "",
         paga_con: str = "",
         notas: str = "",
+        latitud: float = 0.0,
+        longitud: float = 0.0,
     ) -> str:
         """Crea el pedido a domicilio DEFINITIVO. Llámala SOLO después de que el
         cliente confirmó explícitamente el resumen completo (items, dirección,
@@ -219,6 +221,8 @@ def build_tools(contact):
             referencia: punto de referencia o indicaciones para el domiciliario
             paga_con: SOLO efectivo: billete con el que paga (ej. '50000')
             notas: aclaraciones generales del pedido
+            latitud: SOLO si el cliente compartió su ubicación de WhatsApp (lat del mensaje)
+            longitud: SOLO si el cliente compartió su ubicación de WhatsApp (lng del mensaje)
         """
         cfg = StoreSettings.load()
         if not cfg.is_open:
@@ -257,6 +261,8 @@ def build_tools(contact):
                 payment_method=metodo_pago,
                 delivery_address=direccion.strip()[:300],
                 delivery_reference=referencia.strip()[:300],
+                delivery_lat=Decimal(str(round(latitud, 7))) if (latitud or longitud) else None,
+                delivery_lng=Decimal(str(round(longitud, 7))) if (latitud or longitud) else None,
                 delivery_fee=cfg.delivery_fee,
             )
             for item in items:

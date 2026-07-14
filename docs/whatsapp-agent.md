@@ -86,10 +86,24 @@ print(run_agent(c, 'Hola, ¿qué tienen de menú?'))
 Para probar el webhook con Kapso real en local se necesita un túnel
 (ej. `cloudflared tunnel --url http://localhost:18000`).
 
+## Media (audios, imágenes y ubicación)
+
+- **Notas de voz**: se descargan vía Kapso (`GET /meta/whatsapp/v24.0/{media_id}`
+  → `download_url` firmado) y se transcriben con OpenAI
+  (`gpt-4o-mini-transcribe`). El agente recibe la transcripción como texto.
+- **Imágenes**: se descargan igual y se describen con el modelo de visión
+  (`WHATSAPP_AGENT_MODEL`). Si es un comprobante de pago, la descripción extrae
+  monto, fecha, remitente y referencia. El caption del cliente se conserva.
+- **Ubicación compartida**: llega como texto con lat/lng; el agente pasa esas
+  coordenadas a `crear_pedido` (`delivery_lat/lng`) y el staff ve el botón
+  "Cómo llegar" (Google Maps) en la tarjeta del pedido.
+- Si la descarga o el modelo fallan, el agente recibe un texto de respaldo y
+  pide el contenido por escrito. Videos, documentos y stickers no se procesan.
+- Todo el procesado ocurre en `apps/whatsapp/media.py` + `worker.py`, con el
+  indicador "escribiendo…" ya activo.
+
 ## Límites conocidos (v1)
 
-- El agente no ve imágenes ni escucha audios: pide el contenido por texto y,
-  si es un comprobante de pago, avisa que el equipo lo verificará.
 - No hay estado "en camino" propio: el aviso 🛵 sale cuando el pedido pasa a
   `ready` (todas las cocinas terminaron). Si algún día se quiere un botón
   "En camino" explícito, hay que añadir el estado a `Order.Status` y al front.

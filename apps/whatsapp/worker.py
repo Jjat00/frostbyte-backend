@@ -16,6 +16,7 @@ from django.db import close_old_connections
 from django.utils import timezone
 
 from . import kapso
+from . import media as wa_media
 from .models import WebhookEvent, WhatsAppContact
 from .tools import normalize_phone
 
@@ -85,6 +86,7 @@ def extract_inbound_messages(payload):
 
         msg_type = message.get("type")
         text = ""
+        media = None  # audio/imagen a resolver después (descarga + OpenAI)
         if msg_type == "text":
             text = (message.get("text") or {}).get("body", "")
         elif msg_type == "interactive":
@@ -98,19 +100,36 @@ def extract_inbound_messages(payload):
                 f"lat {location.get('latitude')}, lng {location.get('longitude')}, "
                 f"nombre: {location.get('name') or 'N/A'}, dirección: {location.get('address') or 'N/A'}]"
             )
-        elif msg_type in ("image", "video", "document", "sticker"):
+        elif msg_type == "image":
+            image = message.get("image") or {}
+            caption = image.get("caption", "")
+            if image.get("id"):
+                media = {"kind": "image", "media_id": image["id"], "caption": caption}
+            # Texto de respaldo si la descarga o la visión fallan
+            text = (
+                "[El cliente envió una imagen que no se pudo procesar"
+                + (f'; escribió: "{caption}"' if caption else "")
+                + ". Si esperabas un comprobante de pago, dile que el equipo lo verificará.]"
+            )
+        elif msg_type == "audio":
+            audio = message.get("audio") or {}
+            if audio.get("id"):
+                media = {"kind": "audio", "media_id": audio["id"]}
+            text = (
+                "[El cliente envió una nota de voz que no se pudo transcribir. "
+                "Pídele amablemente que lo escriba.]"
+            )
+        elif msg_type in ("video", "document", "sticker"):
             caption = (message.get(msg_type) or {}).get("caption", "")
             text = (
                 f"[El cliente envió un(a) {msg_type} que no puedes ver"
                 + (f'; escribió: "{caption}"' if caption else "")
                 + ". Si esperabas un comprobante de pago, dile que el equipo lo verificará.]"
             )
-        elif msg_type == "audio":
-            text = "[El cliente envió un audio que no puedes escuchar. Pídele amablemente que lo escriba.]"
         else:
             text = kapso_meta.get("content") or ""
 
-        if not text.strip():
+        if not text.strip() and not media:
             continue
         results.append(
             {
@@ -118,11 +137,38 @@ def extract_inbound_messages(payload):
                 "wa_user_id": wa_user_id,
                 "contact_name": (conversation.get("contact_name") or "").strip(),
                 "text": text.strip(),
+                "media": media,
                 "phone_number_id": phone_number_id,
                 "message_id": message.get("id") or "",
             }
         )
     return results
+
+
+def _resolve_media(msg, phone_number_id):
+    """Convierte el media de un mensaje en texto para el agente.
+
+    Audios -> transcripción; imágenes -> descripción (con extracción de datos
+    si es un comprobante). Si algo falla se usa el texto de respaldo.
+    """
+    media = msg.get("media")
+    if not media or not phone_number_id or not settings.OPENAI_API_KEY:
+        return msg["text"]
+    try:
+        if media["kind"] == "audio":
+            transcript = wa_media.transcribe_audio(media["media_id"], phone_number_id)
+            if transcript:
+                return f'[Nota de voz del cliente, transcrita]: "{transcript}"'
+        elif media["kind"] == "image":
+            description = wa_media.describe_image(media["media_id"], phone_number_id)
+            if description:
+                text = f"[El cliente envió una imagen. Contenido: {description}]"
+                if media.get("caption"):
+                    text += f'\nJunto a la imagen escribió: "{media["caption"]}"'
+                return text
+    except Exception:
+        logger.exception("No se pudo procesar el media %s", media.get("media_id"))
+    return msg["text"]
 
 
 def _keep_typing(phone_number_id, message_id, stop_event, max_renewals=4):
@@ -218,7 +264,6 @@ def _process_event(event):
 
         from .agent import run_agent
 
-        text = "\n".join(m["text"] for m in messages)
         last_message_id = next(
             (m["message_id"] for m in reversed(messages) if m["message_id"]), ""
         )
@@ -231,6 +276,9 @@ def _process_event(event):
             ).start()
         try:
             with _phone_lock(contact.phone):
+                # Los audios/imágenes se resuelven aquí (descarga + OpenAI)
+                # para que el 'escribiendo…' ya esté visible mientras tanto
+                text = "\n".join(_resolve_media(m, phone_number_id) for m in messages)
                 reply = run_agent(contact, text)
         finally:
             stop_typing.set()
