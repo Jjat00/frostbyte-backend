@@ -7,7 +7,7 @@ from rest_framework.response import Response
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.views import APIView
 
-from .models import SongRequest, MusicSettings
+from .models import SongRequest, MusicSettings, FLOOR_CHOICES, DEFAULT_FLOOR
 from .consumers import broadcast_music_update
 from .serializers import (
     SongRequestSerializer,
@@ -38,6 +38,30 @@ from .services.spotify_auth import (
 )
 
 logger = logging.getLogger(__name__)
+
+VALID_FLOORS = {choice[0] for choice in FLOOR_CHOICES}
+
+
+def _parse_floor(value, default=DEFAULT_FLOOR):
+    """Normaliza el piso recibido por query param o body.
+
+    Default piso 2: los QR legacy y clientes viejos no envían piso.
+    """
+    try:
+        floor = int(value)
+    except (TypeError, ValueError):
+        return default
+    return floor if floor in VALID_FLOORS else default
+
+
+def _request_floor(request):
+    """Extrae el piso de un request (body o query param), default piso 2."""
+    raw = None
+    if isinstance(getattr(request, "data", None), dict):
+        raw = request.data.get("floor")
+    if raw is None:
+        raw = request.query_params.get("floor")
+    return _parse_floor(raw)
 
 
 class SongRequestViewSet(viewsets.ModelViewSet):
@@ -70,10 +94,12 @@ class SongRequestViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        # Rechazar si la misma cancion ya esta en cola o reproduciendose
+        # Rechazar si la misma cancion ya esta en cola o reproduciendose en ese piso
         track_uri = serializer.validated_data.get("spotify_track_uri")
+        floor = serializer.validated_data.get("floor", DEFAULT_FLOOR)
         if track_uri:
             duplicate = SongRequest.objects.filter(
+                floor=floor,
                 spotify_track_uri=track_uri,
                 status__in=[
                     SongRequest.Status.PENDING,
@@ -94,14 +120,17 @@ class SongRequestViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         song_request = serializer.save()
 
-        # Intentar agregar a la cola de Spotify automáticamente
+        # Intentar agregar a la cola de Spotify del piso automáticamente
         if song_request.spotify_track_uri:
             try:
-                add_to_queue(song_request.spotify_track_uri)
+                add_to_queue(song_request.spotify_track_uri, floor=song_request.floor)
                 song_request.status = SongRequest.Status.QUEUED
                 song_request.save(update_fields=["status", "updated_at"])
             except SpotifyNotConnectedError:
-                logger.warning("Spotify no conectado, la solicitud queda pendiente")
+                logger.warning(
+                    f"Spotify no conectado en piso {song_request.floor}, "
+                    "la solicitud queda pendiente"
+                )
             except SpotifyRateLimitedError:
                 # Queda en PENDING para que se encole luego cuando pase el cooldown.
                 logger.warning("Spotify rate-limited, solicitud queda pendiente")
@@ -110,16 +139,22 @@ class SongRequestViewSet(viewsets.ModelViewSet):
                 song_request.status = SongRequest.Status.FAILED
                 song_request.save(update_fields=["status", "updated_at"])
 
-        broadcast_music_update()
+        broadcast_music_update(floor=song_request.floor)
 
     def perform_destroy(self, instance):
+        floor = instance.floor
         instance.delete()
-        broadcast_music_update()
+        broadcast_music_update(floor=floor)
 
     def get_queryset(self):
         from django.db.models import Case, When, Value, IntegerField
 
         queryset = super().get_queryset()
+
+        # Filtro opcional por piso (clientes y staff lo envían; sin él se ven todos)
+        floor_param = self.request.query_params.get("floor")
+        if floor_param is not None:
+            queryset = queryset.filter(floor=_parse_floor(floor_param))
 
         if not self.request.user.is_authenticated:
             queryset = queryset.filter(
@@ -166,7 +201,7 @@ class SongRequestViewSet(viewsets.ModelViewSet):
                 song_request.status = new_status
                 song_request.save()
 
-            broadcast_music_update()
+            broadcast_music_update(floor=song_request.floor)
             return Response(
                 SongRequestSerializer(song_request).data, status=status.HTTP_200_OK
             )
@@ -184,7 +219,7 @@ class SongRequestViewSet(viewsets.ModelViewSet):
             )
 
         try:
-            tracks = search_tracks(query, limit=10)
+            tracks = search_tracks(query, floor=_request_floor(request), limit=10)
             serializer = SpotifyTrackSerializer(tracks, many=True)
             return Response(serializer.data)
         except SpotifyNotConnectedError:
@@ -208,7 +243,7 @@ class SongRequestViewSet(viewsets.ModelViewSet):
     def now_playing(self, request):
         """Obtener la canción que está sonando en Spotify"""
         try:
-            current = get_currently_playing()
+            current = get_currently_playing(floor=_request_floor(request))
             if not current:
                 return Response({"message": "No hay nada reproduciéndose"}, status=status.HTTP_204_NO_CONTENT)
             return Response(current)
@@ -228,7 +263,7 @@ class SongRequestViewSet(viewsets.ModelViewSet):
     def queue_status(self, request):
         """Obtener la cola de reproducción de Spotify"""
         try:
-            queue = get_queue()
+            queue = get_queue(floor=_request_floor(request))
             return Response({"queue": queue})
         except SpotifyNotConnectedError:
             return Response(
@@ -247,15 +282,15 @@ class SongRequestViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=["get"], url_path="spotify-status")
     def spotify_status(self, request):
-        """Verificar si Spotify está conectado"""
-        connected = is_connected()
+        """Verificar si Spotify está conectado en el piso"""
+        connected = is_connected(floor=_request_floor(request))
         return Response({"connected": connected})
 
     @action(detail=False, methods=["post"], url_path="player/pause", permission_classes=[IsAuthenticated])
     def player_pause(self, request):
         """Pausar reproducción"""
         try:
-            pause_playback()
+            pause_playback(floor=_request_floor(request))
             return Response({"message": "Reproducción pausada"})
         except SpotifyNotConnectedError:
             return Response({"error": "Spotify no está conectado"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
@@ -269,7 +304,7 @@ class SongRequestViewSet(viewsets.ModelViewSet):
     def player_resume(self, request):
         """Reanudar reproducción"""
         try:
-            resume_playback()
+            resume_playback(floor=_request_floor(request))
             return Response({"message": "Reproducción reanudada"})
         except SpotifyNotConnectedError:
             return Response({"error": "Spotify no está conectado"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
@@ -282,9 +317,10 @@ class SongRequestViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=["post"], url_path="player/next", permission_classes=[IsAuthenticated])
     def player_next(self, request):
         """Saltar a la siguiente canción"""
+        floor = _request_floor(request)
         try:
-            skip_to_next()
-            broadcast_music_update()
+            skip_to_next(floor=floor)
+            broadcast_music_update(floor=floor)
             return Response({"message": "Siguiente canción"})
         except SpotifyNotConnectedError:
             return Response({"error": "Spotify no está conectado"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
@@ -297,9 +333,10 @@ class SongRequestViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=["post"], url_path="player/previous", permission_classes=[IsAuthenticated])
     def player_previous(self, request):
         """Volver a la canción anterior"""
+        floor = _request_floor(request)
         try:
-            skip_to_previous()
-            broadcast_music_update()
+            skip_to_previous(floor=floor)
+            broadcast_music_update(floor=floor)
             return Response({"message": "Canción anterior"})
         except SpotifyNotConnectedError:
             return Response({"error": "Spotify no está conectado"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
@@ -315,9 +352,10 @@ class SongRequestViewSet(viewsets.ModelViewSet):
         track_uri = request.data.get("track_uri")
         if not track_uri:
             return Response({"error": "track_uri es requerido"}, status=status.HTTP_400_BAD_REQUEST)
+        floor = _request_floor(request)
         try:
-            play_track(track_uri)
-            broadcast_music_update()
+            play_track(track_uri, floor=floor)
+            broadcast_music_update(floor=floor)
             return Response({"message": "Reproduciendo track"})
         except SpotifyNotConnectedError:
             return Response({"error": "Spotify no está conectado"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
@@ -380,7 +418,7 @@ class SongRequestViewSet(viewsets.ModelViewSet):
         if volume is None or not (0 <= int(volume) <= 100):
             return Response({"error": "volume debe ser entre 0 y 100"}, status=status.HTTP_400_BAD_REQUEST)
         try:
-            set_volume(int(volume))
+            set_volume(int(volume), floor=_request_floor(request))
             return Response({"message": f"Volumen ajustado a {volume}"})
         except SpotifyNotConnectedError:
             return Response({"error": "Spotify no está conectado"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
@@ -397,9 +435,15 @@ class SpotifyAuthView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request):
-        """Redirige directamente a Spotify para autorizar"""
+        """Redirige directamente a Spotify para autorizar.
+
+        Recibe ?floor=N y lo pasa en el state de OAuth para que el callback
+        sepa a qué piso pertenece la cuenta autorizada. El staff debe iniciar
+        sesión en Spotify con la cuenta del piso correspondiente.
+        """
         from django.shortcuts import redirect
-        url = get_authorize_url()
+        floor = _request_floor(request)
+        url = get_authorize_url(state=str(floor))
         return redirect(url)
 
 
@@ -425,13 +469,16 @@ class SpotifyCallbackView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # El state trae el piso que inició el flujo (default 2 para flujos viejos)
+        floor = _parse_floor(request.query_params.get("state"))
+
         try:
             token_data = exchange_code_for_tokens(code)
-            save_tokens(token_data)
+            save_tokens(token_data, floor=floor)
             # Redirigir al frontend con éxito
             frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173")
             from django.shortcuts import redirect
-            return redirect(f"{frontend_url}/musica?spotify=connected")
+            return redirect(f"{frontend_url}/musica?spotify=connected&floor={floor}")
         except Exception as e:
             logger.error(f"Error en callback de Spotify: {e}")
             return Response(
@@ -441,14 +488,15 @@ class SpotifyCallbackView(APIView):
 
 
 class SpotifyDisconnectView(APIView):
-    """Desconectar Spotify"""
+    """Desconectar la cuenta de Spotify de un piso"""
 
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
         from .models import SpotifyToken
-        SpotifyToken.objects.all().delete()
-        return Response({"message": "Spotify desconectado"})
+        floor = _request_floor(request)
+        SpotifyToken.objects.filter(floor=floor).delete()
+        return Response({"message": f"Spotify desconectado (piso {floor})"})
 
 
 class MusicSettingsView(APIView):

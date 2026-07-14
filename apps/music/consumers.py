@@ -34,17 +34,22 @@ class MusicConsumer(AsyncWebsocketConsumer):
     async def music_changed(self, event):
         """Notificar al cliente que las solicitudes de música cambiaron"""
         await self.send(text_data=json.dumps({
-            'type': 'music_changed'
+            'type': 'music_changed',
+            'floor': event.get('floor'),
         }))
 
 
-def broadcast_music_update():
-    """Helper para enviar notificación de cambio desde las vistas"""
+def broadcast_music_update(floor=None):
+    """Helper para enviar notificación de cambio desde las vistas.
+
+    floor=None significa cambio global (ej. music-settings); los clientes
+    lo tratan como relevante para cualquier piso.
+    """
     from channels.layers import get_channel_layer
     from asgiref.sync import async_to_sync
 
     channel_layer = get_channel_layer()
     async_to_sync(channel_layer.group_send)(
         MusicConsumer.GROUP_NAME,
-        {'type': 'music_changed'}
+        {'type': 'music_changed', 'floor': floor}
     )

@@ -1,11 +1,21 @@
 from django.db import models
 from django.utils import timezone
 
+# Pisos con sonido propio. Cada piso tiene su propia cuenta de Spotify.
+FLOOR_CHOICES = [(2, "Piso 2"), (3, "Piso 3")]
+DEFAULT_FLOOR = 2
+
 
 class SpotifyToken(models.Model):
-    """Almacena los tokens de autenticación de Spotify para el local.
-    Solo debe existir un registro (singleton) ya que es una sola cuenta de Spotify."""
+    """Almacena los tokens de autenticación de Spotify del local.
+    Un registro por piso: cada piso tiene su propia cuenta de Spotify."""
 
+    floor = models.PositiveSmallIntegerField(
+        choices=FLOOR_CHOICES,
+        default=DEFAULT_FLOOR,
+        unique=True,
+        verbose_name="Piso",
+    )
     access_token = models.TextField()
     refresh_token = models.TextField()
     token_type = models.CharField(max_length=50, default="Bearer")
@@ -19,16 +29,16 @@ class SpotifyToken(models.Model):
         verbose_name_plural = "Tokens de Spotify"
 
     def __str__(self):
-        return f"Spotify Token (expira: {self.expires_at})"
+        return f"Spotify Token piso {self.floor} (expira: {self.expires_at})"
 
     @property
     def is_expired(self):
         return timezone.now() >= self.expires_at
 
     @classmethod
-    def get_active_token(cls):
-        """Obtiene el token activo (singleton)"""
-        return cls.objects.first()
+    def get_active_token(cls, floor=DEFAULT_FLOOR):
+        """Obtiene el token de la cuenta de Spotify del piso indicado"""
+        return cls.objects.filter(floor=floor).first()
 
 
 class MusicSettings(models.Model):
@@ -73,6 +83,12 @@ class SongRequest(models.Model):
         CANCELLED = "cancelled", "Cancelada"
         FAILED = "failed", "Fallida"
 
+    floor = models.PositiveSmallIntegerField(
+        choices=FLOOR_CHOICES,
+        default=DEFAULT_FLOOR,
+        verbose_name="Piso",
+        help_text="Piso donde sonará la canción (cada piso tiene su Spotify)",
+    )
     song_name = models.CharField(
         max_length=200,
         verbose_name="Nombre de la canción",

@@ -74,21 +74,20 @@ def refresh_access_token(refresh_token):
     return response.json()
 
 
-def save_tokens(token_data):
-    """Guarda o actualiza los tokens en la base de datos"""
+def save_tokens(token_data, floor):
+    """Guarda o actualiza los tokens de la cuenta del piso indicado"""
     from apps.music.models import SpotifyToken
 
     expires_at = timezone.now() + timedelta(seconds=token_data["expires_in"])
 
+    existing = SpotifyToken.get_active_token(floor)
     token, _ = SpotifyToken.objects.update_or_create(
-        pk=SpotifyToken.objects.values_list("pk", flat=True).first() or None,
+        floor=floor,
         defaults={
             "access_token": token_data["access_token"],
             "refresh_token": token_data.get(
                 "refresh_token",
-                SpotifyToken.get_active_token().refresh_token
-                if SpotifyToken.get_active_token()
-                else "",
+                existing.refresh_token if existing else "",
             ),
             "token_type": token_data.get("token_type", "Bearer"),
             "expires_at": expires_at,
@@ -98,16 +97,16 @@ def save_tokens(token_data):
     return token
 
 
-def get_valid_access_token():
-    """Obtiene un access token válido, renovándolo si es necesario"""
+def get_valid_access_token(floor):
+    """Obtiene un access token válido del piso, renovándolo si es necesario"""
     from apps.music.models import SpotifyToken
 
-    token = SpotifyToken.get_active_token()
+    token = SpotifyToken.get_active_token(floor)
     if not token:
         return None
 
     if token.is_expired:
         token_data = refresh_access_token(token.refresh_token)
-        token = save_tokens(token_data)
+        token = save_tokens(token_data, floor=floor)
 
     return token.access_token

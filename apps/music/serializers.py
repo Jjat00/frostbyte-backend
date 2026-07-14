@@ -23,6 +23,7 @@ class SongRequestSerializer(serializers.ModelSerializer):
         model = SongRequest
         fields = [
             "id",
+            "floor",
             "song_name",
             "artist_name",
             "spotify_track_uri",
@@ -44,6 +45,7 @@ class SongRequestCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = SongRequest
         fields = [
+            "floor",
             "song_name",
             "artist_name",
             "spotify_track_uri",

@@ -14,19 +14,28 @@ QUEUE_CHECK_INTERVAL = 60  # solo pedir la cola de Spotify cada N seg (reduce ll
 
 _sync_thread = None
 _sync_running = False
-_last_queue_check = 0.0
+_last_queue_check = {}  # floor -> epoch
 
 
 def sync_song_request_statuses():
+    """Sincroniza cada piso con cuenta de Spotify conectada."""
+    from apps.music.models import SpotifyToken
+
+    for floor in SpotifyToken.objects.values_list("floor", flat=True):
+        _sync_floor(floor)
+
+
+def _sync_floor(floor):
     """
-    Sincroniza los estados de las solicitudes con lo que realmente suena en Spotify.
+    Sincroniza los estados de las solicitudes de un piso con lo que realmente
+    suena en la cuenta de Spotify de ese piso.
 
     Lógica:
     1. Si una solicitud estaba "playing" pero ya no es el track actual → completed
     2. Si hay un track sonando que coincide con una solicitud queued/pending → playing
     3. Si no hay nada sonando (o Spotify está idle) y hay solicitudes queued → reproducir la siguiente
     """
-    from apps.music.models import SongRequest, SpotifyToken
+    from apps.music.models import SongRequest
     from apps.music.services.spotify_client import (
         _fetch_current_playback,
         _get_spotify_client,
@@ -38,27 +47,22 @@ def sync_song_request_statuses():
     )
     from apps.music.consumers import broadcast_music_update
 
-    global _last_queue_check
-
-    token = SpotifyToken.get_active_token()
-    if not token:
-        return
-
-    if is_rate_limited():
+    if is_rate_limited(floor):
         logger.debug(
-            f"[Spotify Sync] Rate limited. Esperando {int(seconds_until_allowed())}s"
+            f"[Spotify Sync] Piso {floor} rate limited. "
+            f"Esperando {int(seconds_until_allowed(floor))}s"
         )
         return
 
     try:
         # Refresca el cache de playback para que lo usen los endpoints HTTP.
-        current = _fetch_current_playback()
+        current = _fetch_current_playback(floor)
     except SpotifyNotConnectedError:
         return
     except SpotifyRateLimitedError:
         return
     except Exception as e:
-        logger.debug(f"Error obteniendo cancion actual: {e}")
+        logger.debug(f"Error obteniendo cancion actual (piso {floor}): {e}")
         return
 
     # current_uri refleja el track activo (incluso si esta pausado) para no perder
@@ -67,7 +71,7 @@ def sync_song_request_statuses():
     changed = False
 
     # 1. Las que estaban "playing" pero ya no son la canción actual → completed
-    for req in SongRequest.objects.filter(status=SongRequest.Status.PLAYING):
+    for req in SongRequest.objects.filter(floor=floor, status=SongRequest.Status.PLAYING):
         if req.spotify_track_uri != current_uri:
             req.status = SongRequest.Status.COMPLETED
             if not req.played_at:
@@ -80,6 +84,7 @@ def sync_song_request_statuses():
     if current_uri:
         pending_match = (
             SongRequest.objects.filter(
+                floor=floor,
                 spotify_track_uri=current_uri,
                 status__in=[SongRequest.Status.QUEUED, SongRequest.Status.PENDING],
             )
@@ -97,6 +102,7 @@ def sync_song_request_statuses():
     if not current_uri:
         next_queued = (
             SongRequest.objects.filter(
+                floor=floor,
                 status=SongRequest.Status.QUEUED,
                 spotify_track_uri__gt="",
             )
@@ -105,8 +111,8 @@ def sync_song_request_statuses():
         )
         if next_queued:
             try:
-                sp = _get_spotify_client()
-                _call(sp.start_playback, uris=[next_queued.spotify_track_uri])
+                sp = _get_spotify_client(floor)
+                _call(floor, sp.start_playback, uris=[next_queued.spotify_track_uri])
                 next_queued.status = SongRequest.Status.PLAYING
                 next_queued.played_at = timezone.now()
                 next_queued.save(update_fields=["status", "played_at", "updated_at"])
@@ -115,16 +121,16 @@ def sync_song_request_statuses():
             except SpotifyRateLimitedError:
                 return
             except Exception as e:
-                logger.debug(f"Error auto-reproduciendo: {e}")
+                logger.debug(f"Error auto-reproduciendo (piso {floor}): {e}")
 
     # 4. Limpieza: solicitudes QUEUED que ya no estan en la cola de Spotify ni suenan
     #    Solo consultamos la cola de Spotify cada QUEUE_CHECK_INTERVAL segundos para
     #    no disparar rate limits: es una operacion de mantenimiento, no critica.
     now = time.time()
-    if now - _last_queue_check < QUEUE_CHECK_INTERVAL:
+    if now - _last_queue_check.get(floor, 0.0) < QUEUE_CHECK_INTERVAL:
         if changed:
             try:
-                broadcast_music_update()
+                broadcast_music_update(floor=floor)
             except Exception:
                 pass
         return
@@ -132,6 +138,7 @@ def sync_song_request_statuses():
     grace_cutoff = timezone.now() - timedelta(seconds=QUEUED_GRACE_SECONDS)
     stale_queued = list(
         SongRequest.objects.filter(
+            floor=floor,
             status=SongRequest.Status.QUEUED,
             spotify_track_uri__gt="",
             updated_at__lt=grace_cutoff,
@@ -140,14 +147,14 @@ def sync_song_request_statuses():
 
     if stale_queued:
         try:
-            sp = _get_spotify_client()
-            spotify_queue = _call(sp.queue)
+            sp = _get_spotify_client(floor)
+            spotify_queue = _call(floor, sp.queue)
             queue_uris = {item.get("uri") for item in spotify_queue.get("queue", []) if item.get("uri")}
-            _last_queue_check = now
+            _last_queue_check[floor] = now
         except SpotifyRateLimitedError:
             queue_uris = None
         except Exception as e:
-            logger.debug(f"Error obteniendo cola de Spotify para limpieza: {e}")
+            logger.debug(f"Error obteniendo cola de Spotify para limpieza (piso {floor}): {e}")
             queue_uris = None
 
         if queue_uris is not None:
@@ -166,11 +173,11 @@ def sync_song_request_statuses():
                     f"{req.song_name} - {req.artist_name}"
                 )
     else:
-        _last_queue_check = now
+        _last_queue_check[floor] = now
 
     if changed:
         try:
-            broadcast_music_update()
+            broadcast_music_update(floor=floor)
         except Exception:
             pass
 
@@ -192,17 +199,9 @@ def _sync_loop():
         finally:
             close_old_connections()
 
-        # Si estamos en cooldown por rate-limit, esperar hasta que pase
-        # (con un cap para poder responder a stop_sync).
-        from apps.music.services.spotify_client import (
-            is_rate_limited,
-            seconds_until_allowed,
-        )
-        if is_rate_limited():
-            wait = min(seconds_until_allowed() + 1, 30)
-            time.sleep(wait)
-        else:
-            time.sleep(SYNC_INTERVAL)
+        # El chequeo de rate-limit por piso vive dentro de _sync_floor (skip
+        # barato), asi que el loop puede dormir un intervalo fijo.
+        time.sleep(SYNC_INTERVAL)
 
     logger.info("[Spotify Sync] Hilo de sincronizacion detenido")
 

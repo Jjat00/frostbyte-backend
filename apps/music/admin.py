@@ -13,12 +13,13 @@ class SongRequestAdmin(admin.ModelAdmin):
     list_display = [
         "song_name",
         "artist_name",
+        "floor",
         "status",
         "spotify_track_uri",
         "created_at",
         "played_at",
     ]
-    list_filter = ["status", "created_at"]
+    list_filter = ["floor", "status", "created_at"]
     search_fields = ["song_name", "artist_name", "spotify_track_uri"]
     readonly_fields = ["created_at", "updated_at"]
     ordering = ["-created_at"]
@@ -27,12 +28,14 @@ class SongRequestAdmin(admin.ModelAdmin):
 @admin.register(SpotifyToken)
 class SpotifyTokenAdmin(admin.ModelAdmin):
     list_display = [
+        "floor",
         "token_type",
         "expires_at",
         "is_expired",
         "created_at",
         "updated_at",
     ]
+    list_filter = ["floor"]
     readonly_fields = ["created_at", "updated_at"]
 
     def is_expired(self, obj):
