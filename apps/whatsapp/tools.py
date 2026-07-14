@@ -198,13 +198,15 @@ def build_tools(contact):
         return "\n".join(lines)
 
     @tool
-    def cotizar_pedido(items: list[ItemPedido]) -> str:
+    def cotizar_pedido(items: list[ItemPedido], paga_con: str = "") -> str:
         """Calcula el total EXACTO de un pedido (items + envío) sin crearlo.
         Úsala SIEMPRE antes de mostrar el resumen al cliente y copia sus cifras
-        tal cual: nunca sumes precios por tu cuenta.
+        tal cual: nunca sumes precios ni calcules vueltas por tu cuenta.
 
         Args:
             items: items del pedido con variante_id, cantidad y notas
+            paga_con: SOLO efectivo: billete con el que paga (ej. '50000');
+                calcula las vueltas que debe llevar el domiciliario
         """
         if not items:
             return "ERROR: no hay items para cotizar."
@@ -223,8 +225,24 @@ def build_tools(contact):
             lines.append(
                 f"- {item.cantidad}x {variant.product.name} {variant.name} · {_cop(line_total)}"
             )
+        total = subtotal + cfg.delivery_fee
         lines.append(f"Envío: {_cop(cfg.delivery_fee)}")
-        lines.append(f"TOTAL: {_cop(subtotal + cfg.delivery_fee)}")
+        lines.append(f"TOTAL: {_cop(total)}")
+        billete = re.sub(r"\D", "", paga_con)
+        if billete:
+            billete = Decimal(billete)
+            if billete < total:
+                lines.append(
+                    f"OJO: el billete ({_cop(billete)}) no alcanza para el total; "
+                    "pregunta al cliente cómo completa el pago."
+                )
+            elif billete == total:
+                lines.append("Paga con el valor exacto: no se necesitan vueltas.")
+            else:
+                lines.append(
+                    f"Vueltas: el domiciliario le lleva {_cop(billete - total)} "
+                    f"(paga con {_cop(billete)})."
+                )
         return "\n".join(lines)
 
     @tool
