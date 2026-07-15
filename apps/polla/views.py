@@ -470,6 +470,11 @@ class AwardsView(APIView):
         tournament = Tournament.get_active()
         locks_at = tournament.awards_lock_at if tournament else None
         picks_locked = bool(tournament and tournament.awards_locked)
+        # El torneo terminó cuando la final ya se jugó: dispara la nota de que
+        # el MVP y el Guante de Oro se actualizan cuando la FIFA los anuncie.
+        tournament_finished = Match.objects.filter(
+            stage=Match.Stage.FINAL, status=Match.Status.FINISHED
+        ).exists()
 
         teams = Team.objects.all().order_by("name")
         players = Player.objects.filter(is_keeper=False).select_related("team").order_by("name")
@@ -490,6 +495,7 @@ class AwardsView(APIView):
             "options": options,
             "locks_at": locks_at,
             "picks_locked": picks_locked,
+            "tournament_finished": tournament_finished,
         })
 
 

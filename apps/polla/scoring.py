@@ -27,6 +27,7 @@ from .models import (
     Mission,
     Prediction,
     Referral,
+    TopScorer,
     UserMission,
     UserScore,
     outcome_of,
@@ -170,6 +171,68 @@ def issue_granizado_rewards():
             )
             created += int(was_created)
     return created
+
+
+def _auto_resolve_award(code, *, team=None, player=None):
+    """Marca una mención como resuelta si aún no lo está. Idempotente.
+
+    NO pisa una resolución previa (manual o automática): respeta cualquier
+    ``resolved=True`` que ya exista. Devuelve 1 si la resolvió ahora, 0 si no.
+    """
+    a = Award.objects.filter(code=code).first()
+    if not a or a.resolved:
+        return 0
+    a.resolved = True
+    if team is not None:
+        a.resolved_team = team
+    if player is not None:
+        a.resolved_player = player
+    a.save(update_fields=["resolved", "resolved_team", "resolved_player"])
+    return 1
+
+
+def resolve_awards_auto():
+    """Resuelve solo las menciones cuyo ganador es dato objetivo al terminar la
+    final: campeón, subcampeón y goleador (Bota de Oro).
+
+    - Campeón/subcampeón salen de la final (``winner_team`` lo puebla el sync,
+      incluye penales). El subcampeón es el otro finalista.
+    - Goleador: líder de la tabla ``TopScorer``, solo si está enlazado a un
+      ``Player`` sembrado y hay líder CLARO (no empate en goles+asistencias con
+      el 2.º); si empatan, se deja para resolución manual en el admin.
+
+    MVP y Guante de Oro NO se tocan: los define/anuncia la FIFA, así que quedan
+    para el admin. Idempotente y no invasiva (respeta lo ya resuelto a mano).
+    """
+    final = (
+        Match.objects.filter(
+            stage=Match.Stage.FINAL, status=Match.Status.FINISHED
+        )
+        .select_related("home_team", "away_team", "winner_team")
+        .order_by("-kickoff")
+        .first()
+    )
+    if not final or not final.winner_team_id:
+        return 0
+
+    runner = (
+        final.away_team if final.winner_team_id == final.home_team_id
+        else final.home_team
+    )
+    changed = _auto_resolve_award("champion", team=final.winner_team)
+    if runner is not None:
+        changed += _auto_resolve_award("runnerup", team=runner)
+
+    top2 = list(TopScorer.objects.order_by("rank")[:2])
+    if top2 and top2[0].player_id:
+        tie = (
+            len(top2) >= 2
+            and top2[0].goals == top2[1].goals
+            and top2[0].assists == top2[1].assists
+        )
+        if not tie:
+            changed += _auto_resolve_award("scorer", player=top2[0].player)
+    return changed
 
 
 def recompute_awards():
@@ -365,6 +428,7 @@ def recompute_all():
     """Recalcula todo: pronosticos, menciones, bracket, misiones y ranking."""
     recompute_predictions()
     issue_granizado_rewards()  # premia aciertos exactos de Colombia (24 h)
+    resolve_awards_auto()  # campeón/subcampeón/goleador automáticos al fin de la final
     recompute_awards()
     advance_real_bracket()  # arma la llave real con los clasificados de grupos
     missions = list(Mission.objects.all())
