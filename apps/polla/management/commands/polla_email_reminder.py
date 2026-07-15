@@ -21,6 +21,8 @@ Ejemplos:
     python manage.py polla_email_reminder
 
 Filtros y opciones:
+    --watch           copy del partido de HOY: invita a verlo en Frostbyte y a
+                      dejar el marcador antes del pitazo
     --semis           copy de semifinales: "mañana empiezan las semifinales,
                       aún no hay nada escrito" con los puntos en juego
     --only-pending    solo a quienes tienen partidos sin pronosticar
@@ -64,6 +66,10 @@ class Command(BaseCommand):
                  "diseño y entregabilidad/spam.",
         )
         parser.add_argument(
+            "--watch", action="store_true",
+            help="Copy del partido de hoy: invita a verlo en Frostbyte.",
+        )
+        parser.add_argument(
             "--semis", action="store_true",
             help="Copy de semifinales: mañana empiezan, aún no hay nada escrito.",
         )
@@ -104,7 +110,7 @@ class Command(BaseCommand):
             )
 
         if opts.get("preview"):
-            self._send_preview(opts["preview"], semis=opts["semis"])
+            self._send_preview(opts["preview"], semis=opts["semis"], watch=opts["watch"])
             return
 
         shared = er.gather()
@@ -123,7 +129,7 @@ class Command(BaseCommand):
                 continue
             if opts["min_points"] and score.points < opts["min_points"]:
                 continue
-            ctx = er.build_context(score, shared, semis=opts["semis"])
+            ctx = er.build_context(score, shared, semis=opts["semis"], watch=opts["watch"])
             if opts["only_pending"] and ctx["pending_count"] == 0:
                 continue
             if opts["colombia_only"] and not ctx["colombia_pending"]:
@@ -159,13 +165,13 @@ class Command(BaseCommand):
         self._send(plan, opts["sleep"])
 
     # ── helpers ──────────────────────────────────────────────────────────
-    def _send_preview(self, to_email, semis=False):
+    def _send_preview(self, to_email, semis=False, watch=False):
         """Envía un único correo de muestra (datos del 1er participante) a to_email."""
         shared = er.gather()
         score = er.eligible_recipients().first()
         if not score:
             raise CommandError("No hay ningún participante para tomar de muestra.")
-        ctx = er.build_context(score, shared, semis=semis)
+        ctx = er.build_context(score, shared, semis=semis, watch=watch)
         subject, html, text = er.render_reminder(ctx)
         try:
             msg_id = send_email(

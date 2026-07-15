@@ -127,6 +127,13 @@ def gather():
         .order_by("kickoff")
     )
     colombia_upcoming = [m for m in upcoming if _is_colombia(m)]
+    # Partido de HOY (primero de la lista cuyo pitazo cae en la fecha local de
+    # hoy): sustenta el copy "ven a verlo a Frostbyte" (flag --watch).
+    today_local = timezone.localtime(now).date()
+    today_match = next(
+        (m for m in upcoming if timezone.localtime(m.kickoff).date() == today_local),
+        None,
+    )
     # Misiones que se completan pronosticando (la de invitar es social aparte).
     missions = list(Mission.objects.exclude(kind=Mission.Kind.INVITE))
     total = UserScore.objects.count()
@@ -142,6 +149,7 @@ def gather():
         "now": now,
         "upcoming": upcoming,
         "colombia_upcoming": colombia_upcoming,
+        "today_match": today_match,
         "missions": missions,
         "total": total,
         "points_in_play": points_in_play,
@@ -164,17 +172,23 @@ def eligible_recipients(only_email=None):
     return qs
 
 
-def build_context(score, shared, semis=False):
+def build_context(score, shared, semis=False, watch=False):
     """Contexto personalizado para el correo de un participante.
 
     Con ``semis=True`` el correo cambia el gancho: mañana empiezan las
     semifinales, quedan muchos puntos en juego y nada está escrito.
+
+    Con ``watch=True`` el gancho es el partido de HOY: invita a verlo en
+    Frostbyte y a dejar el marcador antes del pitazo.
     """
     user = score.user
     predicted_ids = set(
         Prediction.objects.filter(user=user).values_list("match_id", flat=True)
     )
     pending = [m for m in shared["upcoming"] if m.id not in predicted_ids]
+
+    today_match = shared.get("today_match")
+    watch_pending = bool(today_match and today_match.id not in predicted_ids)
 
     colombia_upcoming = shared["colombia_upcoming"]
     next_colombia = colombia_upcoming[0] if colombia_upcoming else None
@@ -211,6 +225,10 @@ def build_context(score, shared, semis=False):
         "pending_missions": [m.title for m in pending_missions[:MAX_MISSIONS_SHOWN]],
         "pending_missions_count": len(pending_missions),
         "semis": semis,
+        "watch": watch,
+        "watch_match": _match_row(today_match) if today_match else None,
+        "watch_pending": watch_pending,
+        "watch_points": stage_points(today_match.stage) if today_match else None,
         "points_in_play": shared["points_in_play"],
         "sf_points": shared["sf_points"],
         "final_points": shared["final_points"],
@@ -226,7 +244,10 @@ def subject_for(ctx):
     # Asuntos personales y sin palabras "gancho" (gratis, premio, $) para evitar
     # que Gmail lo mande a Promociones; suben la chance de llegar a Principal.
     name = ctx["name"]
-    if ctx.get("semis"):
+    if ctx.get("watch") and ctx.get("watch_match"):
+        wm = ctx["watch_match"]
+        core = f"hoy {wm['home']} vs {wm['away']}, te esperamos en Frostbyte"
+    elif ctx.get("semis"):
         core = (
             "mañana empiezan las semifinales, no te quedes sin pronosticar"
             if ctx["pending_count"] > 0

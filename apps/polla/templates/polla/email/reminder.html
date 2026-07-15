@@ -9,7 +9,7 @@
 
   <!-- Preheader (vista previa en la bandeja, oculto) -->
   <div style="display:none; max-height:0; overflow:hidden; opacity:0; color:#eef1f4;">
-    {% if semis %}Aún no hay nada escrito: quedan hasta {{ points_in_play }} puntos en juego en la Polla.{% else %}Tu resumen de la Polla: puntaje, partidos por jugar y misiones pendientes.{% endif %}
+    {% if watch and watch_match %}Hoy {{ watch_match.home }} vs {{ watch_match.away }} a las {{ watch_match.time }}: te esperamos en Frostbyte para verlo.{% elif semis %}Aún no hay nada escrito: quedan hasta {{ points_in_play }} puntos en juego en la Polla.{% else %}Tu resumen de la Polla: puntaje, partidos por jugar y misiones pendientes.{% endif %}
   </div>
 
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#eef1f4;">
@@ -34,7 +34,9 @@
           <tr>
             <td style="padding:22px 28px 0 28px;">
               <p style="margin:0; font-size:18px; color:#1b2430; font-weight:700;">{% if name %}Hola, {{ name }}.{% else %}Hola.{% endif %}</p>
-              {% if semis %}
+              {% if watch and watch_match %}
+              <p style="margin:10px 0 0 0; font-size:15px; line-height:1.55; color:#46525f;"><strong>Hoy se juega {{ watch_match.home }} vs {{ watch_match.away }}</strong>{% if watch_match.stage_label %} ({{ watch_match.stage_label }}){% endif %} a las <strong>{{ watch_match.time }}</strong> — ven a verlo con nosotros en <strong>Frostbyte</strong>. Así vas:</p>
+              {% elif semis %}
               <p style="margin:10px 0 0 0; font-size:15px; line-height:1.55; color:#46525f;"><strong>Mañana empiezan las semifinales del Mundial</strong> y en la Polla aún no hay nada escrito: quedan hasta <strong>{{ points_in_play }} puntos en juego</strong>. Así vas:</p>
               {% else %}
               <p style="margin:10px 0 0 0; font-size:15px; line-height:1.55; color:#46525f;">Un recordatorio para que no se te pasen los próximos partidos del Mundial. Así vas:</p>
@@ -92,7 +94,20 @@
             </td>
           </tr>
 
-          {% if semis %}
+          {% if watch and watch_match %}
+          <!-- Partido de hoy: ven a verlo en Frostbyte (recuadro destacado) -->
+          <tr>
+            <td style="padding:18px 28px 0 28px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f0f9f4; border-left:3px solid #128a5e; border-radius:6px;">
+                <tr>
+                  <td style="padding:12px 16px;">
+                    <p style="margin:0; font-size:15px; line-height:1.6; color:#2f4a3e;"><strong>Te esperamos en Frostbyte para ver {{ watch_match.home }} vs {{ watch_match.away }} en vivo.</strong>{% if watch_points %} La {{ watch_match.stage_label|lower }} reparte <strong>{{ watch_points.0 }} puntos</strong> por acertar el resultado y <strong>{{ watch_points.1 }}</strong> por el marcador exacto.{% endif %}{% if watch_pending %}<br>Aún no dejas tu marcador para este partido: <strong>hazlo antes del pitazo</strong>.{% endif %}</p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          {% elif semis %}
           <!-- Semifinales: aún no hay nada escrito (recuadro sutil) -->
           <tr>
             <td style="padding:18px 28px 0 28px;">

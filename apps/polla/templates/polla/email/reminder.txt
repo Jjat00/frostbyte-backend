@@ -2,7 +2,7 @@
 
 {% if name %}Hola, {{ name }}.{% else %}Hola.{% endif %}
 
-{% if semis %}Mañana empiezan las semifinales del Mundial y en la Polla aún no hay nada escrito: quedan hasta {{ points_in_play }} puntos en juego.{% else %}Un recordatorio para que no se te pasen los próximos partidos del Mundial.{% endif %}
+{% if watch and watch_match %}Hoy se juega {{ watch_match.home }} vs {{ watch_match.away }}{% if watch_match.stage_label %} ({{ watch_match.stage_label }}){% endif %} a las {{ watch_match.time }} — ven a verlo con nosotros en Frostbyte.{% elif semis %}Mañana empiezan las semifinales del Mundial y en la Polla aún no hay nada escrito: quedan hasta {{ points_in_play }} puntos en juego.{% else %}Un recordatorio para que no se te pasen los próximos partidos del Mundial.{% endif %}
 
 Llevas {{ points }} punto(s){% if position %} y vas en el puesto #{{ position }} de {{ total }}{% endif %}.{% if exact_hits %} Marcadores exactos: {{ exact_hits }}.{% endif %}
 
@@ -11,7 +11,7 @@ Llevas {{ points }} punto(s){% if position %} y vas en el puesto #{{ position }}
 {% endfor %}{% if pending_extra %}  ...y {{ pending_extra }} más en la app.
 {% endif %}{% else %}Vas al día con tus pronósticos. Pendiente de los próximos partidos.
 {% endif %}
-{% if semis %}Las fases finales son las que más puntos reparten: cada semifinal da {{ sf_points.0 }} puntos por acertar el resultado y {{ sf_points.1 }} por el marcador exacto, y la final da {{ final_points.0 }} y {{ final_points.1 }}. Todavía puedes ganar la Polla: deja tus marcadores antes del pitazo.{% elif colombia_today %}¡Hoy juega Colombia!{% if next_colombia %} {{ next_colombia.home }} vs {{ next_colombia.away }} a las {{ next_colombia.time }}{% endif %} Te esperamos en Frostbyte para verlo. Deja tu marcador antes del pitazo: si le aciertas al marcador exacto te ganas un granizado.{% else %}Recuerda: los días que juega Colombia, si le aciertas al marcador exacto te ganas un granizado en Frostbyte.{% if next_colombia %} Próximo: {{ next_colombia.home }} vs {{ next_colombia.away }} ({{ next_colombia.when }}).{% endif %}{% endif %}
+{% if watch and watch_match %}Te esperamos en Frostbyte para ver {{ watch_match.home }} vs {{ watch_match.away }} en vivo.{% if watch_points %} La {{ watch_match.stage_label|lower }} reparte {{ watch_points.0 }} puntos por acertar el resultado y {{ watch_points.1 }} por el marcador exacto.{% endif %}{% if watch_pending %} Aún no dejas tu marcador para este partido: hazlo antes del pitazo.{% endif %}{% elif semis %}Las fases finales son las que más puntos reparten: cada semifinal da {{ sf_points.0 }} puntos por acertar el resultado y {{ sf_points.1 }} por el marcador exacto, y la final da {{ final_points.0 }} y {{ final_points.1 }}. Todavía puedes ganar la Polla: deja tus marcadores antes del pitazo.{% elif colombia_today %}¡Hoy juega Colombia!{% if next_colombia %} {{ next_colombia.home }} vs {{ next_colombia.away }} a las {{ next_colombia.time }}{% endif %} Te esperamos en Frostbyte para verlo. Deja tu marcador antes del pitazo: si le aciertas al marcador exacto te ganas un granizado.{% else %}Recuerda: los días que juega Colombia, si le aciertas al marcador exacto te ganas un granizado en Frostbyte.{% if next_colombia %} Próximo: {{ next_colombia.home }} vs {{ next_colombia.away }} ({{ next_colombia.when }}).{% endif %}{% endif %}
 {% if pending_missions_count %}
 Tienes {{ pending_missions_count }} misión(es) pendiente(s) para sumar puntos extra (p. ej. {{ pending_missions|join:", " }}).
 {% endif %}
