@@ -45,6 +45,9 @@ class OrderItemSerializer(serializers.ModelSerializer):
     variant_name = serializers.CharField(
         source="product_variant.name", read_only=True
     )
+    product_image = serializers.URLField(
+        source="product_variant.product.image_url", read_only=True
+    )
     product_variant_id = serializers.PrimaryKeyRelatedField(
         queryset=ProductVariant.objects.filter(is_active=True),
         source="product_variant",
@@ -68,6 +71,7 @@ class OrderItemSerializer(serializers.ModelSerializer):
             "product_variant_id",
             "product_name",
             "variant_name",
+            "product_image",
             "business",
             "business_name",
             "business_slug",
