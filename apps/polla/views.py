@@ -37,7 +37,13 @@ from .models import (
     UserScore,
     outcome_of,
 )
-from .scoring import group_standings, recompute_missions_for_user, recompute_scores, stage_points
+from .scoring import (
+    group_standings,
+    recompute_awards,
+    recompute_missions_for_user,
+    recompute_scores,
+    stage_points,
+)
 from .serializers import (
     AwardSerializer,
     GroupSerializer,
@@ -1222,6 +1228,100 @@ class PollaAdminViewSet(viewsets.ViewSet):
                 "finished": Match.objects.filter(status=Match.Status.FINISHED).count(),
             },
             "missions": missions,
+        })
+
+    @action(detail=False, methods=["get"])
+    def awards(self, request):
+        """Menciones del torneo con su estado y las opciones para resolverlas.
+
+        Sirve al panel de staff para marcar a mano las menciones que no se
+        resuelven solas (MVP y Guante de Oro los anuncia la FIFA; el resto se
+        auto-resuelve al terminar la final, pero también se pueden ajustar aquí).
+        """
+        awards = []
+        for a in Award.objects.select_related(
+            "resolved_team", "resolved_player", "resolved_player__team"
+        ).order_by("display_order"):
+            awards.append({
+                "code": a.code,
+                "title": a.title,
+                "hint": a.hint,
+                "points": a.points,
+                "type": a.award_type,
+                "resolved": a.resolved,
+                "result": (
+                    _award_choice_lite(a.resolved_team, a.resolved_player)
+                    if a.resolved else None
+                ),
+            })
+        teams = Team.objects.all().order_by("name")
+        players = Player.objects.filter(is_keeper=False).select_related("team").order_by("name")
+        keepers = Player.objects.filter(is_keeper=True).select_related("team").order_by("name")
+        options = {
+            "team": [{"code": t.code, "name": t.name, "iso2": t.iso2} for t in teams],
+            "player": [
+                {"id": p.id, "name": p.name, "team_code": p.team.code, "iso2": p.team.iso2}
+                for p in players
+            ],
+            "keeper": [
+                {"id": p.id, "name": p.name, "team_code": p.team.code, "iso2": p.team.iso2}
+                for p in keepers
+            ],
+        }
+        return Response({"awards": awards, "options": options})
+
+    @action(detail=False, methods=["post"], url_path="resolve-award")
+    def resolve_award(self, request):
+        """Resuelve (o limpia) una mención a mano; recalcula puntajes y avisa.
+
+        Body: ``{code, team_code}`` para menciones de selección,
+        ``{code, player_id}`` para jugador/arquero, o ``{code, clear: true}``
+        para dejarla sin resolver.
+        """
+        code = (request.data.get("code") or "").strip()
+        award = Award.objects.filter(code=code).first()
+        if not award:
+            return Response({"detail": "Mención no encontrada."}, status=404)
+
+        if request.data.get("clear"):
+            award.resolved = False
+            award.resolved_team = None
+            award.resolved_player = None
+        elif award.award_type == Award.AwardType.TEAM:
+            team = Team.objects.filter(code=request.data.get("team_code")).first()
+            if not team:
+                return Response({"detail": "Selección no encontrada."}, status=400)
+            award.resolved_team = team
+            award.resolved_player = None
+            award.resolved = True
+        else:  # player / keeper
+            player = Player.objects.filter(pk=request.data.get("player_id")).first()
+            if not player:
+                return Response({"detail": "Jugador no encontrado."}, status=400)
+            if award.award_type == Award.AwardType.KEEPER and not player.is_keeper:
+                return Response({"detail": "Ese jugador no es arquero."}, status=400)
+            award.resolved_player = player
+            award.resolved_team = None
+            award.resolved = True
+        award.save(update_fields=["resolved", "resolved_team", "resolved_player"])
+
+        # Suma los puntos de la mención a quien acertó y reordena el ranking.
+        recompute_awards()
+        recompute_scores()
+        try:  # avisa a los clientes conectados (nunca romper por el WS)
+            from apps.polla.consumers import broadcast_polla_update
+            broadcast_polla_update()
+        except Exception:  # noqa: BLE001
+            pass
+
+        award.refresh_from_db()
+        return Response({
+            "code": award.code,
+            "resolved": award.resolved,
+            "result": (
+                _award_choice_lite(award.resolved_team, award.resolved_player)
+                if award.resolved else None
+            ),
         })
 
     def retrieve(self, request, pk=None):
