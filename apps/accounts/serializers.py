@@ -25,6 +25,7 @@ class UserSerializer(serializers.ModelSerializer):
             "phone",
             "provider",
             "avatar_url",
+            "email_opt_out",
             "is_active",
             "created_at",
         ]
@@ -32,6 +33,18 @@ class UserSerializer(serializers.ModelSerializer):
 
     def get_full_name(self, obj):
         return obj.get_full_name() or obj.username
+
+
+class ProfileUpdateSerializer(serializers.ModelSerializer):
+    """Campos que un usuario puede editar de SU propio perfil (PATCH me).
+
+    Nunca role/email/username/is_active: el perfil es autoservicio y no
+    puede servir para escalar privilegios.
+    """
+
+    class Meta:
+        model = User
+        fields = ["first_name", "last_name", "phone", "email_opt_out"]
 
 
 class UserCreateSerializer(serializers.ModelSerializer):

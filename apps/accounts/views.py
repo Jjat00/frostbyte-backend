@@ -11,6 +11,7 @@ from .serializers import (
     ChangePasswordSerializer,
     LoginSerializer,
     GoogleAuthSerializer,
+    ProfileUpdateSerializer,
 )
 from .google_auth import (
     GoogleAuthError,
@@ -148,10 +149,12 @@ class MeView(APIView):
         return Response(serializer.data)
 
     def patch(self, request):
-        serializer = UserSerializer(request.user, data=request.data, partial=True)
+        # Solo campos de autoservicio: nunca role/email/username/is_active
+        serializer = ProfileUpdateSerializer(
+            request.user, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save()
-        return Response(serializer.data)
+        return Response(UserSerializer(request.user).data)
 
 
 class UserViewSet(viewsets.ModelViewSet):
