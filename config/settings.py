@@ -70,6 +70,7 @@ INSTALLED_APPS = [
     'apps.youtube',
     'apps.polla',
     'apps.whatsapp',
+    'apps.reservations',
 ]
 
 # Custom User Model

@@ -27,9 +27,10 @@ from apps.orders.routing import websocket_urlpatterns as orders_ws_urlpatterns
 from apps.music.routing import websocket_urlpatterns as music_ws_urlpatterns
 from apps.youtube.routing import websocket_urlpatterns as youtube_ws_urlpatterns
 from apps.polla.routing import websocket_urlpatterns as polla_ws_urlpatterns
+from apps.reservations.routing import websocket_urlpatterns as reservations_ws_urlpatterns
 
 # Combinar todas las rutas WebSocket
-websocket_urlpatterns = games_ws_urlpatterns + orders_ws_urlpatterns + music_ws_urlpatterns + youtube_ws_urlpatterns + polla_ws_urlpatterns
+websocket_urlpatterns = games_ws_urlpatterns + orders_ws_urlpatterns + music_ws_urlpatterns + youtube_ws_urlpatterns + polla_ws_urlpatterns + reservations_ws_urlpatterns
 
 # Permitir todos los orígenes para WebSockets
 # Nota: AllowedHostsOriginValidator puede bloquear conexiones si el frontend

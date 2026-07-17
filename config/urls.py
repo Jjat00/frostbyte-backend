@@ -42,6 +42,8 @@ urlpatterns = [
     path('api/v1/polla/', include('apps.polla.urls')),
     # Agente de pedidos por WhatsApp (webhook de Kapso)
     path('api/v1/whatsapp/', include('apps.whatsapp.urls')),
+    # Reservas (mesas, grupos y Sala VIP)
+    path('api/v1/reservations/', include('apps.reservations.urls')),
 ]
 
 # Servir archivos media en desarrollo
