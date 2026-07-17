@@ -188,12 +188,14 @@ class StaffReservationViewSet(mixins.CreateModelMixin,
                               mixins.ListModelMixin,
                               mixins.RetrieveModelMixin,
                               mixins.UpdateModelMixin,
+                              mixins.DestroyModelMixin,
                               viewsets.GenericViewSet):
     """
     Gestión de reservas por el staff.
 
     list: Reservas de un día (?date=) o próximas.
     partial_update: Cambia estado, asigna mesa, edita notas/datos.
+    destroy: Elimina la reserva definitivamente (el front confirma antes).
     day: Reservas del día + contexto de ocupación (mesas por piso).
     calendar: Resumen mensual (conteo por día) para pintar el calendario.
     settings: GET/PATCH de la configuración del módulo.
@@ -235,6 +237,10 @@ class StaffReservationViewSet(mixins.CreateModelMixin,
 
     def perform_update(self, serializer):
         serializer.save()
+        broadcast_reservations_update()
+
+    def perform_destroy(self, instance):
+        instance.delete()
         broadcast_reservations_update()
 
     def update(self, request, *args, **kwargs):
