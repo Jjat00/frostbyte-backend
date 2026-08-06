@@ -19,6 +19,43 @@ import os
 logger = logging.getLogger(__name__)
 
 
+def friendly_generation_error(error_message: str) -> str:
+    """Traduce el error crudo del proveedor a algo accionable para el equipo."""
+    raw = (error_message or '').lower()
+
+    if 'api key not valid' in raw or 'api_key_invalid' in raw or 'invalid_api_key' in raw:
+        return (
+            'El proveedor de IA rechazo la API key (invalida o vencida). '
+            'Avisa al administrador para renovarla; mientras tanto prueba con '
+            'otro modelo.'
+        )
+    if 'no esta configurado' in raw or 'not configured' in raw:
+        return (
+            'Falta configurar la API key de este proveedor de IA. '
+            'Avisa al administrador o prueba con otro modelo.'
+        )
+    if 'quota' in raw or 'billing' in raw or 'insufficient_quota' in raw:
+        return (
+            'Se agoto el saldo o la cuota del proveedor de IA. '
+            'Avisa al administrador o prueba con otro modelo.'
+        )
+    if 'rate limit' in raw or 'rate_limit' in raw or '429' in raw:
+        return (
+            'El proveedor de IA esta saturado en este momento. '
+            'Espera un momento y vuelve a intentar.'
+        )
+    if 'timeout' in raw or 'timed out' in raw:
+        return (
+            'El proveedor de IA tardo demasiado en responder. '
+            'Vuelve a intentar o prueba con otro modelo.'
+        )
+
+    return (
+        'No se pudo generar la imagen. Prueba con otro modelo. '
+        f'Detalle: {error_message}'
+    )
+
+
 class AIImageGenerationViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
     serializer_class = AIImageGenerationSerializer
@@ -68,12 +105,12 @@ class AIImageGenerationViewSet(viewsets.ModelViewSet):
             temp_reference_path=temp_reference,
             user_prompt=serializer.validated_data.get('user_prompt', ''),
             transparent_background=serializer.validated_data.get('transparent_background', True),
-            ai_model=serializer.validated_data.get('ai_model', 'gemini-3-pro-image-preview'),
+            ai_model=serializer.validated_data.get('ai_model', 'gpt-image-1.5'),
         )
 
         logger.info(f"AI generation {generation.id} created with temp storage")
 
-        # Procesar con OpenAI
+        # Procesar con el proveedor de IA seleccionado
         try:
             generate_image_sync(str(generation.id))
             generation.refresh_from_db()
@@ -83,10 +120,18 @@ class AIImageGenerationViewSet(viewsets.ModelViewSet):
             generation.error_message = str(e)
             generation.save()
 
-        return Response(
-            AIImageGenerationSerializer(generation, context={'request': request}).data,
-            status=status.HTTP_201_CREATED,
-        )
+        data = AIImageGenerationSerializer(generation, context={'request': request}).data
+
+        # Una generacion fallida no es un 201: el front mostraba "generada
+        # exitosamente" con la imagen vacia y el usuario se quedaba sin saber
+        # que paso.
+        if generation.status == 'failed':
+            return Response(
+                {**data, 'error': friendly_generation_error(generation.error_message)},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        return Response(data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=['post'])
     def save_to_r2(self, request, pk=None):

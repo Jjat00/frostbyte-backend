@@ -57,7 +57,7 @@ class AIImageGenerationCreateSerializer(serializers.Serializer):
             ('gpt-image-1.5', 'GPT Image 1.5'),
             ('gpt-image-2', 'GPT Image 2'),
         ],
-        default='gemini-3-pro-image-preview',
+        default='gpt-image-1.5',
         required=False,
     )
 
