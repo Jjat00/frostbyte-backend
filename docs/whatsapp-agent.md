@@ -179,6 +179,23 @@ Para probar el webhook con Kapso real en local se necesita un túnel
   registrada; `crear_pedido` copia esas coordenadas al pedido
   (`delivery_lat/lng`) y el staff ve el botón "Cómo llegar" (Google Maps) en
   la tarjeta del pedido. Es obligatoria para el domicilio (ver Cobertura).
+- **Respuestas citadas** (el cliente desliza un mensaje para responderlo):
+  WhatsApp manda solo el id del citado (`context.id`), así que el texto sale de
+  `ChatMessage`, que guarda lo que dicen cliente, agente y humanos del equipo y
+  se limpia sola a los 7 días. El agente lo recibe como
+  `[El cliente responde citando este mensaje tuyo: "..."]` delante del mensaje;
+  si la cita es más vieja que la retención, al menos se le avisa que hay una.
+- **Mensajes que WhatsApp no nos entrega**: llegan como tipo `unsupported` con
+  el error **131060** ("This message is unavailable"). El contenido nunca sale
+  del teléfono del cliente; pasa sobre todo con ubicaciones enviadas desde un
+  dispositivo vinculado y con números en coexistencia (app de WhatsApp Business
+  + Cloud API, que es el caso de Frostbyte). Kapso los registra en la
+  conversación —se ven en su panel— pero **no los reenvía por webhook**: su
+  lista de tipos no los incluye. Por eso `verificar_cobertura`, cuando no hay
+  ubicación registrada, pregunta por ellos con `kapso.recent_undelivered()`
+  (API platform de Kapso, última hora) y, si el cliente lo intentó, le dice al
+  agente que reconozca que no llegó y pida reenviarla desde el celular en vez
+  de repetir la misma instrucción (chat real del 24/07).
 - Si la descarga o el modelo fallan, el agente recibe un texto de respaldo y
   pide el contenido por escrito. Videos, documentos y stickers no se procesan.
 - Todo el procesado ocurre en `apps/whatsapp/media.py` + `worker.py`, con el
@@ -193,6 +210,14 @@ Para probar el webhook con Kapso real en local se necesita un túnel
   que reencolar los `pending` al arrancar, con cuidado de no duplicar el
   procesado si algún día corren varios workers.
 
+- Un mensaje con error 131060 es **irrecuperable**: no hay forma de leer esa
+  ubicación, ni por API ni por webhook. Lo único posible es detectar que existió
+  y pedir que la reenvíe. Si se vuelve frecuente, vale reportárselo a Kapso
+  (podrían entregar los `unsupported` por webhook) y revisar si la coexistencia
+  con la app de WhatsApp Business lo empeora.
+- La detección anterior solo corre dentro de `verificar_cobertura`: si el agente
+  responde sin llamar a la tool, sigue sin enterarse. El prompt se lo exige
+  antes de decir que no le llegó la ubicación.
 - No hay estado "en camino" propio: el aviso 🛵 sale cuando el pedido pasa a
   `ready` (todas las cocinas terminaron). Si algún día se quiere un botón
   "En camino" explícito, hay que añadir el estado a `Order.Status` y al front.

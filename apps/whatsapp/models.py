@@ -135,6 +135,53 @@ class SentMessage(models.Model):
         return f"{self.to_phone} · {self.wamid[:40]}"
 
 
+class ChatMessage(models.Model):
+    """Texto de los mensajes del chat, indexado por wamid.
+
+    Cuando el cliente responde deslizando un mensaje, WhatsApp solo manda el id
+    del mensaje citado (`context.id`): sin esto no habría forma de saber a qué
+    se refiere. Guarda lo que dice cada lado (cliente, agente y humanos del
+    equipo) y se limpia sola a los pocos días: se cita lo reciente.
+    """
+
+    class Direction(models.TextChoices):
+        INBOUND = "inbound", "Del cliente"
+        OUTBOUND = "outbound", "Del negocio"
+
+    wamid = models.CharField(max_length=128, unique=True, verbose_name="ID de mensaje")
+    phone = models.CharField(max_length=30, blank=True, verbose_name="Teléfono del cliente")
+    direction = models.CharField(
+        max_length=10,
+        choices=Direction.choices,
+        default=Direction.INBOUND,
+        verbose_name="Dirección",
+    )
+    body = models.TextField(blank=True, verbose_name="Texto")
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True, verbose_name="Fecha")
+
+    class Meta:
+        verbose_name = "Texto de mensaje (citas)"
+        verbose_name_plural = "Textos de mensajes (citas)"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.phone} · {self.body[:40]}"
+
+    @classmethod
+    def remember(cls, wamid, phone, direction, body):
+        """Guarda el texto de un mensaje si trae id y contenido."""
+        if not wamid or not (body or "").strip():
+            return None
+        return cls.objects.get_or_create(
+            wamid=str(wamid)[:128],
+            defaults={
+                "phone": str(phone or "")[:30],
+                "direction": direction,
+                "body": body.strip(),
+            },
+        )[0]
+
+
 class WebhookEvent(models.Model):
     """Webhook recibido de Kapso: idempotencia + auditoría de procesamiento."""
 

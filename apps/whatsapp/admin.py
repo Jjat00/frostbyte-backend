@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import SentMessage, WebhookEvent, WhatsAppContact
+from .models import ChatMessage, SentMessage, WebhookEvent, WhatsAppContact
 
 
 @admin.register(WhatsAppContact)
@@ -33,6 +33,17 @@ class SentMessageAdmin(admin.ModelAdmin):
     list_display = ("created_at", "to_phone", "wamid")
     search_fields = ("to_phone", "wamid")
     readonly_fields = [f.name for f in SentMessage._meta.fields]
+
+    def has_add_permission(self, request):
+        return False
+
+
+@admin.register(ChatMessage)
+class ChatMessageAdmin(admin.ModelAdmin):
+    list_display = ("created_at", "phone", "direction", "body")
+    list_filter = ("direction",)
+    search_fields = ("phone", "wamid", "body")
+    readonly_fields = [f.name for f in ChatMessage._meta.fields]
 
     def has_add_permission(self, request):
         return False

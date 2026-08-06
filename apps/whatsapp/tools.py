@@ -17,6 +17,8 @@ from apps.orders.coverage import is_within_delivery_area, radius_label
 from apps.orders.models import Order, OrderItem, StoreSettings
 from apps.products.models import Category, Product, ProductVariant
 
+from . import kapso
+
 
 def normalize_phone(phone):
     """Deja solo dígitos (ej. '+57 300 123-4567' -> '573001234567')."""
@@ -538,12 +540,26 @@ def build_tools(contact):
     def verificar_cobertura() -> str:
         """Verifica si la ubicación de WhatsApp que compartió el cliente está
         dentro de la zona de domicilios. Úsala APENAS el cliente comparta su
-        ubicación, y siempre antes de crear el pedido (la ubicación es
-        OBLIGATORIA para todo domicilio). Lee la ubicación registrada por el
-        sistema: no necesita coordenadas.
+        ubicación, siempre antes de crear el pedido (la ubicación es
+        OBLIGATORIA para todo domicilio) y SIEMPRE antes de decirle que no te
+        ha llegado: la tool sabe si WhatsApp nos la bloqueó. Lee la ubicación
+        registrada por el sistema: no necesita coordenadas.
         """
         contact.refresh_from_db()
         if contact.last_location_lat is None or contact.last_location_lng is None:
+            # El cliente pudo mandarla y que WhatsApp no nos la entregara: eso
+            # no llega por webhook, hay que preguntárselo a Kapso
+            if kapso.recent_undelivered(contact.phone):
+                return (
+                    "OJO: el cliente SÍ intentó enviarnos algo hace poco (muy "
+                    "probablemente la ubicación) pero WhatsApp no nos lo entregó: "
+                    "nos llegó vacío. NO le digas que no la ha compartido ni repitas "
+                    "la misma instrucción. Dile que su ubicación no llegó (pasa "
+                    "cuando se envía desde WhatsApp Web o un dispositivo vinculado) y "
+                    "pídele que la reenvíe DESDE EL CELULAR (clip de adjuntar → "
+                    "Ubicación → Enviar ubicación actual). Si ya lo intentó dos veces, "
+                    "no insistas más: usa solicitar_humano."
+                )
             return (
                 "El cliente NO ha compartido su ubicación de WhatsApp todavía. "
                 "Pídele que la comparta (clip de adjuntar → Ubicación → Enviar "

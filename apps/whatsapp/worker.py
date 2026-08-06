@@ -28,7 +28,7 @@ from django.utils import timezone
 
 from . import kapso
 from . import media as wa_media
-from .models import SentMessage, WebhookEvent, WhatsAppContact
+from .models import ChatMessage, SentMessage, WebhookEvent, WhatsAppContact
 from .tools import normalize_phone
 
 logger = logging.getLogger(__name__)
@@ -159,6 +159,16 @@ def extract_inbound_messages(payload):
                 + (f'; escribió: "{caption}"' if caption else "")
                 + ". Si esperabas un comprobante de pago, dile que el equipo lo verificará.]"
             )
+        elif msg_type == "unsupported":
+            # WhatsApp entregó el sobre vacío (error 131060): el contenido no
+            # salió del teléfono del cliente. Hoy Kapso no reenvía estos
+            # mensajes por webhook, pero si algún día lo hace no hay que
+            # tratarlos como silencio del cliente
+            text = (
+                "[El cliente envió algo que WhatsApp no nos pudo entregar y no sabes qué "
+                "era. Si estabas esperando su ubicación, NO le digas que no la ha "
+                "compartido: dile que no te llegó y pídele que la reenvíe desde el celular.]"
+            )
         else:
             text = kapso_meta.get("content") or ""
 
@@ -174,6 +184,8 @@ def extract_inbound_messages(payload):
                 "location": location_coords,
                 "phone_number_id": phone_number_id,
                 "message_id": message.get("id") or "",
+                # Mensaje citado al responder deslizando (WhatsApp solo manda el id)
+                "quoted_wamid": (message.get("context") or {}).get("id") or "",
             }
         )
     return results
@@ -255,6 +267,32 @@ def _resolve_media(msg, phone_number_id):
     except Exception:
         logger.exception("No se pudo procesar el media %s", media.get("media_id"))
     return msg["text"]
+
+
+def _quote_prefix(quoted_wamid):
+    """Aviso de a qué mensaje está respondiendo el cliente, si citó alguno.
+
+    WhatsApp manda solo el id del mensaje citado, así que el texto sale de lo
+    que guardamos en ChatMessage. Si no está (cita muy vieja) igual se avisa
+    que hay una cita: mejor que el agente sepa que "ese" apunta a algo.
+    """
+    if not quoted_wamid:
+        return ""
+    quoted = ChatMessage.objects.filter(wamid=quoted_wamid[:128]).first()
+    if not quoted:
+        return "[El cliente responde citando un mensaje anterior que no tienes a la vista]\n"
+    body = " ".join(quoted.body.split())[:200]
+    autor = (
+        "este mensaje tuyo"
+        if quoted.direction == ChatMessage.Direction.OUTBOUND
+        else "su propio mensaje"
+    )
+    return f'[El cliente responde citando {autor}: "{body}"]\n'
+
+
+def _message_text(msg, phone_number_id):
+    """Texto que lee el agente: media ya resuelta y la cita al frente."""
+    return _quote_prefix(msg.get("quoted_wamid")) + _resolve_media(msg, phone_number_id)
 
 
 def _keep_typing(phone_number_id, message_id, stop_event, max_renewals=6):
@@ -413,7 +451,7 @@ def _run_turn(phone, batch):
     # responde, solo deja lo que dijo el cliente en el hilo
     if contact.human_handoff or (contact.human_until and contact.human_until > timezone.now()):
         try:
-            text = "\n".join(_resolve_media(m, phone_number_id) for m in messages)
+            text = "\n".join(_message_text(m, phone_number_id) for m in messages)
             with _phone_lock(phone):
                 record_messages(contact, [("user", text)])
         except Exception:
@@ -424,7 +462,7 @@ def _run_turn(phone, batch):
     with _phone_lock(phone):
         # Los audios/imágenes se resuelven aquí (descarga + OpenAI) para que el
         # 'escribiendo…' ya esté visible mientras tanto
-        text = "\n".join(_resolve_media(m, phone_number_id) for m in messages)
+        text = "\n".join(_message_text(m, phone_number_id) for m in messages)
         turn = run_turn(contact, text)
 
         # ¿Escribió mientras el agente pensaba? Entonces esta respuesta ya nació
@@ -506,6 +544,11 @@ def _handle_outbound(event, outbounds):
         contact.human_until = timezone.now() + pause
         contact.save(update_fields=["human_until", "updated_at"])
         event.contact_phone = phone
+        for msg in messages:
+            # El cliente también puede citar lo que dijo el humano del equipo
+            ChatMessage.remember(
+                msg["wamid"], phone, ChatMessage.Direction.OUTBOUND, msg["text"]
+            )
         try:
             with _phone_lock(contact.phone):
                 record_messages(
@@ -514,8 +557,11 @@ def _handle_outbound(event, outbounds):
         except Exception:
             logger.exception("No se pudo guardar el mensaje humano en el hilo de %s", phone)
 
-    # Los wamids viejos ya no se necesitan (los eventos llegan en segundos)
-    SentMessage.objects.filter(created_at__lt=timezone.now() - timedelta(days=7)).delete()
+    # Los wamids viejos ya no se necesitan (los eventos llegan en segundos) y
+    # nadie cita un mensaje de hace una semana
+    stale = timezone.now() - timedelta(days=7)
+    SentMessage.objects.filter(created_at__lt=stale).delete()
+    ChatMessage.objects.filter(created_at__lt=stale).delete()
 
     event.status = WebhookEvent.Status.PROCESSED
     event.error = ""
@@ -595,6 +641,12 @@ def _process_event(event):
             event.save(update_fields=["status", "error", "contact_phone", "phone_number_id"])
             continue
 
+        for msg in messages:
+            # Para resolver la cita si el cliente responde a su propio mensaje
+            ChatMessage.remember(
+                msg["message_id"], contact.phone, ChatMessage.Direction.INBOUND, msg["text"]
+            )
+
         paused_by_human = contact.human_until and contact.human_until > timezone.now()
         if contact.human_handoff or paused_by_human:
             # Un humano está atendiendo: no se responde, pero lo que dice el
@@ -602,7 +654,7 @@ def _process_event(event):
             from .agent import record_messages
 
             try:
-                text = "\n".join(_resolve_media(m, phone_number_id) for m in messages)
+                text = "\n".join(_message_text(m, phone_number_id) for m in messages)
                 with _phone_lock(contact.phone):
                     record_messages(contact, [("user", text)])
             except Exception:

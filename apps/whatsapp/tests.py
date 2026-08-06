@@ -12,7 +12,7 @@ from unittest.mock import patch
 from django.test import TestCase, TransactionTestCase, override_settings
 
 from .agent import AgentTurn
-from .models import WebhookEvent, WhatsAppContact
+from .models import ChatMessage, WebhookEvent, WhatsAppContact
 from .worker import _active, _pending, _process_event_safe
 
 PHONE = "573001112233"
@@ -27,8 +27,16 @@ FAST = dict(
 )
 
 
-def webhook_payload(text, sequence=1, message_id=None):
+def webhook_payload(text, sequence=1, message_id=None, quoted_wamid=None, msg_type="text"):
     """Un webhook de Kapso con buffering activo (siempre formato batch)."""
+    message = {
+        "id": message_id or f"wamid.test{sequence}",
+        "from": PHONE,
+        "type": msg_type,
+        "text": {"body": text},
+        "context": {"id": quoted_wamid, "from": PHONE} if quoted_wamid else None,
+        "kapso": {"direction": "inbound"},
+    }
     return {
         "type": "whatsapp.message.received",
         "batch": True,
@@ -42,13 +50,7 @@ def webhook_payload(text, sequence=1, message_id=None):
             {
                 "phone_number_id": PHONE_NUMBER_ID,
                 "conversation": {"phone_number": PHONE, "contact_name": "Eduardo"},
-                "message": {
-                    "id": message_id or f"wamid.test{sequence}",
-                    "from": PHONE,
-                    "type": "text",
-                    "text": {"body": text},
-                    "kapso": {"direction": "inbound"},
-                },
+                "message": message,
             }
         ],
     }
@@ -230,3 +232,86 @@ class ExtraccionWebhookTests(TestCase):
         payload = webhook_payload("respuesta del sistema", 1)
         payload["data"][0]["message"]["kapso"]["direction"] = "outbound"
         self.assertEqual(extract_inbound_messages(payload), [])
+
+    def test_un_mensaje_no_entregado_no_se_lee_como_silencio(self):
+        """Chat real del 24/07: WhatsApp entregó el sobre vacío (error 131060).
+
+        Kapso hoy no reenvía estos mensajes por webhook, pero si algún día lo
+        hace el agente debe enterarse de que el cliente intentó mandar algo.
+        """
+        from .worker import extract_inbound_messages
+
+        payload = webhook_payload("", 1, msg_type="unsupported")
+        payload["data"][0]["message"].pop("text")
+
+        messages = extract_inbound_messages(payload)
+        self.assertEqual(len(messages), 1, "no puede descartarse en silencio")
+        self.assertIn("no nos pudo entregar", messages[0]["text"])
+
+
+class CitasTests(TestCase):
+    """Respuestas citando un mensaje (deslizar para responder)."""
+
+    def test_el_texto_citado_llega_al_agente(self):
+        from .worker import _message_text, extract_inbound_messages
+
+        ChatMessage.remember(
+            "wamid.citado",
+            PHONE,
+            ChatMessage.Direction.OUTBOUND,
+            "Granizado de Blue Berry: Pequeño $8.000, Grande $10.000",
+        )
+        payload = webhook_payload("ese porfa", 2, quoted_wamid="wamid.citado")
+
+        msg = extract_inbound_messages(payload)[0]
+        self.assertEqual(msg["quoted_wamid"], "wamid.citado")
+        text = _message_text(msg, PHONE_NUMBER_ID)
+        self.assertIn("Granizado de Blue Berry", text, "el agente debe ver qué citó")
+        self.assertIn("ese porfa", text)
+
+    def test_una_cita_sin_texto_guardado_igual_se_avisa(self):
+        from .worker import _message_text, extract_inbound_messages
+
+        payload = webhook_payload("este mismo", 3, quoted_wamid="wamid.viejisimo")
+        text = _message_text(extract_inbound_messages(payload)[0], PHONE_NUMBER_ID)
+        self.assertIn("citando un mensaje anterior", text)
+
+    def test_sin_cita_el_texto_va_limpio(self):
+        from .worker import _message_text, extract_inbound_messages
+
+        payload = webhook_payload("quiero un granizado", 4)
+        text = _message_text(extract_inbound_messages(payload)[0], PHONE_NUMBER_ID)
+        self.assertEqual(text, "quiero un granizado")
+
+
+class CoberturaSinUbicacionTests(TestCase):
+    """La ubicación que el cliente sí mandó pero WhatsApp no nos entregó."""
+
+    def setUp(self):
+        self.contact = WhatsAppContact.objects.create(phone=PHONE)
+
+    def _verificar_cobertura(self):
+        from .tools import build_tools
+
+        tools = {t.name: t for t in build_tools(self.contact)}
+        return tools["verificar_cobertura"].invoke({})
+
+    def test_sin_ubicacion_y_sin_intentos_pide_la_ubicacion(self):
+        with patch("apps.whatsapp.tools.kapso.recent_undelivered", return_value=[]):
+            respuesta = self._verificar_cobertura()
+        self.assertIn("NO ha compartido su ubicación", respuesta)
+
+    def test_si_el_cliente_intento_mandarla_no_se_le_niega(self):
+        """Chat real del 24/07: 'Mírala aquí' → 'no he recibido tu ubicación'.
+
+        El cliente la compartió dos veces y las dos llegaron como mensaje no
+        disponible (error 131060), que Kapso no reenvía por webhook. El agente
+        respondía lo único que sabía —que no la tenía— y el cliente veía que le
+        insistían con lo mismo. Ahora la tool pregunta por esos mensajes.
+        """
+        with patch(
+            "apps.whatsapp.tools.kapso.recent_undelivered", return_value=[1784937117]
+        ):
+            respuesta = self._verificar_cobertura()
+        self.assertIn("SÍ intentó enviarnos algo", respuesta)
+        self.assertIn("solicitar_humano", respuesta, "a la segunda, un humano")

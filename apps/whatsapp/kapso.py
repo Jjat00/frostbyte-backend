@@ -14,6 +14,7 @@ from django.conf import settings
 logger = logging.getLogger(__name__)
 
 MESSAGES_URL = "https://api.kapso.ai/meta/whatsapp/v24.0/{phone_number_id}/messages"
+PLATFORM_MESSAGES_URL = "https://api.kapso.ai/platform/v1/whatsapp/messages"
 
 # WhatsApp corta los mensajes de texto en 4096 caracteres
 MAX_TEXT_LEN = 4000
@@ -21,24 +22,82 @@ MAX_TEXT_LEN = 4000
 MAX_RETRIES = 2
 RETRY_BACKOFF_SECONDS = 2
 
+# Ventana para dar por "de esta conversación" un mensaje que no nos llegó
+UNDELIVERED_LOOKBACK_MINUTES = 60
 
-def _record_sent(data, to_phone):
+
+def _record_sent(data, to_phone, body=""):
     """Guarda el wamid de un mensaje enviado por el sistema.
 
     Los eventos whatsapp.message.sent cuyo id no esté registrado se tratan
     como intervención humana (worker._handle_outbound), así que aquí debe
-    quedar TODO lo que envía el backend (agente y notificaciones).
+    quedar TODO lo que envía el backend (agente y notificaciones). El texto se
+    guarda aparte (ChatMessage) para poder resolver las respuestas citadas.
     """
     try:
         wamid = ((data or {}).get("messages") or [{}])[0].get("id")
         if wamid:
-            from .models import SentMessage
+            from .models import ChatMessage, SentMessage
 
             SentMessage.objects.get_or_create(
                 wamid=wamid[:128], defaults={"to_phone": str(to_phone or "")[:30]}
             )
+            ChatMessage.remember(
+                wamid, str(to_phone or ""), ChatMessage.Direction.OUTBOUND, body
+            )
     except Exception:
         logger.exception("No se pudo registrar el wamid del mensaje enviado")
+
+
+def recent_undelivered(phone, within_minutes=UNDELIVERED_LOOKBACK_MINUTES, limit=5):
+    """Mensajes recientes del cliente que WhatsApp no nos pudo entregar.
+
+    Llegan como tipo "unsupported" (error 131060, "This message is
+    unavailable"): el contenido nunca sale del teléfono del cliente, pasa sobre
+    todo con dispositivos vinculados y con números en coexistencia (app de
+    WhatsApp Business + Cloud API). Kapso los guarda en la conversación pero NO
+    los reenvía por webhook —su lista de tipos no los incluye—, así que la única
+    forma de enterarse de que el cliente intentó mandar algo es preguntar.
+
+    Devuelve los timestamps epoch (más reciente primero); [] ante cualquier
+    fallo: esto solo informa al agente, nunca puede tumbar un turno.
+    """
+    if not settings.KAPSO_API_KEY or not phone:
+        return []
+    try:
+        response = requests.get(
+            PLATFORM_MESSAGES_URL,
+            params={
+                "phone_number": phone,
+                "direction": "inbound",
+                "message_type": "unsupported",
+                "limit": limit,
+            },
+            headers={"X-API-Key": settings.KAPSO_API_KEY},
+            timeout=8,
+        )
+        if response.status_code >= 300:
+            logger.warning(
+                "Kapso devolvió %s consultando los mensajes no entregados de %s",
+                response.status_code,
+                phone,
+            )
+            return []
+        messages = (response.json() or {}).get("data") or []
+    except (requests.RequestException, ValueError):
+        logger.exception("No se pudieron consultar los mensajes no entregados de %s", phone)
+        return []
+
+    cutoff = time.time() - within_minutes * 60
+    stamps = []
+    for message in messages:
+        try:
+            stamp = int(message.get("timestamp"))
+        except (TypeError, ValueError):
+            continue
+        if stamp >= cutoff:
+            stamps.append(stamp)
+    return sorted(stamps, reverse=True)
 
 
 def _post_message(phone_number_id, payload):
@@ -60,7 +119,11 @@ def _post_message(phone_number_id, payload):
             if response.status_code < 300:
                 data = response.json()
                 if payload.get("to"):
-                    _record_sent(data, payload.get("to"))
+                    _record_sent(
+                        data,
+                        payload.get("to"),
+                        (payload.get("text") or {}).get("body", ""),
+                    )
                 return data
             last_error = f"HTTP {response.status_code}: {response.text[:300]}"
             # Solo reintenta errores transitorios
