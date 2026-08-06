@@ -1,11 +1,16 @@
 """Loop de sincronizacion en tiempo real de la Polla.
 
+APAGADO POR DEFECTO desde que termino el Mundial 2026: el torneo ya no genera
+resultados nuevos, asi que el sondeo solo gastaria cuota de API-Football. Para
+revivirlo (siguiente torneo) basta ``POLLA_REALTIME_LOOP=1`` en el entorno; el
+codigo queda intacto. El comando ``polla_sync`` sigue disponible a mano.
+
 Se arranca UNA sola vez desde ``config/asgi.py`` (es decir, solo bajo daphne /
 ASGI; este modulo no se importa en comandos de ``manage.py``, asi que no corre
 en ``migrate``, ``collectstatic`` ni en el cron). Vive en un hilo daemon dentro
 del proceso web que ya esta siempre encendido: no agrega servicios ni costo.
 
-Sondea de forma adaptativa:
+Cuando esta encendido sondea de forma adaptativa:
   - cada ``POLLA_LOOP_LIVE_SECONDS`` (def. 20s) cuando hay partidos en vivo o por
     arrancar (deteccion casi en tiempo real durante los partidos),
   - cada ``POLLA_LOOP_IDLE_SECONDS`` (def. 120s) en reposo.
@@ -15,8 +20,8 @@ adaptativo con marca compartida en Redis), asi que correr seguido NO multiplica
 el consumo de la API. Cuando detecta un cambio emite la senal WebSocket
 ``polla_changed`` y los clientes refrescan al instante.
 
-Apagar el loop (p.ej. si se corre el sync por cron/worker aparte):
-    POLLA_REALTIME_LOOP=0
+Encender el loop (torneo en curso, o si se prefiere aqui en vez de un worker):
+    POLLA_REALTIME_LOOP=1
 
 Nota multi-replica: si el servicio web escala a >1 replica, cada una corre su
 loop. El marcador en Redis limita las llamadas a la API en reposo, pero durante
@@ -30,7 +35,7 @@ import time
 
 logger = logging.getLogger(__name__)
 
-ENABLED = os.environ.get("POLLA_REALTIME_LOOP", "1") != "0"
+ENABLED = os.environ.get("POLLA_REALTIME_LOOP", "0") == "1"
 LIVE_SECONDS = int(os.environ.get("POLLA_LOOP_LIVE_SECONDS", "20"))
 IDLE_SECONDS = int(os.environ.get("POLLA_LOOP_IDLE_SECONDS", "120"))
 
@@ -102,7 +107,10 @@ def start_realtime_loop():
     """Arranca el hilo del loop una sola vez por proceso."""
     global _started
     if not ENABLED:
-        logger.info("Polla realtime loop deshabilitado (POLLA_REALTIME_LOOP=0).")
+        logger.info(
+            "Polla realtime loop apagado (por defecto tras el Mundial 2026). "
+            "Encender con POLLA_REALTIME_LOOP=1."
+        )
         return
     with _lock:
         if _started:

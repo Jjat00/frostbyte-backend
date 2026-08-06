@@ -1,18 +1,18 @@
-# Servicio CRON de la Polla Mundialista -- FALLBACK OPCIONAL (no es el mecanismo
-# principal de tiempo real).
+# Servicio CRON de la Polla Mundialista -- SIN USO (archivo de referencia).
 #
-# El tiempo real lo da un loop in-process dentro del servicio web (daphne),
-# arrancado en config/asgi.py via apps/polla/realtime_loop.py: sondea cada ~20s
-# durante partidos en vivo, sin costo extra y sin el limite de cron de Railway.
+# NO hay ningun servicio creado con este archivo, y no debe crearse: tras el
+# Mundial 2026 no se sincroniza nada. El sync automatico esta apagado en los dos
+# frentes -> el loop in-process (apps/polla/realtime_loop.py) arranca solo con
+# POLLA_REALTIME_LOOP=1, y este cron no existe como servicio en Railway.
 #
-# Este cron solo sirve como respaldo barato si se quisiera mover el sync fuera
-# del web (apagando el loop con POLLA_REALTIME_LOOP=0). OJO: Railway impone un
-# minimo de 5 minutos entre ejecuciones de cron, asi que NO se puede correr cada
-# minuto por esta via (de ahi el loop in-process).
+# Se conserva para el proximo torneo: es la alternativa a correr el sync dentro
+# del web. OJO: Railway impone un minimo de 5 minutos entre ejecuciones de cron,
+# asi que por esta via no se puede sondear cada minuto (de ahi el loop
+# in-process, que sondea cada ~20s durante los partidos).
 #
-# Para usarlo: crear un servicio aparte apuntando a ESTE repo, con este archivo
-# como Config-as-code, y las variables DATABASE_URL, REDIS_URL (las mismas del
-# web) y API_FOOTBALL_KEY (ver .env.example).
+# Para usarlo algun dia: crear un servicio aparte apuntando a ESTE repo, con
+# este archivo como Config-as-code, y las variables DATABASE_URL, REDIS_URL (las
+# mismas del web) y API_FOOTBALL_KEY (ver .env.example).
 
 [build]
 builder = "nixpacks"

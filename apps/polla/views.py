@@ -3,6 +3,7 @@
 Lecturas publicas (se enriquecen con datos del usuario si viene autenticado);
 escrituras (pronosticos, menciones) requieren sesion de cliente (JWT).
 """
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.db import IntegrityError
@@ -273,7 +274,11 @@ class PlayerDetailView(APIView):
         if player.api_player_id:
             ckey = f"polla:player_profile:{player.api_player_id}"
             profile = cache.get(ckey)
-            if profile is None:
+            # La caché se sigue leyendo (es gratis); lo que se corta es la salida
+            # a la red. Tras el Mundial 2026 la Polla no llama a API-Football por
+            # tráfico: si la caché venció, la ficha se arma con lo que hay en la
+            # BD (nombre, dorsal, foto sembrada, números del torneo).
+            if profile is None and settings.POLLA_LIVE_API_FETCH:
                 try:
                     from apps.polla.providers import get_provider
                     provider = get_provider()

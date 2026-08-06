@@ -277,6 +277,14 @@ API_FOOTBALL_LEAGUE_ID = int(os.getenv('API_FOOTBALL_LEAGUE_ID', '1'))  # 1 = FI
 API_FOOTBALL_SEASON = int(os.getenv('API_FOOTBALL_SEASON', '2026'))
 API_FOOTBALL_BASE_URL = os.getenv('API_FOOTBALL_BASE_URL', 'https://v3.football.api-sports.io')
 
+# ¿Puede una petición HTTP normal disparar una llamada a API-Football?
+# APAGADO desde que terminó el Mundial 2026. Solo afecta al perfil biográfico de
+# la ficha de jugador (PlayerDetailView), la única lectura que salía a la API al
+# vencer su caché; con esto la ficha se sirve entera desde la BD. Los comandos
+# manuales (polla_sync, polla_squads, polla_map_api) NO dependen de esta bandera.
+# Encender con POLLA_LIVE_API_FETCH=1 en el próximo torneo.
+POLLA_LIVE_API_FETCH = os.getenv('POLLA_LIVE_API_FETCH', '0') == '1'
+
 # Correo transaccional/recordatorios de la Polla (Resend)
 # -------------------------------------------------------------------------
 # Resend exige un dominio propio verificado (SPF/DKIM/DMARC) para que los
