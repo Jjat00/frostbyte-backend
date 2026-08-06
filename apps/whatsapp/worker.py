@@ -2,8 +2,16 @@
 
 El webhook debe responder 200 en menos de 10 segundos, así que el turno del
 agente (que llama al LLM) corre en un ThreadPoolExecutor in-process, igual que
-el realtime loop de la Polla. Un lock por teléfono garantiza que los mensajes
-de un mismo cliente se procesen en orden.
+el realtime loop de la Polla.
+
+Los mensajes NO se responden uno a uno: cada contacto tiene una cola y un solo
+loop que espera a que deje de escribir (ventana deslizante) antes de llamar al
+agente, de modo que "Hola" + "quiero pedir" sean UN turno y UNA respuesta. Si
+el cliente escribe mientras el agente ya está generando, esa respuesta se
+descarta (nació incompleta) y se rehace con todo junto; salvo que el turno ya
+haya tocado la base de datos, en cuyo caso se envía y lo nuevo va al siguiente.
+El buffering de Kapso hace lo mismo aguas arriba, pero su ventana termina al
+entregar el webhook: no cubre al cliente que escribe con el agente pensando.
 """
 
 import logging
@@ -25,9 +33,23 @@ from .tools import normalize_phone
 
 logger = logging.getLogger(__name__)
 
-_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="wa-agent")
+# Dos pools separados a propósito: los turnos pasan la mayor parte del tiempo
+# esperando (ventana deslizante + LLM), así que no pueden robarle los hilos al
+# procesado de webhooks o los mensajes nuevos no llegarían a encolarse nunca
+_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="wa-hook")
+_turn_executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="wa-agent")
 _locks = defaultdict(threading.Lock)
 _locks_guard = threading.Lock()
+
+# Cola de mensajes por contacto: {phone: {messages, event_ids, phone_number_id,
+# first, last, aborts}}. _active marca los teléfonos con loop vivo.
+_pending = {}
+_pending_guard = threading.Lock()
+_active = set()
+
+# Tope de respuestas descartadas seguidas: con un cliente que escribe sin parar
+# hay que contestar en algún momento aunque llegue otro mensaje justo después
+MAX_ABORTS = 2
 
 
 def _phone_lock(phone):
@@ -235,11 +257,13 @@ def _resolve_media(msg, phone_number_id):
     return msg["text"]
 
 
-def _keep_typing(phone_number_id, message_id, stop_event, max_renewals=4):
-    """Muestra 'escribiendo…' mientras el agente genera la respuesta.
+def _keep_typing(phone_number_id, message_id, stop_event, max_renewals=6):
+    """Muestra 'escribiendo…' desde que llega el mensaje hasta la respuesta.
 
-    El indicador de WhatsApp expira a los ~25 s, así que se renueva hasta
-    max_renewals veces o hasta que stop_event se active (respuesta lista).
+    Cubre también la espera de la ventana deslizante (si no, el cliente vería
+    el chat muerto varios segundos). El indicador de WhatsApp expira a los
+    ~25 s, así que se renueva hasta max_renewals veces o hasta que stop_event
+    se active (respuesta enviada).
     """
     for _ in range(max_renewals):
         kapso.send_typing_indicator(phone_number_id, message_id)
@@ -250,6 +274,169 @@ def _keep_typing(phone_number_id, message_id, stop_event, max_renewals=4):
 def enqueue_event(event_id):
     """Encola el procesamiento de un WebhookEvent ya persistido."""
     _executor.submit(_process_event_safe, event_id)
+
+
+def _enqueue_turn(contact, messages, phone_number_id, event_id):
+    """Acumula mensajes del cliente y arranca su loop si no estaba vivo."""
+    now = time.monotonic()
+    with _pending_guard:
+        slot = _pending.setdefault(
+            contact.phone,
+            {
+                "messages": [],
+                "event_ids": set(),
+                "phone_number_id": "",
+                "first": now,
+                "aborts": 0,
+            },
+        )
+        slot["messages"].extend(messages)
+        slot["event_ids"].add(event_id)
+        slot["last"] = now
+        if phone_number_id:
+            slot["phone_number_id"] = phone_number_id
+        start = contact.phone not in _active
+        if start:
+            _active.add(contact.phone)
+    if start:
+        _turn_executor.submit(_turn_loop_safe, contact.phone)
+
+
+def _wait_and_drain(phone):
+    """Espera a que el cliente pare de escribir y devuelve todo lo acumulado.
+
+    Ventana deslizante: cada mensaje nuevo reinicia la cuenta, con un tope duro
+    desde el primero para que quien escribe sin parar no se quede sin
+    respuesta. Devuelve None cuando ya no queda nada (fin del loop).
+    """
+    wait = settings.WHATSAPP_BATCH_WAIT_SECONDS
+    max_wait = settings.WHATSAPP_BATCH_MAX_WAIT_SECONDS
+    while True:
+        with _pending_guard:
+            slot = _pending.get(phone)
+            if not slot or not slot["messages"]:
+                _pending.pop(phone, None)
+                _active.discard(phone)
+                return None
+            target = min(slot["last"] + wait, slot["first"] + max_wait)
+            now = time.monotonic()
+            if now >= target:
+                return _pending.pop(phone)
+        time.sleep(min(target - now, 0.5))
+
+
+def _has_pending(phone):
+    with _pending_guard:
+        slot = _pending.get(phone)
+        return bool(slot and slot["messages"])
+
+
+def _requeue(phone, batch):
+    """Devuelve a la cola un lote cuyo turno se descartó, sin perder el orden."""
+    with _pending_guard:
+        slot = _pending.get(phone)
+        if slot is None:
+            slot = dict(batch)
+            slot["aborts"] = batch.get("aborts", 0) + 1
+            _pending[phone] = slot
+            return
+        slot["messages"] = batch["messages"] + slot["messages"]
+        slot["event_ids"] |= batch["event_ids"]
+        slot["phone_number_id"] = slot["phone_number_id"] or batch["phone_number_id"]
+        slot["first"] = min(slot["first"], batch["first"])
+        slot["aborts"] = max(slot.get("aborts", 0), batch.get("aborts", 0)) + 1
+
+
+def _start_typing(phone, stop_event):
+    """Arranca el 'escribiendo…' para lo que ya hay en la cola de este contacto."""
+    with _pending_guard:
+        slot = _pending.get(phone)
+        if not slot or not slot["messages"]:
+            return
+        phone_number_id = slot["phone_number_id"]
+        message_id = next(
+            (m["message_id"] for m in reversed(slot["messages"]) if m["message_id"]), ""
+        )
+    if phone_number_id and message_id:
+        threading.Thread(
+            target=_keep_typing,
+            args=(phone_number_id, message_id, stop_event),
+            daemon=True,
+        ).start()
+
+
+def _close_events(event_ids, status, error=""):
+    WebhookEvent.objects.filter(pk__in=event_ids).update(status=status, error=error)
+
+
+def _turn_loop_safe(phone):
+    try:
+        _turn_loop(phone)
+    except Exception:
+        logger.exception("Error en el loop de turnos de %s", phone)
+        # Se libera el teléfono (no los mensajes): el siguiente que llegue
+        # arranca un loop nuevo y arrastra lo que quedó pendiente
+        with _pending_guard:
+            _active.discard(phone)
+    finally:
+        close_old_connections()
+
+
+def _turn_loop(phone):
+    """Único loop por contacto: espera, corre el turno, repite hasta vaciar."""
+    close_old_connections()
+    while True:
+        stop_typing = threading.Event()
+        _start_typing(phone, stop_typing)
+        try:
+            batch = _wait_and_drain(phone)
+            if batch is None:
+                return
+            _run_turn(phone, batch)
+        finally:
+            stop_typing.set()
+
+
+def _run_turn(phone, batch):
+    """Corre un turno del agente con todos los mensajes acumulados."""
+    from .agent import discard_turn, record_messages, run_turn
+
+    close_old_connections()
+    try:
+        contact = WhatsAppContact.objects.get(phone=phone)
+    except WhatsAppContact.DoesNotExist:
+        return
+    phone_number_id = batch["phone_number_id"]
+    messages = batch["messages"]
+
+    # Un humano pudo intervenir mientras esperábamos: entonces el agente no
+    # responde, solo deja lo que dijo el cliente en el hilo
+    if contact.human_handoff or (contact.human_until and contact.human_until > timezone.now()):
+        try:
+            text = "\n".join(_resolve_media(m, phone_number_id) for m in messages)
+            with _phone_lock(phone):
+                record_messages(contact, [("user", text)])
+        except Exception:
+            logger.exception("No se pudo guardar el mensaje del cliente %s en pausa", phone)
+        _close_events(batch["event_ids"], WebhookEvent.Status.IGNORED, "agente pausado: humano atendiendo")
+        return
+
+    with _phone_lock(phone):
+        # Los audios/imágenes se resuelven aquí (descarga + OpenAI) para que el
+        # 'escribiendo…' ya esté visible mientras tanto
+        text = "\n".join(_resolve_media(m, phone_number_id) for m in messages)
+        turn = run_turn(contact, text)
+
+        # ¿Escribió mientras el agente pensaba? Entonces esta respuesta ya nació
+        # incompleta: se descarta y el lote vuelve a la cola para rehacerse
+        # entero. Un turno que ya creó o cambió un pedido NO se puede descartar.
+        if _has_pending(phone) and not turn.mutated and batch.get("aborts", 0) < MAX_ABORTS:
+            discard_turn(contact, turn.message_ids)
+            _requeue(phone, batch)
+            return
+
+    kapso.send_text(phone_number_id, contact.phone, turn.reply)
+    _close_events(batch["event_ids"], WebhookEvent.Status.PROCESSED)
 
 
 def _process_event_safe(event_id):
@@ -425,29 +612,9 @@ def _process_event(event):
             event.save(update_fields=["status", "error", "contact_phone", "phone_number_id"])
             continue
 
-        from .agent import run_agent
-
-        last_message_id = next(
-            (m["message_id"] for m in reversed(messages) if m["message_id"]), ""
-        )
-        stop_typing = threading.Event()
-        if phone_number_id and last_message_id:
-            threading.Thread(
-                target=_keep_typing,
-                args=(phone_number_id, last_message_id, stop_typing),
-                daemon=True,
-            ).start()
-        try:
-            with _phone_lock(contact.phone):
-                # Los audios/imágenes se resuelven aquí (descarga + OpenAI)
-                # para que el 'escribiendo…' ya esté visible mientras tanto
-                text = "\n".join(_resolve_media(m, phone_number_id) for m in messages)
-                reply = run_agent(contact, text)
-        finally:
-            stop_typing.set()
-
-        kapso.send_text(phone_number_id, contact.phone, reply)
-
-        event.status = WebhookEvent.Status.PROCESSED
-        event.error = ""
+        # No se responde aquí: los mensajes van a la cola del contacto y su
+        # loop decide cuándo llamar al agente (una respuesta por ráfaga)
+        _enqueue_turn(contact, messages, phone_number_id, event.pk)
+        event.status = WebhookEvent.Status.PENDING
+        event.error = "en cola: esperando a que el cliente termine de escribir"
         event.save(update_fields=["status", "error", "contact_phone", "phone_number_id"])

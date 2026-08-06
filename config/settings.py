@@ -316,6 +316,14 @@ WHATSAPP_TRANSFER_INFO = os.getenv('WHATSAPP_TRANSFER_INFO', '')
 # Minutos que el agente queda pausado tras cada mensaje que un humano del
 # equipo envía al cliente (desde el inbox de Kapso o la app de WhatsApp)
 WHATSAPP_HUMAN_PAUSE_MINUTES = int(os.getenv('WHATSAPP_HUMAN_PAUSE_MINUTES', '30'))
+# Agrupado de mensajes seguidos: el agente espera este tanto desde el ÚLTIMO
+# mensaje del cliente antes de responder (cada mensaje nuevo reinicia la
+# cuenta), con un tope duro desde el primero para quien escribe sin parar.
+# Se suma a la ventana de buffering de Kapso (recomendada: 2 s).
+WHATSAPP_BATCH_WAIT_SECONDS = float(os.getenv('WHATSAPP_BATCH_WAIT_SECONDS', '10'))
+WHATSAPP_BATCH_MAX_WAIT_SECONDS = float(
+    os.getenv('WHATSAPP_BATCH_MAX_WAIT_SECONDS', '40')
+)
 BACKEND_PUBLIC_URL = os.getenv(
     'BACKEND_PUBLIC_URL', 'https://frostbyte-backend-production.up.railway.app'
 )

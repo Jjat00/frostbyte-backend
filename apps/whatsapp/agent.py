@@ -10,6 +10,7 @@ entra vía tools.
 import logging
 import re
 import threading
+from typing import NamedTuple
 
 from django.conf import settings
 from django.utils import timezone
@@ -22,6 +23,16 @@ logger = logging.getLogger(__name__)
 
 _checkpointer = None
 _checkpointer_lock = threading.Lock()
+
+# Tools que escriben en la base de datos: un turno que llamó a alguna de ellas
+# NO se puede descartar (el pedido ya existe), aunque el cliente siga escribiendo
+MUTATING_TOOLS = {
+    "crear_pedido",
+    "modificar_pedido",
+    "cancelar_pedido",
+    "guardar_preferencia",
+    "solicitar_humano",
+}
 
 SYSTEM_PROMPT = """Eres el asistente de pedidos de Frostbyte, un local de granizados, cocteles \
 y comida rápida en Cumbal, Nariño (Colombia). Atiendes por WhatsApp y tu único trabajo es tomar \
@@ -188,25 +199,87 @@ def record_messages(contact, entries):
         agent.update_state(config, {"messages": messages}, as_node="__start__")
 
 
-def run_agent(contact, user_text):
-    """Corre un turno del agente para un contacto y devuelve la respuesta."""
+def _for_whatsapp(reply):
+    """Texto plano listo para WhatsApp (no renderiza Markdown)."""
+    if isinstance(reply, list):  # content blocks -> texto plano
+        reply = " ".join(
+            block.get("text", "") for block in reply if isinstance(block, dict)
+        ).strip()
+    reply = re.sub(r"\*\*(.+?)\*\*", r"*\1*", reply)  # **negrilla** -> *negrilla*
+    reply = re.sub(r"\[[^\]]*\]\((https?://[^)]+)\)", r"\1", reply)  # links planos
+    reply = re.sub(r"^#{1,6}\s*", "", reply, flags=re.MULTILINE)  # sin encabezados
+    return reply or "Perdón, ¿me lo repites?"
+
+
+class AgentTurn(NamedTuple):
+    """Resultado de un turno, con lo necesario para poder descartarlo.
+
+    message_ids: todo lo que el turno añadió al hilo (mensaje del cliente,
+    llamadas a tools y respuesta), para borrarlo con discard_turn.
+    mutated: el turno tocó la base de datos (creó/modificó/canceló un pedido,
+    guardó una preferencia o pidió un humano), así que descartarlo dejaría al
+    agente sin memoria de algo que YA pasó: hay que enviarlo sí o sí.
+    """
+
+    reply: str
+    message_ids: tuple
+    mutated: bool
+
+
+def run_turn(contact, user_text):
+    """Corre un turno del agente y devuelve un AgentTurn."""
     agent = _build_agent(contact)
     config = {
         "configurable": {"thread_id": _thread_id(contact)},
         "recursion_limit": 20,
     }
+    before = set()
+    try:
+        state = agent.get_state(config)
+        before = {
+            m.id for m in (state.values or {}).get("messages", []) if getattr(m, "id", None)
+        }
+    except Exception:
+        logger.exception("No se pudo leer el hilo previo de %s", contact.phone)
+
     result = agent.invoke(
         {"messages": [{"role": "user", "content": user_text}]},
         config=config,
     )
-    reply = result["messages"][-1].content
-    if isinstance(reply, list):  # content blocks -> texto plano
-        reply = " ".join(
-            block.get("text", "") for block in reply if isinstance(block, dict)
-        ).strip()
-    # WhatsApp no renderiza Markdown: **negrilla** -> *negrilla*, links planos,
-    # sin encabezados
-    reply = re.sub(r"\*\*(.+?)\*\*", r"*\1*", reply)
-    reply = re.sub(r"\[[^\]]*\]\((https?://[^)]+)\)", r"\1", reply)
-    reply = re.sub(r"^#{1,6}\s*", "", reply, flags=re.MULTILINE)
-    return reply or "Perdón, ¿me lo repites?"
+    messages = result["messages"]
+    added = [m for m in messages if getattr(m, "id", None) and m.id not in before]
+    mutated = any(
+        (call.get("name") if isinstance(call, dict) else getattr(call, "name", None))
+        in MUTATING_TOOLS
+        for message in added
+        for call in (getattr(message, "tool_calls", None) or [])
+    )
+    return AgentTurn(
+        reply=_for_whatsapp(messages[-1].content),
+        message_ids=tuple(m.id for m in added),
+        mutated=mutated,
+    )
+
+
+def discard_turn(contact, message_ids):
+    """Borra del hilo los mensajes de un turno que no se llegó a enviar.
+
+    Deja la conversación como estaba antes del turno: el mensaje del cliente
+    vuelve a estar pendiente y se reenvía junto con los que llegaron después,
+    en un solo turno. Sin esto el agente creería haber dicho algo que el
+    cliente nunca leyó.
+    """
+    from langchain_core.messages import RemoveMessage
+
+    if not message_ids:
+        return
+    agent = _build_agent(contact)
+    config = {"configurable": {"thread_id": _thread_id(contact)}}
+    agent.update_state(
+        config, {"messages": [RemoveMessage(id=mid) for mid in message_ids]}
+    )
+
+
+def run_agent(contact, user_text):
+    """Corre un turno y devuelve solo el texto (pruebas manuales por shell)."""
+    return run_turn(contact, user_text).reply
