@@ -108,7 +108,7 @@ class MarkItemPaidSerializer(serializers.Serializer):
     """Serializer para marcar un item como pagado"""
 
     payment_method = serializers.ChoiceField(
-        choices=Order.PaymentMethod.choices,
+        choices=Order.active_payment_choices(),
         required=False,
         allow_blank=True
     )
@@ -280,6 +280,11 @@ class OrderCreateSerializer(serializers.ModelSerializer):
     """Serializer para crear pedidos"""
 
     items = OrderItemCreateSerializer(many=True, write_only=True)
+    payment_method = serializers.ChoiceField(
+        choices=Order.active_payment_choices(),
+        required=False,
+        allow_blank=True,
+    )
     table_id = serializers.PrimaryKeyRelatedField(
         queryset=Table.objects.filter(is_active=True),
         source="table",
@@ -373,6 +378,11 @@ class OrderCreateSerializer(serializers.ModelSerializer):
 class OrderUpdateSerializer(serializers.ModelSerializer):
     """Serializer para actualizar pedidos"""
 
+    payment_method = serializers.ChoiceField(
+        choices=Order.active_payment_choices(),
+        required=False,
+        allow_blank=True,
+    )
     table_id = serializers.PrimaryKeyRelatedField(
         queryset=Table.objects.filter(is_active=True),
         source="table",
@@ -527,7 +537,7 @@ class CustomerOrderCreateSerializer(serializers.ModelSerializer):
 
     items = OrderItemCreateSerializer(many=True, write_only=True)
     payment_method = serializers.ChoiceField(
-        choices=Order.PaymentMethod.choices, required=True)
+        choices=Order.active_payment_choices(), required=True)
 
     class Meta:
         model = Order

@@ -84,12 +84,14 @@ ubicación registrada es de un día anterior, confirma con el cliente que la ent
 mismo punto (si es otro lugar, que comparta la nueva). Las coordenadas las registra el \
 sistema por su cuenta: tú NUNCA las escribes ni las inventas. Si el cliente no puede \
 compartir su ubicación, usa solicitar_humano para que el equipo lo atienda.
-c) Pregunta el método de pago: efectivo, transferencia, Nequi o Daviplata.
+c) Pregunta el método de pago: efectivo o Nequi. Son los ÚNICOS que aceptamos: si pide \
+tarjeta, transferencia bancaria o Daviplata, dile con amabilidad que por ahora solo hay \
+efectivo y Nequi.
    - Efectivo: pregunta SIEMPRE con qué billete paga y nada más. NO hables de vueltas ni de \
 cuánto recibirá de vuelta: ese dato queda registrado en el pedido y el equipo las alista. \
 Si dice que paga con el valor completo/exacto, usa paga_con='exacto'; NUNCA inventes un \
 billete que el cliente no dijo.
-   - Transferencia/Nequi/Daviplata: comparte estos datos de pago y pide que envíe el \
+   - Nequi: comparte estos datos de pago y pide que envíe el \
 comprobante cuando pague: {transfer_info}
 d) Llama cotizar_pedido con los items (y paga_con si es efectivo, para validar que el billete \
 alcance) y arma el resumen completo (items, dirección, envío y TOTAL) copiando EXACTAMENTE \
@@ -151,7 +153,7 @@ def _build_agent(contact):
     )
     now = timezone.localtime().strftime("%A %d/%m/%Y %H:%M")
     transfer_info = settings.WHATSAPP_TRANSFER_INFO or (
-        "(datos de transferencia sin configurar: ofrece solo efectivo por ahora)"
+        "(datos de Nequi sin configurar: ofrece solo efectivo por ahora)"
     )
     return create_agent(
         model=model,

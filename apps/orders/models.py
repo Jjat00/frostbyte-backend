@@ -78,6 +78,20 @@ class Order(models.Model):
         NEQUI = "nequi", "Nequi"
         DAVIPLATA = "daviplata", "Daviplata"
 
+    # Métodos que el local acepta hoy: son los únicos que se pueden elegir al
+    # cobrar. Los demás siguen en PaymentMethod para que los pedidos históricos
+    # conserven su etiqueta, pero ya no se ofrecen en ningún canal.
+    ACTIVE_PAYMENT_METHODS = [PaymentMethod.CASH, PaymentMethod.NEQUI]
+
+    @classmethod
+    def active_payment_choices(cls):
+        """Choices (valor, etiqueta) de los métodos de pago vigentes."""
+        return [
+            (value, label)
+            for value, label in cls.PaymentMethod.choices
+            if value in cls.ACTIVE_PAYMENT_METHODS
+        ]
+
     class OrderType(models.TextChoices):
         DINE_IN = "dine_in", "En el local"
         PICKUP = "pickup", "Para recoger"

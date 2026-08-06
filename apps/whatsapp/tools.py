@@ -308,7 +308,7 @@ def build_tools(contact):
             items: items del pedido con variante_id, cantidad y notas
             nombre_cliente: nombre de quien recibe
             direccion: dirección de entrega completa
-            metodo_pago: uno de: cash, transfer, nequi, daviplata
+            metodo_pago: uno de: cash, nequi (son los únicos que acepta el local)
             referencia: punto de referencia o indicaciones para el domiciliario
             paga_con: SOLO efectivo: billete que DIJO el cliente (ej. '50000'),
                 o 'exacto' si dice que paga completo/justo. PROHIBIDO inventar
@@ -320,8 +320,8 @@ def build_tools(contact):
             return "ERROR: el local está CERRADO ahora mismo; no se pueden crear pedidos."
         if not cfg.customer_ordering_enabled:
             return "ERROR: los domicilios están pausados en este momento."
-        if metodo_pago not in Order.PaymentMethod.values:
-            return f"ERROR: metodo_pago inválido. Usa uno de: {', '.join(Order.PaymentMethod.values)}."
+        if metodo_pago not in Order.ACTIVE_PAYMENT_METHODS:
+            return f"ERROR: metodo_pago inválido. Usa uno de: {', '.join(Order.ACTIVE_PAYMENT_METHODS)}."
         if not items:
             return "ERROR: el pedido no tiene items."
         if metodo_pago == Order.PaymentMethod.CASH and not paga_con:

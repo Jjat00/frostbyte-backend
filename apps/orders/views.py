@@ -203,6 +203,14 @@ class OrderViewSet(viewsets.ModelViewSet):
         order = self.get_object()
         payment_method = request.data.get("payment_method", "")
 
+        if payment_method and payment_method not in Order.ACTIVE_PAYMENT_METHODS:
+            metodos = ", ".join(
+                label for _, label in Order.active_payment_choices())
+            return Response(
+                {"payment_method": f"Método de pago no disponible. Usa: {metodos}."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         # Marcar todos los items pendientes como pagados usando update directo
         from django.utils import timezone
         OrderItem.objects.filter(order_id=order.pk, is_paid=False).update(
