@@ -76,25 +76,6 @@ class IsEmployeeOrAdminWithAdminWrite(permissions.BasePermission):
         return request.user.is_admin
 
 
-class IsStaffMemberWithAdminDelete(permissions.BasePermission):
-    """
-    Solo staff interno (admin o empleado); los clientes quedan fuera incluso
-    para leer. Cualquier miembro del staff puede crear y actualizar; borrar
-    queda reservado a admins.
-
-    Úsala para contenido operativo que mantiene todo el staff (recetarios),
-    pero cuya eliminación conviene restringir a la administración.
-    """
-    def has_permission(self, request, view):
-        if not (request.user and request.user.is_authenticated):
-            return False
-        if not getattr(request.user, "is_staff_member", False):
-            return False
-        if request.method == "DELETE":
-            return request.user.is_admin
-        return True
-
-
 class IsAuthenticatedOrReadOnly(permissions.BasePermission):
     """
     Public read access, write access for any authenticated user.

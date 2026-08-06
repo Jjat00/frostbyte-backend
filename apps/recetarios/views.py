@@ -1,7 +1,7 @@
 from rest_framework import viewsets, filters, status
 from rest_framework.response import Response
 
-from apps.accounts.permissions import IsStaffMemberWithAdminDelete
+from apps.accounts.permissions import IsStaffMember
 from .models import RecipeBook
 from .serializers import (
     RecipeBookListSerializer,
@@ -16,9 +16,9 @@ class RecipeBookViewSet(viewsets.ModelViewSet):
 
     list: Listar todos los recetarios (staff)
     retrieve: Obtener detalle con pasos, ingredientes e imágenes (staff)
-    create: Crear nuevo recetario (staff: admin o empleado)
-    update: Actualizar recetario (staff: admin o empleado)
-    destroy: Eliminar recetario - soft delete (admin)
+    create: Crear nuevo recetario (staff)
+    update: Actualizar recetario (staff)
+    destroy: Eliminar recetario - soft delete (staff)
     """
 
     queryset = RecipeBook.objects.select_related(
@@ -26,7 +26,7 @@ class RecipeBookViewSet(viewsets.ModelViewSet):
         "product__business",
         "product_variant__product__business",
     ).prefetch_related("steps", "ingredients", "images")
-    permission_classes = [IsStaffMemberWithAdminDelete]
+    permission_classes = [IsStaffMember]
     lookup_field = "slug"
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["name", "description", "ingredients__name"]
