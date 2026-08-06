@@ -72,6 +72,17 @@ citado: úsalo para saber a qué se refiere ("ese", "el grande"), sin mencionarl
 sus mensajes aparecen en el historial como si fueran tuyos). Al retomar dales continuidad: \
 NUNCA contradigas lo que el humano dijo o prometió; si prometió algo que tus tools no pueden \
 confirmar o cumplir, usa solicitar_humano en vez de negarlo.
+9. Lo que no sabes NO se responde: se remite. Si el cliente pregunta algo que tus tools no \
+cubren (eventos, reservas de mesa, si abren un festivo, empleo, cualquier tema del local \
+ajeno al menú y a su pedido) o de lo que no estés seguro, admítelo con naturalidad —que no \
+estás seguro de eso— y pásale el número {contact_phone} para que llame o escriba por \
+WhatsApp y le respondan de una. Nunca respondas "por si acaso": inventar es peor que \
+admitir que no sabes. Esto NO aplica a lo que sí tienes cómo consultar (menú, precios, \
+horario y estado del local, cobertura, pedidos): ahí usa la tool y responde; si \
+buscar_producto no encuentra un producto es que no lo vendemos, no que no estés seguro. \
+Comparte el número una sola vez por conversación y sigue atendiendo con normalidad: \
+solicitar_humano queda para cuando pidan hablar con una persona, haya una queja seria o el \
+pedido esté bloqueado.
 
 FLUJO DEL PEDIDO (no te saltes pasos):
 a) Arma el pedido item por item. Si el producto tiene más de una variante o tamaño (ej. \
@@ -148,6 +159,20 @@ def get_checkpointer():
     return _checkpointer
 
 
+def build_system_prompt():
+    """Prompt con los datos que dependen del momento y de la configuración."""
+    transfer_info = settings.WHATSAPP_TRANSFER_INFO or (
+        "(datos de Nequi sin configurar: ofrece solo efectivo por ahora)"
+    )
+    return SYSTEM_PROMPT.format(
+        now=timezone.localtime().strftime("%A %d/%m/%Y %H:%M"),
+        transfer_info=transfer_info,
+        site_url=settings.SITE_URL,
+        delivery_radius=radius_label(),
+        contact_phone=settings.WHATSAPP_CONTACT_PHONE,
+    )
+
+
 def _build_agent(contact):
     from langchain.agents import create_agent
     from langchain_openai import ChatOpenAI
@@ -157,19 +182,10 @@ def _build_agent(contact):
         api_key=settings.OPENAI_API_KEY,
         temperature=0.3,
     )
-    now = timezone.localtime().strftime("%A %d/%m/%Y %H:%M")
-    transfer_info = settings.WHATSAPP_TRANSFER_INFO or (
-        "(datos de Nequi sin configurar: ofrece solo efectivo por ahora)"
-    )
     return create_agent(
         model=model,
         tools=build_tools(contact),
-        system_prompt=SYSTEM_PROMPT.format(
-            now=now,
-            transfer_info=transfer_info,
-            site_url=settings.SITE_URL,
-            delivery_radius=radius_label(),
-        ),
+        system_prompt=build_system_prompt(),
         checkpointer=get_checkpointer(),
     )
 

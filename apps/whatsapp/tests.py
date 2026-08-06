@@ -9,9 +9,14 @@ import threading
 import time
 from unittest.mock import patch
 
-from django.test import TestCase, TransactionTestCase, override_settings
+from django.test import (
+    SimpleTestCase,
+    TestCase,
+    TransactionTestCase,
+    override_settings,
+)
 
-from .agent import AgentTurn
+from .agent import AgentTurn, build_system_prompt
 from .models import ChatMessage, WebhookEvent, WhatsAppContact
 from .worker import _active, _pending, _process_event_safe
 
@@ -282,6 +287,16 @@ class CitasTests(TestCase):
         payload = webhook_payload("quiero un granizado", 4)
         text = _message_text(extract_inbound_messages(payload)[0], PHONE_NUMBER_ID)
         self.assertEqual(text, "quiero un granizado")
+
+
+class PromptTests(SimpleTestCase):
+    """El prompt se arma con los datos de configuración, sin placeholders sueltos."""
+
+    def test_lleva_el_numero_al_que_remitir_cuando_no_sabe(self):
+        with override_settings(WHATSAPP_CONTACT_PHONE="3009998877"):
+            prompt = build_system_prompt()
+        self.assertIn("3009998877", prompt)
+        self.assertNotIn("{", prompt, "quedó un placeholder sin reemplazar")
 
 
 class CoberturaSinUbicacionTests(TestCase):

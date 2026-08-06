@@ -313,6 +313,8 @@ WHATSAPP_AGENT_ENABLED = os.getenv('WHATSAPP_AGENT_ENABLED', 'True').lower() == 
 WHATSAPP_AGENT_MODEL = os.getenv('WHATSAPP_AGENT_MODEL', 'gpt-4o-mini')
 # Datos de pago por transferencia que el agente comparte (Nequi/cuenta/etc.)
 WHATSAPP_TRANSFER_INFO = os.getenv('WHATSAPP_TRANSFER_INFO', '')
+# Número al que el agente remite cuando no sabe algo (contacto directo del local)
+WHATSAPP_CONTACT_PHONE = os.getenv('WHATSAPP_CONTACT_PHONE', '3164277879')
 # Minutos que el agente queda pausado tras cada mensaje que un humano del
 # equipo envía al cliente (desde el inbox de Kapso o la app de WhatsApp)
 WHATSAPP_HUMAN_PAUSE_MINUTES = int(os.getenv('WHATSAPP_HUMAN_PAUSE_MINUTES', '30'))

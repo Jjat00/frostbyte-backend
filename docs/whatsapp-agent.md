@@ -84,6 +84,14 @@ Cliente WhatsApp
 - **Dos números**: ambos atienden el catálogo completo. El webhook trae
   `phone_number_id`; el agente responde por el mismo número por el que
   escribió el cliente (guardado en `WhatsAppContact.last_phone_number_id`).
+- **Lo que no sabe se remite, no se improvisa**: ante una pregunta que ninguna
+  tool cubre (eventos, reservas de mesa, festivos, empleo…) el agente dice que
+  no está seguro y comparte `WHATSAPP_CONTACT_PHONE` para que el cliente llame
+  o escriba. No cuenta como "no sé" lo que sí tiene tool (menú, precios,
+  horario, cobertura, pedidos): un producto que `buscar_producto` no encuentra
+  es un producto que no vendemos. Es la salida barata frente a
+  `solicitar_humano`, que pausa al agente y se reserva para quien pide una
+  persona, quejas serias o pedidos bloqueados.
 - **Handoff humano**: la tool `solicitar_humano` activa
   `WhatsAppContact.human_handoff` y el agente deja de responder a ese contacto.
   Se reactiva desde el admin de Django (Contactos de WhatsApp).
@@ -112,6 +120,7 @@ Cliente WhatsApp
 | `WHATSAPP_AGENT_ENABLED` | `False` apaga al agente (los webhooks se registran igual) |
 | `WHATSAPP_AGENT_MODEL` | Modelo de OpenAI (default `gpt-4o-mini`) |
 | `WHATSAPP_TRANSFER_INFO` | Datos de pago por transferencia que comparte el agente |
+| `WHATSAPP_CONTACT_PHONE` | Número al que remite cuando no sabe algo (default `3164277879`) |
 | `WHATSAPP_HUMAN_PAUSE_MINUTES` | Minutos de pausa del agente tras cada mensaje de un humano del equipo (default 30) |
 | `WHATSAPP_BATCH_WAIT_SECONDS` | Segundos de silencio del cliente antes de responder; agrupa mensajes seguidos (default 10) |
 | `WHATSAPP_BATCH_MAX_WAIT_SECONDS` | Tope duro de espera desde el primer mensaje sin responder (default 40) |
