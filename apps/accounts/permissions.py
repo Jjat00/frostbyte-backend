@@ -65,8 +65,8 @@ class IsEmployeeOrAdminWithAdminWrite(permissions.BasePermission):
     Authenticated employees+admins can read.
     Only admins can write (create/update/delete).
 
-    Use this for internal content like recipe books that
-    employees need to view but only admins can manage.
+    Use this for internal content that employees need to
+    view but only admins can manage.
     """
     def has_permission(self, request, view):
         if not (request.user and request.user.is_authenticated):
@@ -74,6 +74,25 @@ class IsEmployeeOrAdminWithAdminWrite(permissions.BasePermission):
         if request.method in permissions.SAFE_METHODS:
             return True
         return request.user.is_admin
+
+
+class IsStaffMemberWithAdminDelete(permissions.BasePermission):
+    """
+    Solo staff interno (admin o empleado); los clientes quedan fuera incluso
+    para leer. Cualquier miembro del staff puede crear y actualizar; borrar
+    queda reservado a admins.
+
+    Úsala para contenido operativo que mantiene todo el staff (recetarios),
+    pero cuya eliminación conviene restringir a la administración.
+    """
+    def has_permission(self, request, view):
+        if not (request.user and request.user.is_authenticated):
+            return False
+        if not getattr(request.user, "is_staff_member", False):
+            return False
+        if request.method == "DELETE":
+            return request.user.is_admin
+        return True
 
 
 class IsAuthenticatedOrReadOnly(permissions.BasePermission):
