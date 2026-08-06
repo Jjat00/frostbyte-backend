@@ -24,7 +24,17 @@ class AIImageGenerationViewSet(viewsets.ModelViewSet):
     serializer_class = AIImageGenerationSerializer
 
     def get_queryset(self):
-        return AIImageGeneration.objects.filter(user=self.request.user)
+        # La galeria es compartida: cualquier usuario con acceso ve todas las
+        # generaciones, sin importar quien las creo.
+        queryset = AIImageGeneration.objects.all()
+
+        # En el listado no tiene sentido mostrar generaciones fallidas (no
+        # tienen imagen); ahora que la galeria es compartida serian ruido
+        # para todo el equipo.
+        if self.action == 'list':
+            queryset = queryset.exclude(status='failed')
+
+        return queryset
 
     def get_serializer_class(self):
         if self.action == 'create':
