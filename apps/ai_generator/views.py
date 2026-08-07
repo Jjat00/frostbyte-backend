@@ -10,7 +10,7 @@ from openai import OpenAI
 from .models import AIImageGeneration
 from .serializers import AIImageGenerationSerializer, AIImageGenerationCreateSerializer, SaveToProductSerializer, SuggestDescriptionSerializer, SuggestHistorySerializer
 from .tasks import generate_image_sync
-from .services.temp_storage import TempImageStorage
+from .services.temp_storage import TempImageStorage, InvalidImageUpload
 from .services.r2_persistence import AIGenerationR2Service
 from apps.products.models import Product
 import logging
@@ -95,8 +95,16 @@ class AIImageGenerationViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        temp_original = temp_storage.save_temp_file(original_file, 'original')
-        temp_reference = temp_storage.save_temp_file(reference_file, 'reference') if reference_file else ''
+        try:
+            temp_original = temp_storage.save_temp_file(original_file, 'original')
+            temp_reference = (
+                temp_storage.save_temp_file(reference_file, 'reference')
+                if reference_file else ''
+            )
+        except InvalidImageUpload as e:
+            # Mejor decirlo aqui que gastar la llamada al proveedor para que
+            # devuelva un error que nadie entiende.
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
         # Crear generación con rutas temporales
         generation = AIImageGeneration.objects.create(
