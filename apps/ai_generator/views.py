@@ -105,7 +105,7 @@ class AIImageGenerationViewSet(viewsets.ModelViewSet):
             temp_reference_path=temp_reference,
             user_prompt=serializer.validated_data.get('user_prompt', ''),
             transparent_background=serializer.validated_data.get('transparent_background', True),
-            ai_model=serializer.validated_data.get('ai_model', 'gpt-image-1.5'),
+            ai_model=serializer.validated_data.get('ai_model', 'gemini-3-pro-image-preview'),
         )
 
         logger.info(f"AI generation {generation.id} created with temp storage")

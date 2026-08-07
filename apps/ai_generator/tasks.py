@@ -35,7 +35,7 @@ def generate_image_sync(generation_id):
     generation.save()
 
     try:
-        model_name = generation.ai_model or 'gpt-image-1.5'
+        model_name = generation.ai_model or 'gemini-3-pro-image-preview'
         generator = _get_generator(model_name)
         temp_storage = TempImageStorage()
 
