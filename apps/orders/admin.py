@@ -145,12 +145,21 @@ class PageVisitAdmin(admin.ModelAdmin):
 
 @admin.register(StoreSettings)
 class StoreSettingsAdmin(admin.ModelAdmin):
-    list_display = ["__str__", "is_open", "delivery_fee", "customer_ordering_enabled", "updated_at"]
+    list_display = [
+        "__str__",
+        "is_open",
+        "delivery_fee",
+        "delivery_radius_km",
+        "customer_ordering_enabled",
+        "updated_at",
+    ]
     readonly_fields = ["status_changed_at", "status_changed_by", "updated_at"]
 
     fieldsets = (
         ("Estado del local", {"fields": ("is_open", "status_changed_at", "status_changed_by")}),
-        ("Domicilio", {"fields": ("delivery_fee", "customer_ordering_enabled")}),
+        ("Domicilio", {
+            "fields": ("delivery_fee", "delivery_radius_km", "customer_ordering_enabled"),
+        }),
         ("Metadatos", {"fields": ("updated_at",)}),
     )
 

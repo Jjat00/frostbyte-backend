@@ -5,12 +5,21 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.exceptions import ValidationError
 from rest_framework.throttling import UserRateThrottle
 from apps.accounts.permissions import IsAdminUser, IsStaffMember
+from decimal import Decimal, InvalidOperation
 from django.db.models import Sum, Count, Q
 from django.db.models.functions import TruncDate, ExtractHour, ExtractWeekDay
 from django.utils import timezone
 from datetime import timedelta
 
-from .models import Order, OrderItem, Table, PageVisit, StoreSettings
+from .models import (
+    Order,
+    OrderItem,
+    Table,
+    PageVisit,
+    StoreSettings,
+    MIN_DELIVERY_RADIUS_KM,
+    MAX_DELIVERY_RADIUS_KM,
+)
 from .consumers import broadcast_orders_update
 from .serializers import (
     OrderListSerializer,
@@ -69,8 +78,9 @@ class OrderViewSet(viewsets.ModelViewSet):
         """Estado operativo del local para el staff (abierto/cerrado, domicilios).
 
         GET  -> estado actual.
-        PATCH-> actualiza `is_open` y/o `customer_ordering_enabled`. Al cambiar
-                `is_open` se registra quién y cuándo.
+        PATCH-> actualiza `is_open`, `customer_ordering_enabled` y/o
+                `delivery_radius_km`. Al cambiar `is_open` se registra quién y
+                cuándo; el radio solo lo puede cambiar un admin.
         """
         cfg = StoreSettings.load()
 
@@ -89,6 +99,34 @@ class OrderViewSet(viewsets.ModelViewSet):
                 cfg.customer_ordering_enabled = bool(request.data.get("customer_ordering_enabled"))
                 update_fields.append("customer_ordering_enabled")
 
+            if "delivery_radius_km" in request.data:
+                # El radio define hasta dónde vendemos: decisión de negocio,
+                # reservada al admin.
+                if not request.user.is_admin:
+                    return Response(
+                        {"detail": "Solo un administrador puede cambiar el radio de domicilios."},
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
+                try:
+                    radius = Decimal(str(request.data.get("delivery_radius_km"))).quantize(
+                        Decimal("0.01"))
+                except (InvalidOperation, TypeError, ValueError):
+                    return Response(
+                        {"delivery_radius_km": "Ingresa el radio en kilómetros (ej: 1.5)."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                if not (MIN_DELIVERY_RADIUS_KM <= radius <= MAX_DELIVERY_RADIUS_KM):
+                    return Response(
+                        {"delivery_radius_km": (
+                            f"El radio debe estar entre {float(MIN_DELIVERY_RADIUS_KM):g} y "
+                            f"{float(MAX_DELIVERY_RADIUS_KM):g} km."
+                        )},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                if radius != cfg.delivery_radius_km:
+                    cfg.delivery_radius_km = radius
+                    update_fields.append("delivery_radius_km")
+
             if update_fields:
                 cfg.save(update_fields=update_fields + ["updated_at"])
 
@@ -97,6 +135,7 @@ class OrderViewSet(viewsets.ModelViewSet):
             "customer_ordering_enabled": cfg.customer_ordering_enabled,
             "can_order": cfg.is_open and cfg.customer_ordering_enabled,
             "delivery_fee": str(cfg.delivery_fee),
+            "delivery_radius_km": float(cfg.delivery_radius_km),
             "status_changed_at": cfg.status_changed_at,
         })
 
@@ -1424,11 +1463,13 @@ class CustomerOrderViewSet(mixins.CreateModelMixin,
 
     @action(detail=False, methods=["get"], permission_classes=[AllowAny])
     def config(self, request):
-        """Configuración pública: estado del local, tarifa y disponibilidad de pedidos."""
+        """Configuración pública: estado del local, tarifa, radio y disponibilidad."""
         cfg = StoreSettings.load()
         return Response({
             "is_open": cfg.is_open,
             "customer_ordering_enabled": cfg.customer_ordering_enabled,
             "can_order": cfg.is_open and cfg.customer_ordering_enabled,
             "delivery_fee": str(cfg.delivery_fee),
+            # El checkout dibuja el círculo de cobertura y valida el pin con esto
+            "delivery_radius_km": float(cfg.delivery_radius_km),
         })

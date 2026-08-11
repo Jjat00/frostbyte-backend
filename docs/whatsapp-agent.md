@@ -57,9 +57,11 @@ Cliente WhatsApp
   Especial Frostbyte"). Y nunca vuelca el menú completo al chat (omitiría
   productos): para "qué hay" responde categorías + link a la carta, y solo
   lista completa una categoría concreta si se la piden.
-- **Cobertura (ubicación obligatoria)**: solo se entrega dentro de
-  `DELIVERY_RADIUS_KM` (default 1.5 km) alrededor del local
-  (`DELIVERY_CENTER_LAT/LNG`, compartidos con el checkout web). La ubicación de
+- **Cobertura (ubicación obligatoria)**: solo se entrega dentro del radio
+  configurado en el dashboard (`StoreSettings.delivery_radius_km`, default
+  1.5 km) alrededor del local (`DELIVERY_CENTER_LAT/LNG`, compartidos con el
+  checkout web). El agente lee el valor vigente en cada mensaje, así que
+  cambiarlo desde la UI afecta al instante lo que responde. La ubicación de
   WhatsApp es OBLIGATORIA para crear el pedido: el geocoding por dirección no
   es fiable en Cumbal (las abreviaturas caen en otros municipios y las veredas
   caen al centro del pueblo), así que la única fuente válida es el GPS
@@ -125,7 +127,7 @@ Cliente WhatsApp
 | `WHATSAPP_BATCH_WAIT_SECONDS` | Segundos de silencio del cliente antes de responder; agrupa mensajes seguidos (default 10) |
 | `WHATSAPP_BATCH_MAX_WAIT_SECONDS` | Tope duro de espera desde el primer mensaje sin responder (default 40) |
 | `DELIVERY_CENTER_LAT` / `DELIVERY_CENTER_LNG` | Coordenadas del local, centro de la zona de domicilios (default Cra. 8 #18-13, Cumbal) |
-| `DELIVERY_RADIUS_KM` | Radio máximo de entrega en km (default 1.5); si se cambia, actualizar también `src/lib/deliveryArea.js` del frontend |
+| `DELIVERY_RADIUS_KM` | Solo semilla/respaldo del radio máximo de entrega (default 1.5). El valor vigente lo edita el admin en el dashboard (chip "Radio" en /home) y vive en `StoreSettings.delivery_radius_km` |
 | `OPENAI_API_KEY` | Ya existente (la usa también el generador de imágenes) |
 
 ## Puesta en marcha en Kapso

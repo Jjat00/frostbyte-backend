@@ -1,3 +1,4 @@
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.db.models.signals import post_delete
 from django.dispatch import receiver
@@ -670,10 +671,16 @@ class PageVisit(models.Model):
         self.save(update_fields=["visit_count", "updated_at"])
 
 
+# Límites del radio de domicilios: evitan un 0 (que dejaría fuera al local
+# mismo) y un valor absurdo por un dedazo en la UI.
+MIN_DELIVERY_RADIUS_KM = Decimal("0.10")
+MAX_DELIVERY_RADIUS_KM = Decimal("50.00")
+
+
 class StoreSettings(models.Model):
     """Configuración operativa del local (singleton, editable desde el admin).
 
-    Permite abrir/cerrar el local, ajustar la tarifa de domicilio y
+    Permite abrir/cerrar el local, ajustar la tarifa y el radio de domicilio y
     activar/desactivar los pedidos a domicilio del cliente sin redeploy.
     """
 
@@ -688,6 +695,20 @@ class StoreSettings(models.Model):
         default=Decimal("2000.00"),
         verbose_name="Tarifa de envío",
         help_text="Costo fijo del domicilio que se suma al total del pedido",
+    )
+    delivery_radius_km = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=Decimal("1.50"),
+        validators=[
+            MinValueValidator(MIN_DELIVERY_RADIUS_KM),
+            MaxValueValidator(MAX_DELIVERY_RADIUS_KM),
+        ],
+        verbose_name="Radio de domicilios (km)",
+        help_text=(
+            "Distancia máxima desde el local hasta donde se entrega a domicilio. "
+            "La usan el checkout web, el agente de WhatsApp y el mapa de cobertura."
+        ),
     )
     customer_ordering_enabled = models.BooleanField(
         default=False,
