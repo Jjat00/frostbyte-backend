@@ -1,6 +1,11 @@
 from rest_framework import serializers
 from apps.business.models import Business
-from .models import ExpenseCategory, OperationalExpense, RecurringExpenseTemplate
+from .models import (
+    ExpenseCategory,
+    ExpenseKind,
+    OperationalExpense,
+    RecurringExpenseTemplate,
+)
 
 
 class ExpenseCategorySerializer(serializers.ModelSerializer):
@@ -9,11 +14,13 @@ class ExpenseCategorySerializer(serializers.ModelSerializer):
     total_amount = serializers.DecimalField(
         max_digits=12, decimal_places=2, read_only=True
     )
+    kind_display = serializers.CharField(source='get_kind_display', read_only=True)
 
     class Meta:
         model = ExpenseCategory
         fields = [
             'id', 'name', 'slug', 'description', 'icon', 'color',
+            'kind', 'kind_display',
             'is_recurring_default', 'is_active', 'display_order',
             'expenses_count', 'total_amount', 'created_at', 'updated_at'
         ]
@@ -30,6 +37,7 @@ class OperationalExpenseListSerializer(serializers.ModelSerializer):
     payment_method_display = serializers.CharField(
         source='get_payment_method_display', read_only=True
     )
+    kind_display = serializers.CharField(source='get_kind_display', read_only=True)
     business_name = serializers.CharField(source='business.name', read_only=True)
     created_by_name = serializers.SerializerMethodField()
 
@@ -38,6 +46,7 @@ class OperationalExpenseListSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'expense_number', 'business', 'business_name', 'category', 'category_name',
             'category_icon', 'category_color', 'category_slug',
+            'kind', 'kind_display',
             'description', 'amount', 'expense_date', 'status',
             'status_display', 'payment_method', 'payment_method_display',
             'is_recurring', 'created_by_name', 'created_at'
@@ -64,6 +73,7 @@ class OperationalExpenseDetailSerializer(serializers.ModelSerializer):
     recurrence_period_display = serializers.CharField(
         source='get_recurrence_period_display', read_only=True
     )
+    kind_display = serializers.CharField(source='get_kind_display', read_only=True)
     business_name = serializers.CharField(source='business.name', read_only=True)
     created_by_name = serializers.SerializerMethodField()
 
@@ -109,11 +119,16 @@ class OperationalExpenseCreateSerializer(serializers.ModelSerializer):
         choices=OperationalExpense.RecurrencePeriod.choices,
         required=False
     )
+    kind = serializers.ChoiceField(
+        choices=ExpenseKind.choices,
+        required=False,
+        help_text="Si no se envia, se hereda de la categoria elegida"
+    )
 
     class Meta:
         model = OperationalExpense
         fields = [
-            'business', 'category_id', 'description', 'amount', 'expense_date',
+            'business', 'category_id', 'kind', 'description', 'amount', 'expense_date',
             'status', 'payment_method', 'reference_number', 'receipt_url',
             'notes', 'is_recurring', 'recurrence_period'
         ]
@@ -130,6 +145,10 @@ class OperationalExpenseCreateSerializer(serializers.ModelSerializer):
                 {'business': 'No hay negocio principal configurado; especifica business.'}
             )
         validated_data['business'] = business
+        # Si no se indica el tipo, se hereda de la categoria: las categorias de
+        # inversion (equipos, mobiliario, montaje) crean inversion por defecto.
+        if not validated_data.get('kind'):
+            validated_data['kind'] = validated_data['category'].kind
         # Si se crea con estado 'paid', establecer paid_at automáticamente
         if validated_data.get('status') == OperationalExpense.Status.PAID:
             validated_data['paid_at'] = timezone.now()
@@ -146,6 +165,7 @@ class RecurringExpenseTemplateSerializer(serializers.ModelSerializer):
     )
     created_by_name = serializers.SerializerMethodField()
     business_name = serializers.CharField(source='business.name', read_only=True)
+    kind = serializers.CharField(source='category.kind', read_only=True)
     category_id = serializers.PrimaryKeyRelatedField(
         queryset=ExpenseCategory.objects.filter(is_active=True),
         source='category',

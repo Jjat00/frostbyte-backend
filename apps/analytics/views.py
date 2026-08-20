@@ -11,7 +11,7 @@ from dateutil.relativedelta import relativedelta
 
 from apps.orders.models import Order, OrderItem
 from apps.inventory.models import PurchaseOrder
-from apps.expenses.models import OperationalExpense, ExpenseCategory
+from apps.expenses.models import OperationalExpense, ExpenseCategory, ExpenseKind
 from apps.business.models import Business
 
 
@@ -176,8 +176,9 @@ class FinancialAnalyticsViewSet(viewsets.ViewSet):
             purchases = purchases.filter(business__slug=business_slug)
         return purchases.aggregate(total=Sum('actual_total'))['total'] or Decimal('0')
 
-    def _calculate_operational_expenses(self, start_date, end_date, business_slug=None):
-        """Calcula gastos operativos pagados.
+    def _expenses_qs(self, start_date, end_date, business_slug=None):
+        """Gastos pagados del periodo, sin distinguir tipo.
+
         Usa expense_date para determinar el período del gasto.
         """
         expenses = OperationalExpense.objects.filter(
@@ -187,6 +188,29 @@ class FinancialAnalyticsViewSet(viewsets.ViewSet):
         )
         if business_slug:
             expenses = expenses.filter(business__slug=business_slug)
+        return expenses
+
+    def _calculate_operational_expenses(self, start_date, end_date, business_slug=None):
+        """Calcula el gasto corriente pagado del periodo (OPEX).
+
+        Excluye la inversion a proposito: comprar una nevera o montar un piso
+        consume caja pero no es costo del mes, y meterlo aqui hace ver en
+        perdida un mes rentable.
+        """
+        expenses = self._expenses_qs(start_date, end_date, business_slug).filter(
+            kind=ExpenseKind.OPERATIONAL
+        )
+        return expenses.aggregate(total=Sum('amount'))['total'] or Decimal('0')
+
+    def _calculate_investment(self, start_date, end_date, business_slug=None):
+        """Calcula la inversion pagada del periodo (CAPEX).
+
+        No resta del margen operativo; se reporta aparte para poder leer la
+        caja que quedo despues de invertir.
+        """
+        expenses = self._expenses_qs(start_date, end_date, business_slug).filter(
+            kind=ExpenseKind.INVESTMENT
+        )
         return expenses.aggregate(total=Sum('amount'))['total'] or Decimal('0')
 
     def _calculate_orders_count(self, start_date, end_date, business_slug=None):
@@ -230,8 +254,10 @@ class FinancialAnalyticsViewSet(viewsets.ViewSet):
             revenue = self._calculate_revenue(start, end, business_slug)
             inventory = self._calculate_inventory_expenses(start, end, business_slug)
             operational = self._calculate_operational_expenses(start, end, business_slug)
+            investment = self._calculate_investment(start, end, business_slug)
             total_expenses = inventory + operational
             profit = revenue - total_expenses
+            cash_after_investment = profit - investment
             orders = self._calculate_orders_count(start, end, business_slug)
             avg_ticket = (revenue / orders) if orders > 0 else Decimal('0')
             margin = round((profit / revenue * 100), 1) if revenue > 0 else 0
@@ -239,8 +265,10 @@ class FinancialAnalyticsViewSet(viewsets.ViewSet):
                 'revenue': revenue,
                 'inventory_expenses': inventory,
                 'operational_expenses': operational,
+                'investment': investment,
                 'total_expenses': total_expenses,
                 'net_profit': profit,
+                'cash_after_investment': cash_after_investment,
                 'orders_count': orders,
                 'avg_ticket': avg_ticket,
                 'profit_margin': margin,
@@ -264,7 +292,9 @@ class FinancialAnalyticsViewSet(viewsets.ViewSet):
             'total_expenses': block('total_expenses'),
             'inventory_expenses': block('inventory_expenses'),
             'operational_expenses': block('operational_expenses'),
+            'investment': block('investment'),
             'net_profit': block('net_profit'),
+            'cash_after_investment': block('cash_after_investment'),
             'orders_count': block('orders_count'),
             'avg_ticket': block('avg_ticket'),
             'profit_margin': {
@@ -311,6 +341,7 @@ class FinancialAnalyticsViewSet(viewsets.ViewSet):
             revenue = float(self._calculate_revenue(month_start, month_end, business_slug))
             inventory = float(self._calculate_inventory_expenses(month_start, month_end, business_slug))
             operational = float(self._calculate_operational_expenses(month_start, month_end, business_slug))
+            investment = float(self._calculate_investment(month_start, month_end, business_slug))
             total_expenses = inventory + operational
             profit = revenue - total_expenses
 
@@ -320,8 +351,10 @@ class FinancialAnalyticsViewSet(viewsets.ViewSet):
                 'revenue': revenue,
                 'inventory_expenses': inventory,
                 'operational_expenses': operational,
+                'investment': investment,
                 'total_expenses': total_expenses,
                 'profit': profit,
+                'cash_after_investment': profit - investment,
             })
 
             current_date = next_month
@@ -351,12 +384,22 @@ class FinancialAnalyticsViewSet(viewsets.ViewSet):
         )
         if business_slug:
             operational_qs = operational_qs.filter(business__slug=business_slug)
-        operational_by_category = operational_qs.values(
-            'category__name', 'category__slug', 'category__color', 'category__icon'
-        ).annotate(
-            total=Sum('amount'),
-            count=Count('id')
-        ).order_by('-total')
+        def by_category(qs):
+            return qs.values(
+                'category__name', 'category__slug', 'category__color', 'category__icon'
+            ).annotate(
+                total=Sum('amount'),
+                count=Count('id')
+            ).order_by('-total')
+
+        # El pie de gastos solo muestra gasto corriente: la inversion va aparte
+        # para que los porcentajes no mezclen costo del mes con compra de activos.
+        operational_by_category = by_category(
+            operational_qs.filter(kind=ExpenseKind.OPERATIONAL)
+        )
+        investment_by_category = by_category(
+            operational_qs.filter(kind=ExpenseKind.INVESTMENT)
+        )
 
         # Gastos de inventario
         inventory_total = self._calculate_inventory_expenses(current_start, current_end, business_slug)
@@ -397,9 +440,29 @@ class FinancialAnalyticsViewSet(viewsets.ViewSet):
         for category in categories:
             category['percentage'] = round((category['total'] / total * 100), 1) if total > 0 else 0
 
+        investment_categories = []
+        for item in investment_by_category:
+            investment_categories.append({
+                'name': item['category__name'],
+                'slug': item['category__slug'],
+                'color': item['category__color'],
+                'icon': item['category__icon'],
+                'total': float(item['total']),
+                'count': item['count'],
+                'type': 'investment'
+            })
+        investment_total = sum(c['total'] for c in investment_categories)
+        for category in investment_categories:
+            category['percentage'] = (
+                round((category['total'] / investment_total * 100), 1)
+                if investment_total > 0 else 0
+            )
+
         return Response({
             'categories': categories,
             'total': float(total),
+            'investment_categories': investment_categories,
+            'investment_total': float(investment_total),
             'period': {
                 'start': current_start.isoformat(),
                 'end': current_end.isoformat(),
@@ -429,6 +492,7 @@ class FinancialAnalyticsViewSet(viewsets.ViewSet):
             revenue = float(self._calculate_revenue(day_start, day_end, business_slug))
             inventory = float(self._calculate_inventory_expenses(day_start, day_end, business_slug))
             operational = float(self._calculate_operational_expenses(day_start, day_end, business_slug))
+            investment = float(self._calculate_investment(day_start, day_end, business_slug))
             total_expenses = inventory + operational
             profit = revenue - total_expenses
 
@@ -438,8 +502,10 @@ class FinancialAnalyticsViewSet(viewsets.ViewSet):
                 'revenue': revenue,
                 'inventory_expenses': inventory,
                 'operational_expenses': operational,
+                'investment': investment,
                 'total_expenses': total_expenses,
                 'profit': profit,
+                'cash_after_investment': profit - investment,
             })
 
             current_date += timedelta(days=1)
@@ -468,6 +534,7 @@ class FinancialAnalyticsViewSet(viewsets.ViewSet):
             revenue = float(self._calculate_revenue(start, end, business_slug))
             inventory = float(self._calculate_inventory_expenses(start, end, business_slug))
             operational = float(self._calculate_operational_expenses(start, end, business_slug))
+            investment = float(self._calculate_investment(start, end, business_slug))
             expenses = inventory + operational
             profit = revenue - expenses
             return {
@@ -476,7 +543,9 @@ class FinancialAnalyticsViewSet(viewsets.ViewSet):
                 'expenses': expenses,
                 'inventory_expenses': inventory,
                 'operational_expenses': operational,
+                'investment': investment,
                 'profit': profit,
+                'cash_after_investment': profit - investment,
             }
 
         current = month_block(current_start, current_end)
@@ -494,6 +563,7 @@ class FinancialAnalyticsViewSet(viewsets.ViewSet):
                 'revenue_yoy': self._calculate_percentage_change(current['revenue'], year_ago['revenue']),
                 'expenses_yoy': self._calculate_percentage_change(current['expenses'], year_ago['expenses']),
                 'profit_yoy': self._calculate_percentage_change(current['profit'], year_ago['profit']),
+                'investment': self._calculate_percentage_change(current['investment'], previous['investment']),
             }
         })
 
@@ -522,6 +592,7 @@ class FinancialAnalyticsViewSet(viewsets.ViewSet):
             revenue = float(self._calculate_revenue(current_start, current_end, business_slug))
             inventory = float(self._calculate_inventory_expenses(current_start, current_end, business_slug))
             operational = float(self._calculate_operational_expenses(current_start, current_end, business_slug))
+            investment = float(self._calculate_investment(current_start, current_end, business_slug))
             expenses = inventory + operational
             profit = revenue - expenses
             margin = round((profit / revenue * 100), 1) if revenue > 0 else 0
@@ -529,9 +600,11 @@ class FinancialAnalyticsViewSet(viewsets.ViewSet):
                 'revenue': revenue,
                 'inventory_expenses': inventory,
                 'operational_expenses': operational,
+                'investment': investment,
                 'total_expenses': expenses,
                 'profit': profit,
                 'profit_margin': margin,
+                'cash_after_investment': profit - investment,
             }
 
         businesses = []

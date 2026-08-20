@@ -4,6 +4,19 @@ from django.conf import settings
 from apps.business.models import Business
 
 
+class ExpenseKind(models.TextChoices):
+    """Separa el gasto corriente (OPEX) de la inversion (CAPEX).
+
+    El gasto operativo consume caja del mes y resta del margen. La inversion
+    tambien consume caja, pero compra algo que dura (una nevera, el montaje de
+    un piso): no es costo del mes, y meterla en el margen hace ver en perdida
+    un mes que fue rentable.
+    """
+
+    OPERATIONAL = 'operational', 'Gasto operativo'
+    INVESTMENT = 'investment', 'Inversion'
+
+
 class ExpenseCategory(models.Model):
     """Categorias de gastos operativos"""
 
@@ -21,6 +34,13 @@ class ExpenseCategory(models.Model):
         default='gray',
         verbose_name="Color",
         help_text="Color para UI (ej: blue, green, red)"
+    )
+    kind = models.CharField(
+        max_length=20,
+        choices=ExpenseKind.choices,
+        default=ExpenseKind.OPERATIONAL,
+        verbose_name="Tipo",
+        help_text="Tipo por defecto de los gastos de esta categoria: gasto corriente o inversion"
     )
     is_recurring_default = models.BooleanField(
         default=False,
@@ -90,6 +110,13 @@ class OperationalExpense(models.Model):
         on_delete=models.PROTECT,
         related_name='expenses',
         verbose_name="Categoria"
+    )
+    kind = models.CharField(
+        max_length=20,
+        choices=ExpenseKind.choices,
+        default=ExpenseKind.OPERATIONAL,
+        verbose_name="Tipo",
+        help_text="Gasto corriente (resta del margen) o inversion (compra algo que dura)"
     )
     description = models.CharField(
         max_length=500,
@@ -175,10 +202,15 @@ class OperationalExpense(models.Model):
             models.Index(fields=['status']),
             models.Index(fields=['category']),
             models.Index(fields=['business', '-expense_date'], name='expenses_op_business_idx'),
+            models.Index(fields=['kind', 'expense_date'], name='expenses_op_kind_idx'),
         ]
 
     def __str__(self):
         return f"{self.expense_number} - {self.description} (${self.amount})"
+
+    @property
+    def is_investment(self):
+        return self.kind == ExpenseKind.INVESTMENT
 
     def save(self, *args, **kwargs):
         if not self.expense_number:
@@ -300,6 +332,7 @@ class RecurringExpenseTemplate(models.Model):
         expense = OperationalExpense.objects.create(
             business=self.business,
             category=self.category,
+            kind=self.category.kind,
             description=self.description,
             amount=self.amount,
             expense_date=expense_date,

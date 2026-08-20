@@ -6,7 +6,12 @@ from django.db.models import Sum, Count, Q
 from django.utils import timezone
 from datetime import timedelta
 
-from .models import ExpenseCategory, OperationalExpense, RecurringExpenseTemplate
+from .models import (
+    ExpenseCategory,
+    ExpenseKind,
+    OperationalExpense,
+    RecurringExpenseTemplate,
+)
 from .serializers import (
     ExpenseCategorySerializer,
     OperationalExpenseListSerializer,
@@ -40,6 +45,10 @@ class ExpenseCategoryViewSet(viewsets.ModelViewSet):
             expenses_count=Count('expenses', filter=count_filter),
             total_amount=Sum('expenses__amount', filter=paid_filter)
         )
+        # Filtrar por tipo (operational / investment) para los selectores del front
+        kind = self.request.query_params.get('kind')
+        if kind in dict(ExpenseKind.choices):
+            queryset = queryset.filter(kind=kind)
         return queryset
 
     def destroy(self, request, *args, **kwargs):
@@ -77,6 +86,11 @@ class OperationalExpenseViewSet(viewsets.ModelViewSet):
         category = self.request.query_params.get('category')
         if category:
             queryset = queryset.filter(category__slug=category)
+
+        # Filtrar por tipo: gasto corriente o inversion
+        kind = self.request.query_params.get('kind')
+        if kind in dict(ExpenseKind.choices):
+            queryset = queryset.filter(kind=kind)
 
         # Filtrar por estado
         status_filter = self.request.query_params.get('status')
@@ -157,9 +171,19 @@ class OperationalExpenseViewSet(viewsets.ModelViewSet):
             total=Sum('amount')
         )['total'] or 0
 
+        # Separar gasto corriente de inversion: solo el primero resta del margen
+        paid_qs = expenses.filter(status='paid')
+        total_operational = paid_qs.filter(
+            kind=ExpenseKind.OPERATIONAL
+        ).aggregate(total=Sum('amount'))['total'] or 0
+        total_investment = paid_qs.filter(
+            kind=ExpenseKind.INVESTMENT
+        ).aggregate(total=Sum('amount'))['total'] or 0
+
         # Por categoria
         by_category = expenses.filter(status='paid').values(
-            'category__name', 'category__slug', 'category__color', 'category__icon'
+            'category__name', 'category__slug', 'category__color', 'category__icon',
+            'category__kind'
         ).annotate(
             total=Sum('amount'),
             count=Count('id')
@@ -188,6 +212,9 @@ class OperationalExpenseViewSet(viewsets.ModelViewSet):
             'period': request.query_params.get('start_date', 'month'),
             'total_paid': str(total_paid),
             'total_pending': str(total_pending),
+            'total_operational': str(total_operational),
+            'total_investment': str(total_investment),
+            'investment_count': paid_qs.filter(kind=ExpenseKind.INVESTMENT).count(),
             'expenses_count': expenses.count(),
             'paid_count': expenses.filter(status='paid').count(),
             'pending_count': expenses.filter(status='pending').count(),
