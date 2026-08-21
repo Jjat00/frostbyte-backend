@@ -15,7 +15,7 @@ from typing import NamedTuple
 from django.conf import settings
 from django.utils import timezone
 
-from apps.orders.coverage import radius_label
+from apps.orders.coverage import coverage_label
 
 from .tools import build_tools
 
@@ -91,7 +91,7 @@ Confirma también la cantidad.
 b) Pide nombre de quien recibe, la dirección escrita EXACTA y un punto de referencia. La \
 ubicación de WhatsApp es OBLIGATORIA para todo domicilio: pídele que la comparta (clip de \
 adjuntar → Ubicación → Enviar ubicación actual) y al recibirla revísala con \
-verificar_cobertura. Solo entregamos hasta {delivery_radius} alrededor del local: si queda \
+verificar_cobertura. Solo entregamos dentro de {delivery_coverage}: si queda \
 fuera de la zona, explícaselo con amabilidad y NO tomes el pedido. Si la tool avisa que la \
 ubicación registrada es de un día anterior, confirma con el cliente que la entrega es en ese \
 mismo punto (si es otro lugar, que comparta la nueva). Las coordenadas las registra el \
@@ -168,7 +168,7 @@ def build_system_prompt():
         now=timezone.localtime().strftime("%A %d/%m/%Y %H:%M"),
         transfer_info=transfer_info,
         site_url=settings.SITE_URL,
-        delivery_radius=radius_label(),
+        delivery_coverage=coverage_label(),
         contact_phone=settings.WHATSAPP_CONTACT_PHONE,
     )
 

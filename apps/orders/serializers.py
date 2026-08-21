@@ -2,7 +2,7 @@ from rest_framework import serializers
 from decimal import Decimal
 
 from apps.products.models import ProductVariant
-from .coverage import is_within_delivery_area, radius_label
+from .coverage import coverage_label, is_within_delivery_area
 from .models import Order, OrderItem, Table
 
 
@@ -577,7 +577,7 @@ class CustomerOrderCreateSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({
                 "delivery_lat": (
                     "Tu ubicación está fuera de nuestra zona de domicilios "
-                    f"({radius_label()} alrededor del local)."
+                    f"({coverage_label()})."
                 )
             })
         return attrs

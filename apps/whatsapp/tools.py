@@ -13,7 +13,7 @@ from django.utils import timezone
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 
-from apps.orders.coverage import is_within_delivery_area, radius_label
+from apps.orders.coverage import coverage_label, is_within_delivery_area
 from apps.orders.models import Order, OrderItem, StoreSettings
 from apps.products.models import Category, Product, ProductVariant
 
@@ -339,7 +339,7 @@ def build_tools(contact):
         if not is_within_delivery_area(contact.last_location_lat, contact.last_location_lng):
             return (
                 f"ERROR: la ubicación del cliente está FUERA de la zona de domicilios "
-                f"({radius_label()} alrededor del local). NO crees el pedido: explícale "
+                f"({coverage_label()}). NO crees el pedido: explícale "
                 "con amabilidad que por ahora no llegamos hasta allá."
             )
 
@@ -572,8 +572,8 @@ def build_tools(contact):
             )
         else:
             lines.append(
-                f"FUERA de la zona de domicilios ({radius_label()} alrededor del "
-                "local): NO se puede hacer el domicilio a esa ubicación. Explícalo "
+                f"FUERA de la zona de domicilios ({coverage_label()}): NO se "
+                "puede hacer el domicilio a esa ubicación. Explícalo "
                 "con amabilidad y no tomes el pedido; si el cliente comparte otra "
                 "ubicación que sí esté dentro, se puede."
             )

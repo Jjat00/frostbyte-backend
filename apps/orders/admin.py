@@ -158,7 +158,16 @@ class StoreSettingsAdmin(admin.ModelAdmin):
     fieldsets = (
         ("Estado del local", {"fields": ("is_open", "status_changed_at", "status_changed_by")}),
         ("Domicilio", {
-            "fields": ("delivery_fee", "delivery_radius_km", "customer_ordering_enabled"),
+            "fields": (
+                "delivery_fee",
+                "delivery_radius_km",
+                "delivery_area",
+                "customer_ordering_enabled",
+            ),
+            "description": (
+                "La zona se dibuja desde el dashboard; el JSON de aquí es para "
+                "emergencias. Con la zona vacía manda el radio."
+            ),
         }),
         ("Metadatos", {"fields": ("updated_at",)}),
     )

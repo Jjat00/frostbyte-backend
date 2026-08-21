@@ -57,11 +57,13 @@ Cliente WhatsApp
   Especial Frostbyte"). Y nunca vuelca el menú completo al chat (omitiría
   productos): para "qué hay" responde categorías + link a la carta, y solo
   lista completa una categoría concreta si se la piden.
-- **Cobertura (ubicación obligatoria)**: solo se entrega dentro del radio
-  configurado en el dashboard (`StoreSettings.delivery_radius_km`, default
-  1.5 km) alrededor del local (`DELIVERY_CENTER_LAT/LNG`, compartidos con el
-  checkout web). El agente lee el valor vigente en cada mensaje, así que
-  cambiarlo desde la UI afecta al instante lo que responde. La ubicación de
+- **Cobertura (ubicación obligatoria)**: solo se entrega dentro de la zona
+  configurada en el dashboard. Si hay un polígono dibujado
+  (`StoreSettings.delivery_area`) manda él; si no, el círculo de
+  `StoreSettings.delivery_radius_km` (default 1.5 km) alrededor del local
+  (`DELIVERY_CENTER_LAT/LNG`, compartidos con el checkout web). El agente lee
+  la zona vigente en cada mensaje, así que cambiarla desde la UI afecta al
+  instante lo que responde. La ubicación de
   WhatsApp es OBLIGATORIA para crear el pedido: el geocoding por dirección no
   es fiable en Cumbal (las abreviaturas caen en otros municipios y las veredas
   caen al centro del pueblo), así que la única fuente válida es el GPS

@@ -21,6 +21,7 @@ from .models import (
     MAX_DELIVERY_RADIUS_KM,
 )
 from .consumers import broadcast_orders_update
+from .coverage import clean_delivery_area
 from .serializers import (
     OrderListSerializer,
     OrderDetailSerializer,
@@ -99,14 +100,16 @@ class OrderViewSet(viewsets.ModelViewSet):
                 cfg.customer_ordering_enabled = bool(request.data.get("customer_ordering_enabled"))
                 update_fields.append("customer_ordering_enabled")
 
-            if "delivery_radius_km" in request.data:
-                # El radio define hasta dónde vendemos: decisión de negocio,
-                # reservada al admin.
+            # La zona define hasta dónde vendemos: decisión de negocio,
+            # reservada al admin, se exprese como radio o como polígono.
+            if {"delivery_radius_km", "delivery_area"} & set(request.data):
                 if not request.user.is_admin:
                     return Response(
-                        {"detail": "Solo un administrador puede cambiar el radio de domicilios."},
+                        {"detail": "Solo un administrador puede cambiar la zona de domicilios."},
                         status=status.HTTP_403_FORBIDDEN,
                     )
+
+            if "delivery_radius_km" in request.data:
                 try:
                     radius = Decimal(str(request.data.get("delivery_radius_km"))).quantize(
                         Decimal("0.01"))
@@ -127,6 +130,19 @@ class OrderViewSet(viewsets.ModelViewSet):
                     cfg.delivery_radius_km = radius
                     update_fields.append("delivery_radius_km")
 
+            if "delivery_area" in request.data:
+                # Lista vacía = borrar el polígono y volver al círculo
+                try:
+                    area = clean_delivery_area(request.data.get("delivery_area"))
+                except ValueError as exc:
+                    return Response(
+                        {"delivery_area": str(exc)},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                if area != cfg.delivery_area:
+                    cfg.delivery_area = area
+                    update_fields.append("delivery_area")
+
             if update_fields:
                 cfg.save(update_fields=update_fields + ["updated_at"])
 
@@ -136,6 +152,7 @@ class OrderViewSet(viewsets.ModelViewSet):
             "can_order": cfg.is_open and cfg.customer_ordering_enabled,
             "delivery_fee": str(cfg.delivery_fee),
             "delivery_radius_km": float(cfg.delivery_radius_km),
+            "delivery_area": cfg.delivery_area or [],
             "status_changed_at": cfg.status_changed_at,
         })
 
@@ -1463,13 +1480,15 @@ class CustomerOrderViewSet(mixins.CreateModelMixin,
 
     @action(detail=False, methods=["get"], permission_classes=[AllowAny])
     def config(self, request):
-        """Configuración pública: estado del local, tarifa, radio y disponibilidad."""
+        """Configuración pública: estado del local, tarifa, zona y disponibilidad."""
         cfg = StoreSettings.load()
         return Response({
             "is_open": cfg.is_open,
             "customer_ordering_enabled": cfg.customer_ordering_enabled,
             "can_order": cfg.is_open and cfg.customer_ordering_enabled,
             "delivery_fee": str(cfg.delivery_fee),
-            # El checkout dibuja el círculo de cobertura y valida el pin con esto
+            # Con esto el checkout dibuja la zona y valida el pin: si hay
+            # polígono manda él, y si viene vacío se usa el círculo.
             "delivery_radius_km": float(cfg.delivery_radius_km),
+            "delivery_area": cfg.delivery_area or [],
         })

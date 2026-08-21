@@ -707,7 +707,17 @@ class StoreSettings(models.Model):
         verbose_name="Radio de domicilios (km)",
         help_text=(
             "Distancia máxima desde el local hasta donde se entrega a domicilio. "
-            "La usan el checkout web, el agente de WhatsApp y el mapa de cobertura."
+            "Solo se usa mientras no haya una zona dibujada en el mapa."
+        ),
+    )
+    delivery_area = models.JSONField(
+        default=list,
+        blank=True,
+        verbose_name="Zona de domicilios (polígono)",
+        help_text=(
+            "Figuras dibujadas en el mapa: lista de polígonos, cada uno una lista "
+            "de puntos [longitud, latitud]. Si tiene contenido, manda sobre el "
+            "radio; vacío ([]) vuelve al círculo. Se edita desde el dashboard."
         ),
     )
     customer_ordering_enabled = models.BooleanField(
