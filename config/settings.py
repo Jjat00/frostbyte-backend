@@ -141,8 +141,14 @@ DB_STATEMENT_TIMEOUT_MS = int(os.getenv('DB_STATEMENT_TIMEOUT_MS', '30000'))
 DB_LOCK_TIMEOUT_MS = int(os.getenv('DB_LOCK_TIMEOUT_MS', '5000'))
 DB_IDLE_TX_TIMEOUT_MS = int(os.getenv('DB_IDLE_TX_TIMEOUT_MS', '60000'))
 
+# El techo para conectar es mas holgado en los comandos: 'migrate' corre al
+# arrancar el contenedor, cuando la red privada de Railway todavia puede estar
+# levantandose, y un deploy que falla por eso seria un error nuevo, nuestro.
+DB_CONNECT_TIMEOUT = int(os.getenv(
+    'DB_CONNECT_TIMEOUT', '20' if _IS_MANAGEMENT_COMMAND else '5'))
+
 _db_options = DATABASES['default'].setdefault('OPTIONS', {})
-_db_options.setdefault('connect_timeout', 5)
+_db_options.setdefault('connect_timeout', DB_CONNECT_TIMEOUT)
 
 if not _IS_MANAGEMENT_COMMAND:
     _pg_flags = []
