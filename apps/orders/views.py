@@ -6,6 +6,7 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.throttling import UserRateThrottle
 from apps.accounts.permissions import IsAdminUser, IsStaffMember
 from decimal import Decimal, InvalidOperation
+from django.db import transaction
 from django.db.models import Sum, Count, Q
 from django.db.models.functions import TruncDate, ExtractHour, ExtractWeekDay
 from django.utils import timezone
@@ -267,24 +268,28 @@ class OrderViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Marcar todos los items pendientes como pagados usando update directo
+        # Las dos escrituras van en una transacción: si el request muere en
+        # medio (timeout, daphne matando la conexión), no puede quedar el
+        # pedido con los items pagados y la orden marcada como no pagada.
         from django.utils import timezone
-        OrderItem.objects.filter(order_id=order.pk, is_paid=False).update(
-            is_paid=True,
-            payment_method=payment_method,
-            paid_at=timezone.now()
-        )
+        with transaction.atomic():
+            # Marcar todos los items pendientes como pagados usando update directo
+            OrderItem.objects.filter(order_id=order.pk, is_paid=False).update(
+                is_paid=True,
+                payment_method=payment_method,
+                paid_at=timezone.now()
+            )
 
-        # Verificar si todos los items están pagados
-        unpaid_count = OrderItem.objects.filter(
-            order_id=order.pk, is_paid=False).count()
-        all_paid = (unpaid_count == 0)
+            # Verificar si todos los items están pagados
+            unpaid_count = OrderItem.objects.filter(
+                order_id=order.pk, is_paid=False).count()
+            all_paid = (unpaid_count == 0)
 
-        # Actualizar estado de pago del pedido
-        Order.objects.filter(pk=order.pk).update(
-            is_paid=all_paid,
-            payment_method=payment_method if payment_method else order.payment_method
-        )
+            # Actualizar estado de pago del pedido
+            Order.objects.filter(pk=order.pk).update(
+                is_paid=all_paid,
+                payment_method=payment_method if payment_method else order.payment_method
+            )
 
         # Re-obtener el order para la respuesta
         order = Order.objects.prefetch_related(
@@ -321,37 +326,39 @@ class OrderViewSet(viewsets.ModelViewSet):
             notes = serializer.validated_data.get("notes", "")
             unit_price = product_variant.price or 0
 
-            # Crear items individuales (cada uno con quantity=1) para permitir pagos separados
-            # Si quantity > 1, se crean múltiples items independientes
-            for _ in range(quantity):
-                OrderItem.objects.create(
-                    order_id=order.pk,
-                    product_variant=product_variant,
-                    quantity=1,  # Siempre 1 para que cada item sea independiente
-                    unit_price=unit_price,
-                    subtotal=unit_price,  # Subtotal de un solo item
-                    notes=notes,
-                    is_paid=False,  # El nuevo item no está pagado
+            # Items y totales van juntos: un pedido con items nuevos y el
+            # total viejo cobra de menos.
+            with transaction.atomic():
+                # Crear items individuales (cada uno con quantity=1) para permitir pagos separados
+                # Si quantity > 1, se crean múltiples items independientes
+                for _ in range(quantity):
+                    OrderItem.objects.create(
+                        order_id=order.pk,
+                        product_variant=product_variant,
+                        quantity=1,  # Siempre 1 para que cada item sea independiente
+                        unit_price=unit_price,
+                        subtotal=unit_price,  # Subtotal de un solo item
+                        notes=notes,
+                        is_paid=False,  # El nuevo item no está pagado
+                    )
+
+                # Recalcular totales directamente en la BD
+                items_total = OrderItem.objects.filter(order_id=order.pk).aggregate(
+                    total=Sum('subtotal')
+                )['total'] or 0
+
+                # El pedido ya no está completamente pagado porque hay un item nuevo sin pagar
+                # Si el pedido estaba entregado, vuelve a pendiente para preparar el nuevo item
+                new_status = order.status
+                if order.status == Order.Status.DELIVERED:
+                    new_status = Order.Status.PENDING
+
+                Order.objects.filter(pk=order.pk).update(
+                    subtotal=items_total,
+                    total=items_total - order.discount,
+                    is_paid=False,  # Ya no está completamente pagado
+                    status=new_status,
                 )
-
-            # Recalcular totales directamente en la BD
-            from django.db.models import Sum
-            items_total = OrderItem.objects.filter(order_id=order.pk).aggregate(
-                total=Sum('subtotal')
-            )['total'] or 0
-
-            # El pedido ya no está completamente pagado porque hay un item nuevo sin pagar
-            # Si el pedido estaba entregado, vuelve a pendiente para preparar el nuevo item
-            new_status = order.status
-            if order.status == Order.Status.DELIVERED:
-                new_status = Order.Status.PENDING
-
-            Order.objects.filter(pk=order.pk).update(
-                subtotal=items_total,
-                total=items_total - order.discount,
-                is_paid=False,  # Ya no está completamente pagado
-                status=new_status,
-            )
 
             # Re-obtener el order completo para la respuesta
             order = Order.objects.prefetch_related(
@@ -1071,11 +1078,12 @@ class OrderItemViewSet(viewsets.ModelViewSet):
         if serializer.is_valid():
             payment_method = serializer.validated_data.get(
                 "payment_method", "")
-            item.mark_as_paid(payment_method)
+            with transaction.atomic():
+                item.mark_as_paid(payment_method)
 
-            # Actualizar estado de pago del pedido
-            order = item.order
-            order.update_payment_status()
+                # Actualizar estado de pago del pedido
+                order = item.order
+                order.update_payment_status()
 
             # Refrescar el item desde la base de datos
             item.refresh_from_db()
@@ -1091,13 +1099,14 @@ class OrderItemViewSet(viewsets.ModelViewSet):
         item = self.get_object()
         order = item.order
 
-        item.is_paid = False
-        item.payment_method = ""
-        item.paid_at = None
-        item.save(update_fields=["is_paid", "payment_method", "paid_at"])
+        with transaction.atomic():
+            item.is_paid = False
+            item.payment_method = ""
+            item.paid_at = None
+            item.save(update_fields=["is_paid", "payment_method", "paid_at"])
 
-        # Actualizar estado de pago del pedido (ya no está todo pagado)
-        Order.objects.filter(pk=order.pk).update(is_paid=False)
+            # Actualizar estado de pago del pedido (ya no está todo pagado)
+            Order.objects.filter(pk=order.pk).update(is_paid=False)
 
         broadcast_orders_update()
         return Response(OrderItemSerializer(item).data)
@@ -1111,10 +1120,11 @@ class OrderItemViewSet(viewsets.ModelViewSet):
         if serializer.is_valid():
             payment_method = serializer.validated_data.get(
                 "payment_method", "")
-            item.change_payment_method(payment_method)
+            with transaction.atomic():
+                item.change_payment_method(payment_method)
 
-            # Actualizar estado de pago del pedido
-            item.order.update_payment_status()
+                # Actualizar estado de pago del pedido
+                item.order.update_payment_status()
 
             broadcast_orders_update()
             return Response(OrderItemSerializer(item).data)
@@ -1125,10 +1135,11 @@ class OrderItemViewSet(viewsets.ModelViewSet):
     def mark_delivered(self, request, pk=None):
         """Marcar un item como entregado"""
         item = self.get_object()
-        item.mark_as_delivered()
+        with transaction.atomic():
+            item.mark_as_delivered()
 
-        # Actualizar estado de entrega del pedido
-        item.order.update_delivery_status()
+            # Actualizar estado de entrega del pedido
+            item.order.update_delivery_status()
 
         broadcast_orders_update()
         return Response(OrderItemSerializer(item).data)
@@ -1139,14 +1150,15 @@ class OrderItemViewSet(viewsets.ModelViewSet):
         item = self.get_object()
         order = item.order
 
-        item.unmark_as_delivered()
+        with transaction.atomic():
+            item.unmark_as_delivered()
 
-        # Si el pedido estaba entregado, volver a preparando
-        if order.status == Order.Status.DELIVERED:
-            Order.objects.filter(pk=order.pk).update(
-                status=Order.Status.PREPARING,
-                completed_at=None
-            )
+            # Si el pedido estaba entregado, volver a preparando
+            if order.status == Order.Status.DELIVERED:
+                Order.objects.filter(pk=order.pk).update(
+                    status=Order.Status.PREPARING,
+                    completed_at=None
+                )
 
         broadcast_orders_update()
         return Response(OrderItemSerializer(item).data)
@@ -1168,11 +1180,12 @@ class OrderItemViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        item.prep_status = new_status
-        item.save(update_fields=["prep_status"])
+        with transaction.atomic():
+            item.prep_status = new_status
+            item.save(update_fields=["prep_status"])
 
-        # Recalcular el estado del pedido según el avance de las cocinas.
-        item.order.sync_status_from_items()
+            # Recalcular el estado del pedido según el avance de las cocinas.
+            item.order.sync_status_from_items()
 
         broadcast_orders_update()
         return Response(OrderItemSerializer(item).data)

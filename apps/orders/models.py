@@ -1,5 +1,5 @@
 from django.core.validators import MaxValueValidator, MinValueValidator
-from django.db import models
+from django.db import models, transaction
 from django.db.models.signals import post_delete
 from django.dispatch import receiver
 from django.utils import timezone
@@ -323,15 +323,18 @@ class Order(models.Model):
 
     def mark_as_delivered(self):
         """Marcar pedido como entregado"""
-        self.status = self.Status.DELIVERED
-        self.completed_at = timezone.now()
-        self.save(update_fields=["status", "completed_at", "updated_at"])
-        
-        # Marcar todos los items como entregados
-        OrderItem.objects.filter(order_id=self.pk, is_delivered=False).update(
-            is_delivered=True,
-            delivered_at=timezone.now()
-        )
+        # Pedido e items se marcan juntos: si solo pasa la primera escritura,
+        # el KDS muestra un pedido entregado con items sin entregar.
+        with transaction.atomic():
+            self.status = self.Status.DELIVERED
+            self.completed_at = timezone.now()
+            self.save(update_fields=["status", "completed_at", "updated_at"])
+
+            # Marcar todos los items como entregados
+            OrderItem.objects.filter(order_id=self.pk, is_delivered=False).update(
+                is_delivered=True,
+                delivered_at=timezone.now()
+            )
 
     def mark_as_cancelled(self):
         """Cancelar pedido"""
@@ -623,10 +626,11 @@ class OrderItem(models.Model):
 def recalculate_order_totals_on_item_delete(sender, instance, **kwargs):
     """Recalcular totales del pedido cuando se elimina un item"""
     try:
-        order = instance.order
-        order.calculate_totals()
-        order.save(update_fields=["subtotal", "total", "updated_at"])
-        order.update_payment_status()
+        with transaction.atomic():
+            order = instance.order
+            order.calculate_totals()
+            order.save(update_fields=["subtotal", "total", "updated_at"])
+            order.update_payment_status()
     except Order.DoesNotExist:
         pass
 

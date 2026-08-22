@@ -37,11 +37,6 @@ class ReservationsConsumer(AsyncWebsocketConsumer):
 
 def broadcast_reservations_update():
     """Helper para enviar notificación de cambio desde las vistas"""
-    from channels.layers import get_channel_layer
-    from asgiref.sync import async_to_sync
+    from apps.realtime import broadcast
 
-    channel_layer = get_channel_layer()
-    async_to_sync(channel_layer.group_send)(
-        ReservationsConsumer.GROUP_NAME,
-        {'type': 'reservations_changed'}
-    )
+    broadcast(ReservationsConsumer.GROUP_NAME, {'type': 'reservations_changed'})

@@ -166,42 +166,33 @@ class YouTubeConsumer(AsyncWebsocketConsumer):
 
 def broadcast_youtube_update():
     """Helper para enviar notificacion de cambio desde las vistas"""
-    from channels.layers import get_channel_layer
-    from asgiref.sync import async_to_sync
+    from apps.realtime import broadcast
 
-    channel_layer = get_channel_layer()
-    async_to_sync(channel_layer.group_send)(
-        YouTubeConsumer.GROUP_NAME,
-        {'type': 'youtube_changed'}
-    )
+    broadcast(YouTubeConsumer.GROUP_NAME, {'type': 'youtube_changed'})
 
 
 def broadcast_youtube_play(video_id, title=""):
     """Enviar comando para reproducir un video especifico en la pantalla TV"""
-    from channels.layers import get_channel_layer
-    from asgiref.sync import async_to_sync
+    from apps.realtime import broadcast
 
-    channel_layer = get_channel_layer()
-    async_to_sync(channel_layer.group_send)(
+    broadcast(
         YouTubeConsumer.GROUP_NAME,
         {
             'type': 'youtube_play',
             'video_id': video_id,
             'title': title,
-        }
+        },
     )
 
 
 def broadcast_youtube_control(action):
     """Enviar comando de control (pause, resume, skip) a la pantalla TV"""
-    from channels.layers import get_channel_layer
-    from asgiref.sync import async_to_sync
+    from apps.realtime import broadcast
 
-    channel_layer = get_channel_layer()
-    async_to_sync(channel_layer.group_send)(
+    broadcast(
         YouTubeConsumer.GROUP_NAME,
         {
             'type': 'youtube_control',
             'action': action,
-        }
+        },
     )

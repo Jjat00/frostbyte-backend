@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 from pathlib import Path
 from datetime import timedelta
 import os
+import sys
 import dj_database_url
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -119,6 +120,45 @@ DATABASES['default']['ENGINE'] = 'django.db.backends.postgresql'
 
 CONN_HEALTH_CHECKS = True
 
+# Techos de espera contra la base. Sin ellos, una consulta que se traba deja
+# el request colgado hasta que daphne lo mata ("took too long to shut down"),
+# el cajero ve la app congelada y no hay ningun error que mirar. Con techo,
+# la operacion falla rapido, con excepcion, y el front puede reintentar.
+#
+#   lock_timeout      un pedido bloqueado por otra transaccion no espera mas
+#                     que esto (marcar pagado dos veces a la vez, por ejemplo)
+#   statement_timeout tope duro por consulta
+#   idle_in_transaction_session_timeout
+#                     una transaccion abierta y olvidada suelta sus locks sola
+#
+# Solo aplican al proceso web: los comandos de manage.py (migrate, seeds, el
+# cron de la polla) hacen consultas legitimamente largas y quedan exentos.
+# Ojo: esto NO cubre un disco lento en el commit -el fsync del WAL no se puede
+# interrumpir desde el cliente-, cubre esperas por lock y consultas pesadas.
+_IS_MANAGEMENT_COMMAND = os.path.basename(sys.argv[0] or '') == 'manage.py'
+
+DB_STATEMENT_TIMEOUT_MS = int(os.getenv('DB_STATEMENT_TIMEOUT_MS', '30000'))
+DB_LOCK_TIMEOUT_MS = int(os.getenv('DB_LOCK_TIMEOUT_MS', '5000'))
+DB_IDLE_TX_TIMEOUT_MS = int(os.getenv('DB_IDLE_TX_TIMEOUT_MS', '60000'))
+
+_db_options = DATABASES['default'].setdefault('OPTIONS', {})
+_db_options.setdefault('connect_timeout', 5)
+
+if not _IS_MANAGEMENT_COMMAND:
+    _pg_flags = []
+    if DB_STATEMENT_TIMEOUT_MS > 0:
+        _pg_flags.append(f'-c statement_timeout={DB_STATEMENT_TIMEOUT_MS}')
+    if DB_LOCK_TIMEOUT_MS > 0:
+        _pg_flags.append(f'-c lock_timeout={DB_LOCK_TIMEOUT_MS}')
+    if DB_IDLE_TX_TIMEOUT_MS > 0:
+        _pg_flags.append(
+            f'-c idle_in_transaction_session_timeout={DB_IDLE_TX_TIMEOUT_MS}')
+    if _pg_flags:
+        # Respetar lo que ya venga en la URL de conexion en vez de pisarlo.
+        _existing = _db_options.get('options', '').strip()
+        _db_options['options'] = ' '.join(
+            ([_existing] if _existing else []) + _pg_flags)
+
 
 # Password validation
 # https://docs.djangoproject.com/en/6.0/ref/settings/#auth-password-validators
@@ -201,15 +241,28 @@ ASGI_APPLICATION = 'config.asgi.application'
 # Channel layers (usando in-memory para desarrollo, Redis para producción)
 REDIS_URL = os.getenv('REDIS_URL')
 
+# Techos de espera contra Redis. Sin socket_timeout, una conexion TCP que
+# quedo muerta (la red la corto en silencio) bloquea la lectura hasta que el
+# kernel se rinde: minutos. Eso basta para colgar un request o un consumer.
+REDIS_CONNECT_TIMEOUT = float(os.getenv('REDIS_CONNECT_TIMEOUT', '3'))
+REDIS_SOCKET_TIMEOUT = float(os.getenv('REDIS_SOCKET_TIMEOUT', '5'))
+
 if REDIS_URL:
     # Producción: usar Redis para channel layers
     # Railway provee REDIS_URL como redis://host:port o redis://:password@host:port
-    # channels-redis puede usar la URL directamente
+    # channels-redis acepta un dict por host: 'address' es la URL y el resto
+    # son kwargs del pool de redis-py.
     CHANNEL_LAYERS = {
         'default': {
             'BACKEND': 'channels_redis.core.RedisChannelLayer',
             'CONFIG': {
-                'hosts': [REDIS_URL],
+                'hosts': [{
+                    'address': REDIS_URL,
+                    'socket_connect_timeout': REDIS_CONNECT_TIMEOUT,
+                    'socket_timeout': REDIS_SOCKET_TIMEOUT,
+                    'socket_keepalive': True,
+                    'health_check_interval': 30,
+                }],
             },
         },
     }
@@ -228,6 +281,11 @@ if REDIS_URL:
         'default': {
             'BACKEND': 'django.core.cache.backends.redis.RedisCache',
             'LOCATION': REDIS_URL,
+            'OPTIONS': {
+                'socket_connect_timeout': REDIS_CONNECT_TIMEOUT,
+                'socket_timeout': REDIS_SOCKET_TIMEOUT,
+                'health_check_interval': 30,
+            },
         },
     }
 else:
