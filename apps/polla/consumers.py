@@ -48,11 +48,6 @@ def broadcast_polla_update():
     (en particular, desde el servicio cron que corre ``polla_sync``). Con el
     InMemoryChannelLayer de desarrollo la señal no cruza procesos.
     """
-    from channels.layers import get_channel_layer
-    from asgiref.sync import async_to_sync
+    from apps.realtime import broadcast
 
-    channel_layer = get_channel_layer()
-    async_to_sync(channel_layer.group_send)(
-        PollaConsumer.GROUP_NAME,
-        {'type': 'polla_changed'}
-    )
+    broadcast(PollaConsumer.GROUP_NAME, {'type': 'polla_changed'})

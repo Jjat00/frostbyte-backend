@@ -152,24 +152,17 @@ class GamesAdminConsumer(AsyncWebsocketConsumer):
 
 def broadcast_games_admin_update():
     """Helper para enviar notificación de cambio al panel admin de juegos"""
-    from channels.layers import get_channel_layer
-    from asgiref.sync import async_to_sync
+    from apps.realtime import broadcast
 
-    channel_layer = get_channel_layer()
-    async_to_sync(channel_layer.group_send)(
-        GamesAdminConsumer.GROUP_NAME,
-        {'type': 'games_admin_changed'}
-    )
+    broadcast(GamesAdminConsumer.GROUP_NAME, {'type': 'games_admin_changed'})
 
 
 def broadcast_room_update(room_id):
     """Función helper para enviar actualización desde las vistas"""
-    from channels.layers import get_channel_layer
-    from asgiref.sync import async_to_sync
-    
-    channel_layer = get_channel_layer()
+    from apps.realtime import broadcast
+
     room_group_name = f'game_room_{room_id}'
-    
+
     # Obtener datos actualizados
     try:
         room = GameRoom.objects.select_related("table", "order").prefetch_related(
@@ -181,12 +174,12 @@ def broadcast_room_update(room_id):
         return
     
     # Enviar actualización al grupo
-    async_to_sync(channel_layer.group_send)(
+    broadcast(
         room_group_name,
         {
             'type': 'room_update',
             'data': room_data
-        }
+        },
     )
 
 

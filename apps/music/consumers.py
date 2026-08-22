@@ -45,11 +45,6 @@ def broadcast_music_update(floor=None):
     floor=None significa cambio global (ej. music-settings); los clientes
     lo tratan como relevante para cualquier piso.
     """
-    from channels.layers import get_channel_layer
-    from asgiref.sync import async_to_sync
+    from apps.realtime import broadcast
 
-    channel_layer = get_channel_layer()
-    async_to_sync(channel_layer.group_send)(
-        MusicConsumer.GROUP_NAME,
-        {'type': 'music_changed', 'floor': floor}
-    )
+    broadcast(MusicConsumer.GROUP_NAME, {'type': 'music_changed', 'floor': floor})
