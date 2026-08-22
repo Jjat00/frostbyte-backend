@@ -253,6 +253,18 @@ REDIS_URL = os.getenv('REDIS_URL')
 REDIS_CONNECT_TIMEOUT = float(os.getenv('REDIS_CONNECT_TIMEOUT', '3'))
 REDIS_SOCKET_TIMEOUT = float(os.getenv('REDIS_SOCKET_TIMEOUT', '5'))
 
+# El channel layer necesita un techo MAS ALTO que el del cache, y no es un
+# detalle: channels_redis recibe con BRPOP y espera brpop_timeout (5 s) en cada
+# vuelta del bucle. Si el socket expira en esos mismos 5 s, revienta mientras el
+# BRPOP todavia esta esperando, sin que pase nada malo. Con socket_timeout=5
+# cada consumer moria con TimeoutError cada ~8 s (visto en produccion el
+# 22/08 01:27). Tiene que quedar comodamente por encima de brpop_timeout.
+REDIS_BRPOP_TIMEOUT = 5  # channels_redis.core.RedisChannelLayer.brpop_timeout
+REDIS_CHANNEL_SOCKET_TIMEOUT = max(
+    float(os.getenv('REDIS_CHANNEL_SOCKET_TIMEOUT', '15')),
+    REDIS_BRPOP_TIMEOUT + 5,
+)
+
 if REDIS_URL:
     # Producción: usar Redis para channel layers
     # Railway provee REDIS_URL como redis://host:port o redis://:password@host:port
@@ -265,7 +277,7 @@ if REDIS_URL:
                 'hosts': [{
                     'address': REDIS_URL,
                     'socket_connect_timeout': REDIS_CONNECT_TIMEOUT,
-                    'socket_timeout': REDIS_SOCKET_TIMEOUT,
+                    'socket_timeout': REDIS_CHANNEL_SOCKET_TIMEOUT,
                     'socket_keepalive': True,
                     'health_check_interval': 30,
                 }],
