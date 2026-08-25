@@ -410,3 +410,13 @@ class BusquedaDeProductosTests(TestCase):
 
     def test_la_busqueda_no_cruza_negocios_por_error(self):
         self.assertNotIn("Granizado", self._buscar("salchipapas"))
+
+    def test_un_tamano_suelto_no_identifica_producto(self):
+        """Chat real 2026-08-20: el cliente escribió "1 grande" junto a una foto
+        que no se pudo procesar. Un tamaño no nombra ningún producto: la tool no
+        puede devolver medio menú para que el modelo elija uno al azar."""
+        resultado = self._buscar("1 grande")
+        self.assertIn("Sin coincidencias", resultado)
+
+    def test_el_tamano_sigue_desempatando(self):
+        self.assertIn("Salchipapa Clásica", self._buscar("salchipapa clasica personal"))

@@ -275,24 +275,32 @@ def build_tools(contact):
                 continue
             # el peso dice qué tan directa es la coincidencia: el nombre manda,
             # la categoría permite que "salchipapas" traiga todas las que hay
-            fields = (
+            fuertes = (
                 (_tokens(product.name), 3),
                 (_tokens(product.category.name), 2),
+            )
+            # el tamaño y la descripción solo desempatan: "1 grande" o "personal"
+            # no nombran ningún producto, y por sí solos traerían medio menú
+            debiles = (
                 (_tokens(" ".join(v.name for v in variants)), 1),
                 (_tokens(product.description), 1),
             )
-            score = sum(
-                max(
-                    (
-                        weight
-                        for tokens, weight in fields
-                        if any(_words_match(word, token) for token in tokens)
-                    ),
+            score = 0
+            identificado = False
+            for word in words:
+                peso = max(
+                    (w for tokens, w in fuertes if any(_words_match(word, t) for t in tokens)),
                     default=0,
                 )
-                for word in words
-            )
-            if score:
+                if peso:
+                    identificado = True
+                else:
+                    peso = max(
+                        (w for tokens, w in debiles if any(_words_match(word, t) for t in tokens)),
+                        default=0,
+                    )
+                score += peso
+            if identificado:
                 scored.append((score, product, variants))
 
         if not scored:
