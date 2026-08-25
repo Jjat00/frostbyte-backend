@@ -420,3 +420,116 @@ class BusquedaDeProductosTests(TestCase):
 
     def test_el_tamano_sigue_desempatando(self):
         self.assertIn("Salchipapa Clásica", self._buscar("salchipapa clasica personal"))
+
+
+class PedidoParaRecogerTests(TestCase):
+    """Chat real 2026-08-19: con los domicilios pausados un cliente pidió una
+    salchipapa "apenas esté lista me avisa, ya voy por ella". El agente no tenía
+    cómo tomarlo y la venta se perdió."""
+
+    def setUp(self):
+        from apps.business.models import Business
+        from apps.orders.models import StoreSettings
+        from apps.products.models import Category, Product, ProductVariant
+
+        food, _ = Business.objects.get_or_create(
+            slug="frostbyte-food", defaults={"name": "Frostbyte Food"}
+        )
+        categoria = Category.objects.create(name="Salchipapas", slug="salchipapas", business=food)
+        producto = Product.objects.create(
+            name="Salchipapa con Queso", category=categoria, business=food, description="Con queso"
+        )
+        self.variante = ProductVariant.objects.create(
+            product=producto, name="Personal", sku="SPQ-1", price=18000
+        )
+        self.cfg = StoreSettings.load()
+        self.cfg.is_open = True
+        self.cfg.customer_ordering_enabled = False  # domicilios pausados
+        self.cfg.pickup_enabled = True
+        self.cfg.delivery_fee = 2000
+        self.cfg.save()
+
+        self.contact = WhatsAppContact.objects.create(phone=PHONE)
+        self.tools = {t.name: t for t in build_tools(self.contact)}
+
+    def _crear(self, **kwargs):
+        datos = {
+            "items": [{"variante_id": self.variante.id, "cantidad": 1, "notas": ""}],
+            "nombre_cliente": "Eduardo",
+            "metodo_pago": "cash",
+            "paga_con": "exacto",
+        }
+        datos.update(kwargs)
+        return self.tools["crear_pedido"].invoke(datos)
+
+    def test_con_domicilios_pausados_se_puede_encargar_para_recoger(self):
+        from apps.orders.models import Order
+
+        resultado = self._crear(para_recoger=True)
+        self.assertIn("PEDIDO CREADO", resultado)
+        order = Order.objects.get()
+        self.assertEqual(order.order_type, Order.OrderType.PICKUP)
+        self.assertEqual(order.delivery_fee, 0)
+        self.assertEqual(order.source, Order.Source.WHATSAPP)
+
+    def test_recoger_no_pide_ubicacion_ni_direccion(self):
+        # el contacto no tiene ubicación compartida: a domicilio sería un ERROR
+        self.assertIn("PEDIDO CREADO", self._crear(para_recoger=True))
+        self.assertIn("ERROR", self._crear(direccion="Carrera 11 #21-17"))
+
+    def test_el_domicilio_pausado_sugiere_recoger(self):
+        self.assertIn("PARA RECOGER", self._crear(direccion="Carrera 11 #21-17"))
+
+    def test_recoger_pausado_no_crea_pedido(self):
+        self.cfg.pickup_enabled = False
+        self.cfg.save()
+        self.assertIn("ERROR", self._crear(para_recoger=True))
+
+    def test_el_local_cerrado_manda_sobre_los_dos_canales(self):
+        self.cfg.is_open = False
+        self.cfg.save()
+        self.assertIn("CERRADO", self._crear(para_recoger=True))
+
+    def test_la_cotizacion_de_recoger_no_cobra_envio(self):
+        cotizacion = self.tools["cotizar_pedido"].invoke(
+            {"items": [{"variante_id": self.variante.id, "cantidad": 1}], "para_recoger": True}
+        )
+        self.assertIn("TOTAL: $18.000", cotizacion)
+        self.assertNotIn("Envío:", cotizacion)
+
+    def test_el_estado_avisa_que_se_puede_encargar(self):
+        estado = self.tools["consultar_estado_tienda"].invoke({})
+        self.assertIn("Puedes tomar pedidos A DOMICILIO: NO", estado)
+        self.assertIn("Puedes tomar pedidos PARA RECOGER: sí", estado)
+
+
+class ArchivoDeConversacionTests(TestCase):
+    """La conversación se guarda entera para poder revisar después si hubo venta,
+    incluidos los pedidos que el equipo cierra a mano durante una pausa humana."""
+
+    def test_se_distingue_al_humano_del_agente(self):
+        ChatMessage.remember("wamid.a", PHONE, ChatMessage.Direction.INBOUND, "hay salchipapas?")
+        ChatMessage.remember("wamid.b", PHONE, ChatMessage.Direction.OUTBOUND, "No tenemos")
+        ChatMessage.remember(
+            "wamid.c", PHONE, ChatMessage.Direction.OUTBOUND, "Si, si hay",
+            author=ChatMessage.Author.HUMAN,
+        )
+        autores = dict(ChatMessage.objects.values_list("wamid", "author"))
+        self.assertEqual(autores["wamid.a"], ChatMessage.Author.CUSTOMER)
+        self.assertEqual(autores["wamid.b"], ChatMessage.Author.AGENT)
+        self.assertEqual(autores["wamid.c"], ChatMessage.Author.HUMAN)
+
+    def test_el_archivo_guarda_lo_que_el_agente_leyo_de_verdad(self):
+        ChatMessage.remember(
+            "wamid.img", PHONE, ChatMessage.Direction.INBOUND,
+            "[El cliente envió una imagen que no se pudo procesar]",
+        )
+        ChatMessage.enrich("wamid.img", "[El cliente envió una imagen. Contenido: comprobante por $39.000]")
+        self.assertIn("39.000", ChatMessage.objects.get(wamid="wamid.img").body)
+
+    def test_el_aviso_de_listo_no_dice_va_en_camino_si_es_para_recoger(self):
+        from apps.whatsapp.signals import PICKUP_MESSAGES
+        from apps.orders.models import Order
+
+        self.assertIn("pasar por él", PICKUP_MESSAGES[Order.Status.READY])
+        self.assertNotIn("va en camino", PICKUP_MESSAGES[Order.Status.READY])

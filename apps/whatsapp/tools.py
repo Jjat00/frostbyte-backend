@@ -109,7 +109,10 @@ def _words_match(a, b):
 
 
 def _order_summary(order):
-    lines = [f"Pedido {order.order_number} · estado: {order.get_status_display()}"]
+    lines = [
+        f"Pedido {order.order_number} · {order.get_order_type_display()} · "
+        f"estado: {order.get_status_display()}"
+    ]
     items = order.items.select_related("product_variant__product")
     grouped = {}
     for item in items:
@@ -156,11 +159,21 @@ def build_tools(contact):
         cfg = StoreSettings.load()
         abierto = "ABIERTO" if cfg.is_open else "CERRADO"
         domicilios = "ACTIVOS" if cfg.customer_ordering_enabled else "PAUSADOS"
-        return (
-            f"Local: {abierto}. Domicilios en línea: {domicilios}. "
-            f"Tarifa de envío: {_cop(cfg.delivery_fee)}. "
-            f"Se pueden crear pedidos: {'sí' if (cfg.is_open and cfg.customer_ordering_enabled) else 'NO'}."
-        )
+        recoger = "ACTIVOS" if cfg.pickup_enabled else "PAUSADOS"
+        puede_domicilio = cfg.is_open and cfg.customer_ordering_enabled
+        puede_recoger = cfg.is_open and cfg.pickup_enabled
+        lineas = [
+            f"Local: {abierto}. Domicilios: {domicilios}. Pedidos para recoger: {recoger}.",
+            f"Tarifa de envío: {_cop(cfg.delivery_fee)} (para recoger no se cobra envío).",
+            f"Puedes tomar pedidos A DOMICILIO: {'sí' if puede_domicilio else 'NO'}.",
+            f"Puedes tomar pedidos PARA RECOGER: {'sí' if puede_recoger else 'NO'}.",
+        ]
+        if puede_recoger and not puede_domicilio:
+            lineas.append(
+                "Los domicilios están pausados pero el local SÍ encarga para recoger: "
+                "ofrécelo antes de despedir a nadie."
+            )
+        return " ".join(lineas)
 
     @tool
     def consultar_menu() -> str:
@@ -384,7 +397,9 @@ def build_tools(contact):
         return "\n".join(lines)
 
     @tool
-    def cotizar_pedido(items: list[ItemPedido], paga_con: str = "") -> str:
+    def cotizar_pedido(
+        items: list[ItemPedido], paga_con: str = "", para_recoger: bool = False
+    ) -> str:
         """Calcula el total EXACTO de un pedido (items + envío) sin crearlo.
         Úsala SIEMPRE antes de mostrar el resumen al cliente y copia sus cifras
         tal cual: nunca sumes precios ni calcules vueltas por tu cuenta.
@@ -394,6 +409,7 @@ def build_tools(contact):
             paga_con: SOLO efectivo: billete que DIJO el cliente (ej. '50000'),
                 o 'exacto' si dice que paga completo/justo. PROHIBIDO inventar
                 un valor que el cliente no mencionó.
+            para_recoger: True si el cliente pasa por el pedido al local (sin envío)
         """
         if not items:
             return "ERROR: no hay items para cotizar."
@@ -412,8 +428,12 @@ def build_tools(contact):
             lines.append(
                 f"- {item.cantidad}x {variant.product.name} {variant.name} · {_cop(line_total)}"
             )
-        total = subtotal + cfg.delivery_fee
-        lines.append(f"Envío: {_cop(cfg.delivery_fee)}")
+        envio = Decimal("0.00") if para_recoger else cfg.delivery_fee
+        total = subtotal + envio
+        if para_recoger:
+            lines.append("Para recoger en el local: sin envío.")
+        else:
+            lines.append(f"Envío: {_cop(envio)}")
         lines.append(f"TOTAL: {_cop(total)}")
         billete = re.sub(r"\D", "", paga_con)
         if billete:
@@ -434,34 +454,52 @@ def build_tools(contact):
     def crear_pedido(
         items: list[ItemPedido],
         nombre_cliente: str,
-        direccion: str,
         metodo_pago: str,
+        direccion: str = "",
         referencia: str = "",
         paga_con: str = "",
         notas: str = "",
+        para_recoger: bool = False,
     ) -> str:
-        """Crea el pedido a domicilio DEFINITIVO. Llámala SOLO después de que el
-        cliente confirmó explícitamente el resumen completo (items, dirección,
-        total con envío y método de pago). La ubicación de WhatsApp del cliente
-        es OBLIGATORIA y la toma el sistema por su cuenta (verifícala antes con
-        verificar_cobertura): tú no manejas coordenadas.
+        """Crea el pedido DEFINITIVO, a domicilio o para recoger en el local.
+        Llámala SOLO después de que el cliente confirmó explícitamente el
+        resumen completo (items, total y método de pago).
+
+        A domicilio: la dirección y la ubicación de WhatsApp son OBLIGATORIAS;
+        la ubicación la toma el sistema por su cuenta (verifícala antes con
+        verificar_cobertura) y tú nunca manejas coordenadas.
+        Para recoger (para_recoger=True): no pidas dirección ni ubicación, no se
+        cobra envío y el cliente pasa por el pedido al local.
 
         Args:
             items: items del pedido con variante_id, cantidad y notas
-            nombre_cliente: nombre de quien recibe
-            direccion: dirección de entrega completa
+            nombre_cliente: nombre de quien recibe o de quien pasa a recoger
             metodo_pago: uno de: cash, nequi (son los únicos que acepta el local)
-            referencia: punto de referencia o indicaciones para el domiciliario
+            direccion: dirección de entrega completa (solo domicilio)
+            referencia: punto de referencia para el domiciliario (solo domicilio)
             paga_con: SOLO efectivo: billete que DIJO el cliente (ej. '50000'),
                 o 'exacto' si dice que paga completo/justo. PROHIBIDO inventar
                 un valor que el cliente no mencionó.
             notas: aclaraciones generales del pedido
+            para_recoger: True si el cliente pasa por el pedido al local
         """
         cfg = StoreSettings.load()
         if not cfg.is_open:
             return "ERROR: el local está CERRADO ahora mismo; no se pueden crear pedidos."
-        if not cfg.customer_ordering_enabled:
-            return "ERROR: los domicilios están pausados en este momento."
+        if para_recoger and not cfg.pickup_enabled:
+            return "ERROR: los pedidos para recoger están pausados en este momento."
+        if not para_recoger and not cfg.customer_ordering_enabled:
+            return (
+                "ERROR: los domicilios están pausados en este momento."
+                + (
+                    " Sí puedes tomarlo PARA RECOGER (para_recoger=True): ofrécelo "
+                    "antes de despedir al cliente."
+                    if cfg.pickup_enabled
+                    else ""
+                )
+            )
+        if not para_recoger and not direccion.strip():
+            return "ERROR: para un domicilio hace falta la dirección de entrega."
         if metodo_pago not in Order.ACTIVE_PAYMENT_METHODS:
             return f"ERROR: metodo_pago inválido. Usa uno de: {', '.join(Order.ACTIVE_PAYMENT_METHODS)}."
         if not items:
@@ -469,14 +507,18 @@ def build_tools(contact):
         if metodo_pago == Order.PaymentMethod.CASH and not paga_con:
             return "ERROR: para pago en efectivo pregunta primero con qué billete paga (paga_con)."
         contact.refresh_from_db()
-        if contact.last_location_lat is None or contact.last_location_lng is None:
+        if not para_recoger and (
+            contact.last_location_lat is None or contact.last_location_lng is None
+        ):
             return (
                 "ERROR: falta la ubicación de WhatsApp del cliente y es OBLIGATORIA "
                 "para el domicilio. Pídele que la comparta (clip de adjuntar → "
                 "Ubicación → Enviar ubicación actual); si no puede compartirla, usa "
                 "solicitar_humano."
             )
-        if not is_within_delivery_area(contact.last_location_lat, contact.last_location_lng):
+        if not para_recoger and not is_within_delivery_area(
+            contact.last_location_lat, contact.last_location_lng
+        ):
             return (
                 f"ERROR: la ubicación del cliente está FUERA de la zona de domicilios "
                 f"({coverage_label()}). NO crees el pedido: explícale "
@@ -505,16 +547,18 @@ def build_tools(contact):
         with transaction.atomic():
             order = Order.objects.create(
                 source=Order.Source.WHATSAPP,
-                order_type=Order.OrderType.DELIVERY,
+                order_type=(
+                    Order.OrderType.PICKUP if para_recoger else Order.OrderType.DELIVERY
+                ),
                 customer_name=nombre_cliente.strip()[:200],
                 customer_phone=normalize_phone(contact.phone),
                 customer_notes=customer_notes,
                 payment_method=metodo_pago,
-                delivery_address=direccion.strip()[:300],
-                delivery_reference=referencia.strip()[:300],
-                delivery_lat=contact.last_location_lat,
-                delivery_lng=contact.last_location_lng,
-                delivery_fee=cfg.delivery_fee,
+                delivery_address="" if para_recoger else direccion.strip()[:300],
+                delivery_reference="" if para_recoger else referencia.strip()[:300],
+                delivery_lat=None if para_recoger else contact.last_location_lat,
+                delivery_lng=None if para_recoger else contact.last_location_lng,
+                delivery_fee=Decimal("0.00") if para_recoger else cfg.delivery_fee,
             )
             for item in items:
                 variant = variants[item.variante_id]
@@ -533,16 +577,24 @@ def build_tools(contact):
             order.save()
 
         contact.customer_name = nombre_cliente.strip()[:200]
-        contact.default_address = direccion.strip()[:300]
-        contact.default_reference = referencia.strip()[:300]
-        contact.save(update_fields=["customer_name", "default_address", "default_reference", "updated_at"])
+        campos = ["customer_name", "updated_at"]
+        if not para_recoger:
+            contact.default_address = direccion.strip()[:300]
+            contact.default_reference = referencia.strip()[:300]
+            campos += ["default_address", "default_reference"]
+        contact.save(update_fields=campos)
 
         from apps.orders.consumers import broadcast_orders_update
 
         broadcast_orders_update()
 
+        cierre = (
+            "El cliente pasa por él al local; avísale cuando esté listo."
+            if para_recoger
+            else "Sale a domicilio."
+        )
         return (
-            f"PEDIDO CREADO.\n{_order_summary(order)}\n"
+            f"PEDIDO CREADO. {cierre}\n{_order_summary(order)}\n"
             f"Código de consulta: {order.access_code}."
         )
 

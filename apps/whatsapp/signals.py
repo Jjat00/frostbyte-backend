@@ -27,6 +27,15 @@ STATUS_MESSAGES = {
     Order.Status.CANCELLED: "❌ Tu pedido {order_number} fue cancelado. Escríbenos si tienes alguna duda.",
 }
 
+# Un pedido para recoger no sale a ninguna parte: "listo" significa que el
+# cliente ya puede pasar por él, y "entregado" que se lo llevó.
+PICKUP_MESSAGES = {
+    Order.Status.READY: (
+        "🛍️ ¡Tu pedido {order_number} ya está listo! Puedes pasar por él cuando quieras. {payment_line}"
+    ),
+    Order.Status.DELIVERED: "✅ Pedido {order_number} entregado. ¡Gracias por pedir en Frostbyte! 💙",
+}
+
 
 @receiver(pre_save, sender=Order)
 def _stash_old_status(sender, instance, **kwargs):
@@ -51,7 +60,10 @@ def _notify_status_change(sender, instance, created, **kwargs):
         return
     if instance.source != Order.Source.WHATSAPP or not instance.customer_phone:
         return
-    template = STATUS_MESSAGES.get(instance.status)
+    if instance.order_type == Order.OrderType.PICKUP:
+        template = PICKUP_MESSAGES.get(instance.status, STATUS_MESSAGES.get(instance.status))
+    else:
+        template = STATUS_MESSAGES.get(instance.status)
     if not template:
         return
 

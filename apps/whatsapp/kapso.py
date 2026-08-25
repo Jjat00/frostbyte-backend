@@ -43,7 +43,11 @@ def _record_sent(data, to_phone, body=""):
                 wamid=wamid[:128], defaults={"to_phone": str(to_phone or "")[:30]}
             )
             ChatMessage.remember(
-                wamid, str(to_phone or ""), ChatMessage.Direction.OUTBOUND, body
+                wamid,
+                str(to_phone or ""),
+                ChatMessage.Direction.OUTBOUND,
+                body,
+                author=ChatMessage.Author.AGENT,
             )
     except Exception:
         logger.exception("No se pudo registrar el wamid del mensaje enviado")

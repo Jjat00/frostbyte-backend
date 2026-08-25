@@ -136,17 +136,23 @@ class SentMessage(models.Model):
 
 
 class ChatMessage(models.Model):
-    """Texto de los mensajes del chat, indexado por wamid.
+    """Archivo de la conversación: lo que dijo cada lado, indexado por wamid.
 
-    Cuando el cliente responde deslizando un mensaje, WhatsApp solo manda el id
-    del mensaje citado (`context.id`): sin esto no habría forma de saber a qué
-    se refiere. Guarda lo que dice cada lado (cliente, agente y humanos del
-    equipo) y se limpia sola a los pocos días: se cita lo reciente.
+    Nace para resolver las citas (cuando el cliente responde deslizando un
+    mensaje, WhatsApp solo manda el id del citado en `context.id`), pero se
+    conserva porque es el único registro de qué se habló: muchos pedidos los
+    cierra a mano el equipo durante una pausa humana y sin este historial no
+    hay forma de saber después si la conversación terminó en venta.
     """
 
     class Direction(models.TextChoices):
         INBOUND = "inbound", "Del cliente"
         OUTBOUND = "outbound", "Del negocio"
+
+    class Author(models.TextChoices):
+        CUSTOMER = "customer", "Cliente"
+        AGENT = "agent", "Agente IA"
+        HUMAN = "human", "Persona del equipo"
 
     wamid = models.CharField(max_length=128, unique=True, verbose_name="ID de mensaje")
     phone = models.CharField(max_length=30, blank=True, verbose_name="Teléfono del cliente")
@@ -156,30 +162,60 @@ class ChatMessage(models.Model):
         default=Direction.INBOUND,
         verbose_name="Dirección",
     )
+    author = models.CharField(
+        max_length=10,
+        choices=Author.choices,
+        default=Author.CUSTOMER,
+        db_index=True,
+        verbose_name="Quién lo escribió",
+        help_text="Distingue lo que respondió el agente de lo que escribió una persona del equipo.",
+    )
     body = models.TextField(blank=True, verbose_name="Texto")
     created_at = models.DateTimeField(auto_now_add=True, db_index=True, verbose_name="Fecha")
 
     class Meta:
-        verbose_name = "Texto de mensaje (citas)"
-        verbose_name_plural = "Textos de mensajes (citas)"
+        verbose_name = "Mensaje de la conversación"
+        verbose_name_plural = "Mensajes de las conversaciones"
         ordering = ["-created_at"]
+        indexes = [models.Index(fields=["phone", "created_at"])]
 
     def __str__(self):
-        return f"{self.phone} · {self.body[:40]}"
+        return f"{self.phone} · {self.get_author_display()} · {self.body[:40]}"
 
     @classmethod
-    def remember(cls, wamid, phone, direction, body):
+    def remember(cls, wamid, phone, direction, body, author=None):
         """Guarda el texto de un mensaje si trae id y contenido."""
         if not wamid or not (body or "").strip():
             return None
+        if author is None:
+            author = (
+                cls.Author.CUSTOMER
+                if direction == cls.Direction.INBOUND
+                else cls.Author.AGENT
+            )
         return cls.objects.get_or_create(
             wamid=str(wamid)[:128],
             defaults={
                 "phone": str(phone or "")[:30],
                 "direction": direction,
+                "author": author,
                 "body": body.strip(),
             },
         )[0]
+
+    @classmethod
+    def enrich(cls, wamid, body):
+        """Reemplaza el texto por lo que el agente realmente leyó.
+
+        Las notas de voz y las imágenes se guardan primero con el texto de
+        respaldo y solo después se transcriben o describen: sin esto el archivo
+        diría "imagen que no se pudo procesar" donde había un comprobante.
+        """
+        if not wamid or not (body or "").strip():
+            return
+        cls.objects.filter(wamid=str(wamid)[:128]).exclude(body=body.strip()).update(
+            body=body.strip()
+        )
 
 
 class WebhookEvent(models.Model):

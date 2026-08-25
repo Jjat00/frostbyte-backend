@@ -292,7 +292,11 @@ def _quote_prefix(quoted_wamid):
 
 def _message_text(msg, phone_number_id):
     """Texto que lee el agente: media ya resuelta y la cita al frente."""
-    return _quote_prefix(msg.get("quoted_wamid")) + _resolve_media(msg, phone_number_id)
+    resolved = _resolve_media(msg, phone_number_id)
+    if msg.get("media") and resolved != msg["text"]:
+        # lo que el agente leyó vale más que el texto de respaldo
+        ChatMessage.enrich(msg.get("message_id") or msg.get("wamid"), resolved)
+    return _quote_prefix(msg.get("quoted_wamid")) + resolved
 
 
 def _keep_typing(phone_number_id, message_id, stop_event, max_renewals=6):
@@ -547,7 +551,11 @@ def _handle_outbound(event, outbounds):
         for msg in messages:
             # El cliente también puede citar lo que dijo el humano del equipo
             ChatMessage.remember(
-                msg["wamid"], phone, ChatMessage.Direction.OUTBOUND, msg["text"]
+                msg["wamid"],
+                phone,
+                ChatMessage.Direction.OUTBOUND,
+                msg["text"],
+                author=ChatMessage.Author.HUMAN,
             )
         try:
             with _phone_lock(contact.phone):
@@ -557,11 +565,11 @@ def _handle_outbound(event, outbounds):
         except Exception:
             logger.exception("No se pudo guardar el mensaje humano en el hilo de %s", phone)
 
-    # Los wamids viejos ya no se necesitan (los eventos llegan en segundos) y
-    # nadie cita un mensaje de hace una semana
+    # Los wamids de lo que enviamos solo sirven para reconocer nuestros propios
+    # salientes, que llegan en segundos. La conversación (ChatMessage) NO se
+    # borra: es el único registro de los pedidos que el equipo cierra a mano.
     stale = timezone.now() - timedelta(days=7)
     SentMessage.objects.filter(created_at__lt=stale).delete()
-    ChatMessage.objects.filter(created_at__lt=stale).delete()
 
     event.status = WebhookEvent.Status.PROCESSED
     event.error = ""
@@ -644,7 +652,11 @@ def _process_event(event):
         for msg in messages:
             # Para resolver la cita si el cliente responde a su propio mensaje
             ChatMessage.remember(
-                msg["message_id"], contact.phone, ChatMessage.Direction.INBOUND, msg["text"]
+                msg["message_id"],
+                contact.phone,
+                ChatMessage.Direction.INBOUND,
+                msg["text"],
+                author=ChatMessage.Author.CUSTOMER,
             )
 
         paused_by_human = contact.human_until and contact.human_until > timezone.now()
