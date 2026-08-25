@@ -10,13 +10,13 @@ import time
 from unittest.mock import patch
 
 from django.test import (
-    SimpleTestCase,
     TestCase,
     TransactionTestCase,
     override_settings,
 )
 
 from .agent import AgentTurn, build_system_prompt
+from .tools import build_tools
 from .models import ChatMessage, WebhookEvent, WhatsAppContact
 from .worker import _active, _pending, _process_event_safe
 
@@ -289,8 +289,11 @@ class CitasTests(TestCase):
         self.assertEqual(text, "quiero un granizado")
 
 
-class PromptTests(SimpleTestCase):
-    """El prompt se arma con los datos de configuración, sin placeholders sueltos."""
+class PromptTests(TestCase):
+    """El prompt se arma con los datos de configuración, sin placeholders sueltos.
+
+    Necesita BD: la zona de cobertura del prompt sale de StoreSettings.
+    """
 
     def test_lleva_el_numero_al_que_remitir_cuando_no_sabe(self):
         with override_settings(WHATSAPP_CONTACT_PHONE="3009998877"):
@@ -330,3 +333,80 @@ class CoberturaSinUbicacionTests(TestCase):
             respuesta = self._verificar_cobertura()
         self.assertIn("SÍ intentó enviarnos algo", respuesta)
         self.assertIn("solicitar_humano", respuesta, "a la segunda, un humano")
+
+
+class BusquedaDeProductosTests(TestCase):
+    """Chat real 2026-08-24: el cliente pregunta por 'salchipapas' (plural) y el
+    agente responde que no hay, teniendo cinco publicadas en Frostbyte Food.
+
+    La búsqueda comparaba la palabra del cliente DENTRO del nombre del producto,
+    así que 'salchipapas' no encontraba 'Salchipapa Clásica' y la tool contestaba
+    'eso no está disponible hoy'.
+    """
+
+    def setUp(self):
+        from apps.business.models import Business
+        from apps.products.models import Category, Product, ProductVariant
+
+        # los dos negocios los crea una migración de datos
+        food, _ = Business.objects.get_or_create(
+            slug="frostbyte-food", defaults={"name": "Frostbyte Food", "display_order": 2}
+        )
+        bebidas, _ = Business.objects.get_or_create(
+            slug="frostbyte", defaults={"name": "Frostbyte", "display_order": 1}
+        )
+        self.salchipapas = Category.objects.create(name="Salchipapas", slug="salchipapas", business=food)
+        granizados = Category.objects.create(name="Granizados", slug="granizados", business=bebidas)
+        for i, nombre in enumerate(
+            ["Salchipapa Clásica", "Salchipapa con Queso", "Salchipapa Especial Frostbyte"]
+        ):
+            producto = Product.objects.create(
+                name=nombre,
+                category=self.salchipapas,
+                business=food,
+                description="Papas con las tres salchichas",
+            )
+            ProductVariant.objects.create(
+                product=producto, name="Personal", sku=f"SP-{i}", price=16000
+            )
+        mora = Product.objects.create(
+            name="Granizado de Mora",
+            category=granizados,
+            business=bebidas,
+            description="Granizado de fruta natural",
+        )
+        ProductVariant.objects.create(product=mora, name="Mediano", sku="GR-1", price=8000)
+
+        contact = WhatsAppContact.objects.create(phone=PHONE)
+        self.buscar = {t.name: t for t in build_tools(contact)}["buscar_producto"]
+
+    def _buscar(self, texto):
+        return self.buscar.invoke({"texto": texto})
+
+    def test_el_plural_encuentra_las_salchipapas(self):
+        resultado = self._buscar("hola tienen salchipapas?")
+        self.assertIn("Salchipapa Clásica", resultado)
+        self.assertIn("Salchipapa Especial Frostbyte", resultado)
+
+    def test_sin_tildes_encuentra_el_producto(self):
+        self.assertIn("Salchipapa Clásica", self._buscar("la salchipapa clasica"))
+
+    def test_el_nombre_exacto_sigue_ganando(self):
+        resultado = self._buscar("salchipapa especial")
+        primero = [l for l in resultado.splitlines() if l.startswith("  - ")][0]
+        self.assertIn("Salchipapa Especial Frostbyte", primero)
+
+    def test_un_generico_del_cliente_llega_a_la_categoria(self):
+        self.assertIn("Salchipapa", self._buscar("que hay de comer"))
+        self.assertIn("Salchipapa", self._buscar("tienen papas"))
+
+    def test_un_error_de_tecleo_no_niega_el_producto(self):
+        self.assertIn("Granizado de Mora", self._buscar("un granisado de mora"))
+
+    def test_lo_que_no_vendemos_se_sigue_negando(self):
+        resultado = self._buscar("tienen hamburguesas")
+        self.assertIn("Sin coincidencias", resultado)
+        self.assertIn("Salchipapas", resultado)  # ofrece las categorías que sí hay
+
+    def test_la_busqueda_no_cruza_negocios_por_error(self):
+        self.assertNotIn("Granizado", self._buscar("salchipapas"))

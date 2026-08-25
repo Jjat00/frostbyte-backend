@@ -6,7 +6,9 @@ otro cliente. Todas devuelven strings: es lo que el modelo lee.
 """
 
 import re
+import unicodedata
 from decimal import Decimal
+from difflib import SequenceMatcher
 
 from django.db import transaction
 from django.utils import timezone
@@ -28,6 +30,82 @@ def normalize_phone(phone):
 def _cop(value):
     """Formatea pesos colombianos: 12000 -> $12.000"""
     return "$" + f"{value:,.0f}".replace(",", ".")
+
+
+# Palabras con las que el cliente rodea al producto y que no ayudan a buscar.
+_STOPWORDS = {
+    "una", "uno", "unas", "unos", "quiero", "quisiera", "para", "con", "por",
+    "favor", "del", "los", "las", "que", "pedir", "domicilio", "hola", "buenas",
+    "buenos", "dias", "tardes", "noches", "tienen", "tiene", "tienes", "hay",
+    "venden", "vende", "precio", "cuanto", "cuesta", "vale", "manda", "mandame",
+    "porfa", "algo", "dos", "tres", "mas", "sirven", "todavia", "aun", "esta",
+    "estan", "disponible", "disponibles", "pedido", "cuestan", "valen",
+}
+
+# Términos genéricos con los que el cliente pide algo que en el menú se llama
+# de otra forma ("¿qué hay de comer?" -> Salchipapas). Se SUMAN a sus palabras
+# (nunca las reemplazan) y apuntan al nombre en singular de una CATEGORÍA real:
+# el resultado siempre sale del ORM. Si nace una categoría nueva de comida o de
+# bebida, agrégala aquí para que el genérico también la encuentre.
+_ALIAS = {
+    "papa": ("salchipapa",),
+    "salchicha": ("salchipapa",),
+    "picada": ("salchipapa",),
+    "comida": ("salchipapa",),
+    "comer": ("salchipapa",),
+    "almuerzo": ("salchipapa",),
+    "hambre": ("salchipapa",),
+    "gaseosa": ("bebida",),
+    "refresco": ("bebida",),
+    "trago": ("coctel",),
+    "licor": ("coctel",),
+    "cocktail": ("coctel",),
+}
+
+# Cuántos productos se listan como mucho en una búsqueda
+_MAX_RESULTADOS = 12
+
+
+def _normalize(text):
+    """Minúsculas y sin tildes: 'Clásica' -> 'clasica'."""
+    plain = unicodedata.normalize("NFD", (text or "").lower())
+    return "".join(c for c in plain if unicodedata.category(c) != "Mn")
+
+
+def _singular(word):
+    """Singular aproximado en español: 'salchipapas' -> 'salchipapa'."""
+    if len(word) > 4 and word.endswith("es"):
+        return word[:-2]
+    if len(word) > 3 and word.endswith("s"):
+        return word[:-1]
+    return word
+
+
+def _tokens(text):
+    """Palabras normalizadas y en singular de un texto del menú."""
+    return {
+        _singular(w)
+        for w in re.findall(r"[a-z0-9]+", _normalize(text))
+        if len(w) >= 3
+    }
+
+
+def _search_words(texto):
+    """Palabras útiles de lo que escribió el cliente, más sus sinónimos."""
+    raw = {w for w in re.findall(r"[a-z0-9]+", _normalize(texto)) if len(w) >= 3}
+    words = {_singular(w) for w in raw - _STOPWORDS} - _STOPWORDS
+    return words | {alias for w in words for alias in _ALIAS.get(w, ())}
+
+
+def _words_match(a, b):
+    """Si dos palabras nombran lo mismo (plural, prefijo o error de tecleo)."""
+    if a == b:
+        return True
+    if len(a) >= 4 and len(b) >= 4 and (a.startswith(b) or b.startswith(a)):
+        return True
+    if len(a) >= 5 and len(b) >= 5:
+        return SequenceMatcher(None, a, b).ratio() >= 0.85
+    return False
 
 
 def _order_summary(order):
@@ -132,7 +210,11 @@ def build_tools(contact):
                 ).get(slug=producto_slug, is_active=True)
             )
         except Product.DoesNotExist:
-            return f"No existe un producto activo con slug '{producto_slug}'."
+            return (
+                f"No existe un producto activo con slug '{producto_slug}'. "
+                "Esto NO significa que no lo vendamos: el slug puede estar mal. "
+                "Búscalo con buscar_producto para obtener el slug correcto."
+            )
 
         lines = [f"{product.name}: {product.description or 'sin descripción'}"]
         for variant in product.variants.all():
@@ -165,43 +247,93 @@ def build_tools(contact):
     def buscar_producto(texto: str) -> str:
         """Busca en el menú productos que se parezcan a lo que el cliente pidió.
         Úsala SIEMPRE antes de decir que algo "no está disponible": los clientes
-        casi nunca escriben el nombre exacto (ej. 'salchipapa especial' es la
-        'Salchipapa Especial Frostbyte').
+        casi nunca escriben el nombre exacto (ej. "salchipapas" son la
+        'Salchipapa Clásica', la 'Salchipapa Especial Frostbyte'...).
+        Busca por nombre, categoría, tamaño y descripción, y aguanta plurales,
+        tildes que faltan y errores de tecleo.
 
         Args:
             texto: lo que el cliente pidió, con sus palabras
         """
-        words = {w for w in re.findall(r"[a-záéíóúüñ]+", texto.lower()) if len(w) >= 3}
-        words -= {
-            "una", "uno", "unas", "unos", "quiero", "quisiera", "para", "con",
-            "por", "favor", "del", "los", "las", "que", "pedir", "domicilio",
-        }
+        words = _search_words(texto)
         if not words:
             return "ERROR: dame palabras del producto a buscar."
-        products = Product.objects.filter(
-            is_active=True,
-            is_coming_soon=False,
-            category__is_active=True,
-            category__business__is_active=True,
-        ).prefetch_related("variants", "modifier_links")
+        products = (
+            Product.objects.filter(
+                is_active=True,
+                is_coming_soon=False,
+                category__is_active=True,
+                category__business__is_active=True,
+            )
+            .select_related("category", "category__business")
+            .prefetch_related("variants", "modifier_links")
+        )
         scored = []
         for product in products:
-            name = product.name.lower()
-            score = sum(1 for w in words if w in name)
-            if score:
-                scored.append((score, product))
-        scored.sort(key=lambda pair: -pair[0])
-        lines = []
-        for _score, product in scored[:6]:
             variants = [v for v in product.variants.all() if v.is_active]
             if not variants:
                 continue
-            prices = "; ".join(f"{v.name} {_cop(v.price)} [variante_id={v.id}]" for v in variants)
-            configurable = any(pm.is_active for pm in product.modifier_links.all())
-            extra = f" (personalizable, slug='{product.slug}')" if configurable else ""
-            lines.append(f"- {product.name}: {prices}{extra}")
-        if not lines:
-            return "Sin coincidencias en el menú: eso no está disponible hoy."
+            # el peso dice qué tan directa es la coincidencia: el nombre manda,
+            # la categoría permite que "salchipapas" traiga todas las que hay
+            fields = (
+                (_tokens(product.name), 3),
+                (_tokens(product.category.name), 2),
+                (_tokens(" ".join(v.name for v in variants)), 1),
+                (_tokens(product.description), 1),
+            )
+            score = sum(
+                max(
+                    (
+                        weight
+                        for tokens, weight in fields
+                        if any(_words_match(word, token) for token in tokens)
+                    ),
+                    default=0,
+                )
+                for word in words
+            )
+            if score:
+                scored.append((score, product, variants))
+
+        if not scored:
+            disponibles = list(
+                dict.fromkeys(
+                    Category.objects.filter(
+                        is_active=True,
+                        business__is_active=True,
+                        products__is_active=True,
+                        products__is_coming_soon=False,
+                    )
+                    .order_by("business__display_order", "display_order", "name")
+                    .values_list("name", flat=True)
+                )
+            )
+            return (
+                f"Sin coincidencias para '{texto}' en el menú. "
+                f"Categorías con productos hoy: {', '.join(disponibles)}. "
+                "Si lo que pidió el cliente encaja con alguna de esas categorías, "
+                "búscala por su nombre; si no encaja con ninguna, no lo vendemos."
+            )
+
+        scored.sort(key=lambda row: (-row[0], row[1].name))
+        grouped = {}
+        for _score, product, variants in scored[:_MAX_RESULTADOS]:
+            grouped.setdefault(product.category, []).append((product, variants))
+        lines = []
+        for category, entries in grouped.items():
+            lines.append(f"[{category.name} · {category.business.name}]")
+            for product, variants in entries:
+                prices = "; ".join(
+                    f"{v.name} {_cop(v.price)} [variante_id={v.id}]" for v in variants
+                )
+                configurable = any(pm.is_active for pm in product.modifier_links.all())
+                extra = f" (personalizable, slug='{product.slug}')" if configurable else ""
+                lines.append(f"  - {product.name}: {prices}{extra}")
+        sobrantes = len(scored) - _MAX_RESULTADOS
+        if sobrantes > 0:
+            lines.append(
+                f"(y {sobrantes} coincidencia(s) menos parecida(s); usa consultar_menu si hace falta)"
+            )
         return "Coincidencias en el menú:\n" + "\n".join(lines)
 
     @tool
