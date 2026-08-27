@@ -158,8 +158,8 @@ def build_tools(contact):
         """
         cfg = StoreSettings.load()
         abierto = "ABIERTO" if cfg.is_open else "CERRADO"
-        domicilios = "ACTIVOS" if cfg.customer_ordering_enabled else "PAUSADOS"
-        recoger = "ACTIVOS" if cfg.pickup_enabled else "PAUSADOS"
+        domicilios = "ACTIVOS" if cfg.customer_ordering_enabled else "SIN SERVICIO AHORA"
+        recoger = "ACTIVOS" if cfg.pickup_enabled else "SIN SERVICIO AHORA"
         puede_domicilio = cfg.is_open and cfg.customer_ordering_enabled
         puede_recoger = cfg.is_open and cfg.pickup_enabled
         lineas = [
@@ -170,8 +170,9 @@ def build_tools(contact):
         ]
         if puede_recoger and not puede_domicilio:
             lineas.append(
-                "Los domicilios están pausados pero el local SÍ encarga para recoger: "
-                "ofrécelo antes de despedir a nadie."
+                "Ahora mismo no hay servicio de domicilios pero el local SÍ encarga para "
+                "recoger: dile al cliente 'justo en este momento no tenemos servicio de "
+                "domicilios' y ofrécele encargar y pasar por el pedido antes de despedir a nadie."
             )
         return " ".join(lineas)
 
@@ -487,10 +488,14 @@ def build_tools(contact):
         if not cfg.is_open:
             return "ERROR: el local está CERRADO ahora mismo; no se pueden crear pedidos."
         if para_recoger and not cfg.pickup_enabled:
-            return "ERROR: los pedidos para recoger están pausados en este momento."
+            return (
+                "ERROR: justo en este momento no se reciben pedidos para recoger; "
+                "díselo al cliente con esas palabras."
+            )
         if not para_recoger and not cfg.customer_ordering_enabled:
             return (
-                "ERROR: los domicilios están pausados en este momento."
+                "ERROR: justo en este momento no hay servicio de domicilios; "
+                "díselo al cliente con esas palabras."
                 + (
                     " Sí puedes tomarlo PARA RECOGER (para_recoger=True): ofrécelo "
                     "antes de despedir al cliente."

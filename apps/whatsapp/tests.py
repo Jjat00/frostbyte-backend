@@ -502,6 +502,26 @@ class PedidoParaRecogerTests(TestCase):
         self.assertIn("Puedes tomar pedidos A DOMICILIO: NO", estado)
         self.assertIn("Puedes tomar pedidos PARA RECOGER: sí", estado)
 
+    def test_las_tools_nunca_dicen_pausado_al_modelo(self):
+        # Jaime (2026-08-27): el cliente no debe leer "pausados" (jerga interna);
+        # el modelo calca el texto de las tools, así que la palabra no puede aparecer.
+        textos = [
+            self.tools["consultar_estado_tienda"].invoke({}),
+            self._crear(direccion="Carrera 11 #21-17"),
+        ]
+        self.cfg.pickup_enabled = False
+        self.cfg.save()
+        textos.append(self._crear(para_recoger=True))
+        for texto in textos:
+            self.assertNotIn("pausad", texto.lower())
+        self.assertIn("justo en este momento no hay servicio de domicilios", textos[1])
+
+    def test_el_prompt_prohibe_decir_pausado(self):
+        from apps.whatsapp.agent import SYSTEM_PROMPT
+
+        self.assertIn("justo en este momento no tenemos servicio de domicilios", SYSTEM_PROMPT)
+        self.assertIn("NUNCA digas al cliente que un servicio está \"pausado\"", SYSTEM_PROMPT)
+
 
 class ArchivoDeConversacionTests(TestCase):
     """La conversación se guarda entera para poder revisar después si hubo venta,
