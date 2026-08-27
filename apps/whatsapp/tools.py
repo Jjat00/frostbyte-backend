@@ -27,6 +27,16 @@ def normalize_phone(phone):
     return re.sub(r"\D", "", phone or "")
 
 
+def _celular_colombiano(value):
+    """Normaliza un celular colombiano a 57XXXXXXXXXX; '' si no lo parece."""
+    digits = normalize_phone(value)
+    if len(digits) == 10 and digits.startswith("3"):
+        return "57" + digits
+    if len(digits) == 12 and digits.startswith("573"):
+        return digits
+    return ""
+
+
 def _cop(value):
     """Formatea pesos colombianos: 12000 -> $12.000"""
     return "$" + f"{value:,.0f}".replace(",", ".")
@@ -136,9 +146,9 @@ def _order_summary(order):
 
 def _customer_orders(contact):
     """Pedidos históricos del contacto, emparejados por los últimos dígitos."""
-    if kapso.is_bsuid(contact.phone):  # sin número: el pedido guarda el BSUID
-        return Order.objects.filter(customer_phone=contact.phone)
-    digits = normalize_phone(contact.phone)[-10:]
+    # Si WhatsApp oculta su número, el pedido lleva el celular que él dio
+    phone = contact.contact_phone if kapso.is_bsuid(contact.phone) else contact.phone
+    digits = normalize_phone(phone)[-10:]
     if not digits:
         return Order.objects.none()
     return Order.objects.filter(customer_phone__endswith=digits)
@@ -463,6 +473,7 @@ def build_tools(contact):
         paga_con: str = "",
         notas: str = "",
         para_recoger: bool = False,
+        telefono_contacto: str = "",
     ) -> str:
         """Crea el pedido DEFINITIVO, a domicilio o para recoger en el local.
         Llámala SOLO después de que el cliente confirmó explícitamente el
@@ -485,6 +496,9 @@ def build_tools(contact):
                 un valor que el cliente no mencionó.
             notas: aclaraciones generales del pedido
             para_recoger: True si el cliente pasa por el pedido al local
+            telefono_contacto: celular del cliente (10 dígitos) SOLO cuando el
+                sistema avisa que WhatsApp no nos muestra su número; si no,
+                déjalo vacío
         """
         cfg = StoreSettings.load()
         if not cfg.is_open:
@@ -514,6 +528,22 @@ def build_tools(contact):
         if metodo_pago == Order.PaymentMethod.CASH and not paga_con:
             return "ERROR: para pago en efectivo pregunta primero con qué billete paga (paga_con)."
         contact.refresh_from_db()
+        celular = ""
+        if kapso.is_bsuid(contact.phone):
+            # WhatsApp no nos muestra el número de este cliente: el pedido lleva
+            # el celular que él mismo dio, por si el equipo necesita llamarlo
+            if telefono_contacto.strip() and not _celular_colombiano(telefono_contacto):
+                return (
+                    "ERROR: ese celular de contacto no es válido. Pide un número celular "
+                    "de 10 dígitos (ej. 300 123 4567)."
+                )
+            celular = _celular_colombiano(telefono_contacto) or contact.contact_phone
+            if not celular:
+                return (
+                    "ERROR: WhatsApp no nos muestra el número de este cliente. Antes de "
+                    "crear el pedido pídele un celular de contacto de 10 dígitos, por si "
+                    "el equipo necesita llamarle, y pásalo en telefono_contacto."
+                )
         if not para_recoger and (
             contact.last_location_lat is None or contact.last_location_lng is None
         ):
@@ -558,13 +588,9 @@ def build_tools(contact):
                     Order.OrderType.PICKUP if para_recoger else Order.OrderType.DELIVERY
                 ),
                 customer_name=nombre_cliente.strip()[:200],
-                # Si el cliente oculta su número, el pedido guarda su BSUID: es
-                # lo que permite notificarle el estado (signals) y reconocerlo
-                customer_phone=(
-                    contact.phone
-                    if kapso.is_bsuid(contact.phone)
-                    else normalize_phone(contact.phone)
-                ),
+                # El número que el staff puede llamar (signals busca el contacto
+                # por él para notificarle el estado por WhatsApp)
+                customer_phone=celular or normalize_phone(contact.phone),
                 customer_notes=customer_notes,
                 payment_method=metodo_pago,
                 delivery_address="" if para_recoger else direccion.strip()[:300],
@@ -591,6 +617,9 @@ def build_tools(contact):
 
         contact.customer_name = nombre_cliente.strip()[:200]
         campos = ["customer_name", "updated_at"]
+        if celular and contact.contact_phone != celular:
+            contact.contact_phone = celular
+            campos.append("contact_phone")
         if not para_recoger:
             contact.default_address = direccion.strip()[:300]
             contact.default_reference = referencia.strip()[:300]

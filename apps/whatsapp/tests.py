@@ -675,11 +675,101 @@ class ClientesSinNumeroTests(TestCase):
         self.assertEqual(_find_contact(BSUID, BSUID), known)
         self.assertEqual(WhatsAppContact.objects.count(), 1)
 
-    def test_el_pedido_de_un_cliente_sin_numero_se_empareja_por_bsuid(self):
+    def test_los_pedidos_de_un_cliente_sin_numero_se_emparejan_por_su_celular(self):
         from .tools import _customer_orders
 
-        contact = WhatsAppContact.objects.create(phone=BSUID, wa_user_id=BSUID)
+        contact = WhatsAppContact.objects.create(
+            phone=BSUID, wa_user_id=BSUID, contact_phone="573001234567"
+        )
         order = Order.objects.create(
-            source=Order.Source.WHATSAPP, customer_phone=BSUID, customer_name="Dayana"
+            source=Order.Source.WHATSAPP, customer_phone="573001234567", customer_name="Dayana"
         )
         self.assertEqual(list(_customer_orders(contact)), [order])
+
+    def test_la_notificacion_del_pedido_sale_por_whatsapp_y_no_por_el_celular(self):
+        from .signals import _destination
+
+        contact = WhatsAppContact.objects.create(
+            phone=BSUID, wa_user_id=BSUID, contact_phone="573001234567"
+        )
+        self.assertEqual(_destination("573001234567"), (contact, BSUID))
+        normal = WhatsAppContact.objects.create(phone=PHONE)
+        self.assertEqual(_destination(PHONE), (normal, PHONE))
+
+
+class ClienteSinNumeroPideCelularTests(TestCase):
+    """Pedido de Jaime (27/08): si WhatsApp no muestra el número del cliente,
+    el agente pide un celular de contacto para poder llamarlo si hace falta."""
+
+    def setUp(self):
+        from apps.business.models import Business
+        from apps.orders.models import StoreSettings
+        from apps.products.models import Category, Product, ProductVariant
+
+        food, _ = Business.objects.get_or_create(
+            slug="frostbyte-food", defaults={"name": "Frostbyte Food"}
+        )
+        categoria = Category.objects.create(name="Salchipapas", slug="salchipapas", business=food)
+        producto = Product.objects.create(
+            name="Salchipapa con Queso", category=categoria, business=food, description="Con queso"
+        )
+        self.variante = ProductVariant.objects.create(
+            product=producto, name="Personal", sku="SPQ-1", price=18000
+        )
+        cfg = StoreSettings.load()
+        cfg.is_open = True
+        cfg.pickup_enabled = True
+        cfg.save()
+
+        self.contact = WhatsAppContact.objects.create(phone=BSUID, wa_user_id=BSUID)
+        self.tools = {t.name: t for t in build_tools(self.contact)}
+
+    def _crear(self, **kwargs):
+        datos = {
+            "items": [{"variante_id": self.variante.id, "cantidad": 1, "notas": ""}],
+            "nombre_cliente": "Dayana",
+            "metodo_pago": "cash",
+            "paga_con": "exacto",
+            "para_recoger": True,
+        }
+        datos.update(kwargs)
+        return self.tools["crear_pedido"].invoke(datos)
+
+    def test_sin_celular_no_se_crea_el_pedido(self):
+        resultado = self._crear()
+        self.assertIn("ERROR", resultado)
+        self.assertIn("celular", resultado)
+        self.assertEqual(Order.objects.count(), 0)
+
+    def test_un_celular_mal_dado_se_vuelve_a_pedir(self):
+        resultado = self._crear(telefono_contacto="123")
+        self.assertIn("ERROR", resultado)
+        self.assertIn("10 dígitos", resultado)
+        self.assertEqual(Order.objects.count(), 0)
+
+    def test_el_celular_queda_en_el_pedido_y_en_el_contacto(self):
+        resultado = self._crear(telefono_contacto="300 123 4567")
+        self.assertIn("PEDIDO CREADO", resultado)
+        order = Order.objects.get()
+        self.assertEqual(order.customer_phone, "573001234567", "el staff ve un número al que llamar")
+        self.contact.refresh_from_db()
+        self.assertEqual(self.contact.contact_phone, "573001234567")
+
+    def test_el_segundo_pedido_no_vuelve_a_pedir_el_celular(self):
+        self.contact.contact_phone = "573001234567"
+        self.contact.save()
+        resultado = self._crear()
+        self.assertIn("PEDIDO CREADO", resultado)
+        self.assertEqual(Order.objects.get().customer_phone, "573001234567")
+
+    def test_el_prompt_le_avisa_al_agente_que_pida_el_celular(self):
+        prompt = build_system_prompt(self.contact)
+        self.assertIn("NO nos muestra su número", prompt)
+        self.assertNotIn("Ya nos dio", prompt)
+
+        self.contact.contact_phone = "573001234567"
+        prompt = build_system_prompt(self.contact)
+        self.assertIn("Ya nos dio el 573001234567", prompt)
+
+        normal = WhatsAppContact.objects.create(phone=PHONE)
+        self.assertNotIn("NO nos muestra su número", build_system_prompt(normal))

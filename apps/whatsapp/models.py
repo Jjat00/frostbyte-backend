@@ -30,6 +30,15 @@ class WhatsAppContact(models.Model):
         verbose_name="Usuario de WhatsApp",
         help_text="Nombre de usuario de WhatsApp, si el cliente tiene; puede cambiar",
     )
+    contact_phone = models.CharField(
+        max_length=30,
+        blank=True,
+        verbose_name="Celular de contacto",
+        help_text=(
+            "Número que dio el cliente para llamarlo cuando WhatsApp no muestra el suyo "
+            "(contactos identificados por BSUID)"
+        ),
+    )
     profile_name = models.CharField(
         max_length=200,
         blank=True,

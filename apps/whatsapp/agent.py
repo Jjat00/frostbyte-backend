@@ -17,6 +17,7 @@ from django.utils import timezone
 
 from apps.orders.coverage import coverage_label
 
+from . import kapso
 from .tools import build_tools
 
 logger = logging.getLogger(__name__)
@@ -124,7 +125,8 @@ comprobante cuando pague: {transfer_info}
 d) Llama cotizar_pedido con los items (para_recoger=True si pasa por él, así no cobra envío; \
 y paga_con si es efectivo, para validar que el billete alcance) y arma el resumen completo (items, dirección, envío y TOTAL) copiando EXACTAMENTE \
 sus cifras: NUNCA calcules precios ni totales tú mismo. Luego espera un "sí" explícito.
-e) Solo entonces llama crear_pedido y responde con el número de pedido.
+e) Solo entonces llama crear_pedido y responde con el número de pedido. Si te responde que \
+falta un celular de contacto, pídeselo al cliente y vuelve a llamarla con telefono_contacto.
 
 DESPUÉS DEL PEDIDO:
 - El cliente puede modificar o cancelar mientras el pedido siga pendiente (modificar_pedido, \
@@ -170,18 +172,33 @@ def get_checkpointer():
     return _checkpointer
 
 
-def build_system_prompt():
-    """Prompt con los datos que dependen del momento y de la configuración."""
+NO_PHONE_PROMPT = """\
+SOBRE ESTE CLIENTE: WhatsApp NO nos muestra su número de teléfono (usa nombre de usuario). \
+Antes de crear cualquier pedido, a domicilio o para recoger, pídele un celular de contacto de \
+10 dígitos explicándole que es por si el equipo necesita llamarle, y pásalo a crear_pedido en \
+telefono_contacto. Sin ese celular no se crea el pedido."""
+
+KNOWN_PHONE_PROMPT = """ Ya nos dio el {celular}: en vez de pedirlo otra vez confírmalo \
+("¿te llamamos al {celular} si hace falta?") y pásalo igual en telefono_contacto."""
+
+
+def build_system_prompt(contact=None):
+    """Prompt con los datos que dependen del momento, la configuración y el cliente."""
     transfer_info = settings.WHATSAPP_TRANSFER_INFO or (
         "(datos de Nequi sin configurar: ofrece solo efectivo por ahora)"
     )
-    return SYSTEM_PROMPT.format(
+    prompt = SYSTEM_PROMPT.format(
         now=timezone.localtime().strftime("%A %d/%m/%Y %H:%M"),
         transfer_info=transfer_info,
         site_url=settings.SITE_URL,
         delivery_coverage=coverage_label(),
         contact_phone=settings.WHATSAPP_CONTACT_PHONE,
     )
+    if contact is not None and kapso.is_bsuid(contact.phone):
+        prompt += "\n\n" + NO_PHONE_PROMPT
+        if contact.contact_phone:
+            prompt += KNOWN_PHONE_PROMPT.format(celular=contact.contact_phone)
+    return prompt
 
 
 def _build_agent(contact):
@@ -196,7 +213,7 @@ def _build_agent(contact):
     return create_agent(
         model=model,
         tools=build_tools(contact),
-        system_prompt=build_system_prompt(),
+        system_prompt=build_system_prompt(contact),
         checkpointer=get_checkpointer(),
     )
 

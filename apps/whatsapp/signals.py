@@ -37,6 +37,21 @@ PICKUP_MESSAGES = {
 }
 
 
+def _destination(phone):
+    """Contacto al que notificar y su destino de WhatsApp.
+
+    El pedido guarda el número que el staff puede llamar. Si WhatsApp oculta el
+    del cliente (contacto por BSUID), ese celular lo dio él y el mensaje debe
+    salir por su identidad de WhatsApp, no por el celular.
+    """
+    from .models import WhatsAppContact
+
+    contact = WhatsAppContact.objects.filter(phone=phone).first()
+    if contact is None and phone:
+        contact = WhatsAppContact.objects.filter(contact_phone=phone).first()
+    return contact, (contact.phone if contact else phone)
+
+
 @receiver(pre_save, sender=Order)
 def _stash_old_status(sender, instance, **kwargs):
     update_fields = kwargs.get("update_fields")
@@ -82,18 +97,17 @@ def _notify_status_change(sender, instance, created, **kwargs):
         from django.db import close_old_connections
 
         from . import kapso
-        from .models import WhatsAppContact
 
         close_old_connections()
         try:
-            contact = WhatsAppContact.objects.filter(phone=phone).first()
+            contact, to = _destination(phone)
             phone_number_id = (contact and contact.last_phone_number_id) or (
                 settings.KAPSO_PHONE_NUMBER_IDS[0] if settings.KAPSO_PHONE_NUMBER_IDS else ""
             )
             if not phone_number_id:
                 logger.warning("Sin phone_number_id para notificar el pedido %s", instance.order_number)
                 return
-            kapso.send_text(phone_number_id, phone, message)
+            kapso.send_text(phone_number_id, to, message)
         except Exception:
             logger.exception("Error notificando por WhatsApp el pedido %s", instance.order_number)
         finally:
