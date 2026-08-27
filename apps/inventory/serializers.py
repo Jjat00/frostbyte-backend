@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from rest_framework import serializers
 from apps.business.models import Business
 from .models import UnitOfMeasure, RawMaterial, Recipe, PurchaseOrder, PurchaseOrderItem
@@ -119,6 +121,7 @@ class RecipeDetailSerializer(serializers.ModelSerializer):
         model = Recipe
         fields = [
             "id",
+            "raw_material_id",
             "raw_material_name",
             "quantity",
             "unit",
@@ -126,6 +129,21 @@ class RecipeDetailSerializer(serializers.ModelSerializer):
             "cost",
             "notes",
         ]
+
+
+class RecipeBulkItemSerializer(serializers.Serializer):
+    """Una fila de la receta tal como la manda el editor al guardar en bloque."""
+
+    raw_material_id = serializers.PrimaryKeyRelatedField(
+        queryset=RawMaterial.objects.all(),
+        source="raw_material",
+    )
+    quantity = serializers.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        min_value=Decimal("0.01"),
+    )
+    notes = serializers.CharField(max_length=200, allow_blank=True, required=False, default="")
 
 
 # ============= PURCHASE ORDER SERIALIZERS =============
