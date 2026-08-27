@@ -793,7 +793,7 @@ class ClienteSinNumeroPideCelularTests(TestCase):
         prompt = build_system_prompt(self.contact)
         self.assertIn("NO nos muestra su número", prompt)
         self.assertIn("A DOMICILIO", prompt)
-        self.assertIn("NO \\\nle pidas ningún número".replace("\\\n", ""), prompt.replace("\\\n", ""))
+        self.assertIn("NO le pidas ningún número", prompt)
         self.assertNotIn("Ya nos dio", prompt)
 
         self.contact.contact_phone = "573001234567"
