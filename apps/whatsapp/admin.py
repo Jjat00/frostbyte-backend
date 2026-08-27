@@ -10,13 +10,14 @@ class WhatsAppContactAdmin(admin.ModelAdmin):
         "phone",
         "customer_name",
         "profile_name",
+        "username",
         "human_handoff",
         "human_until",
         "is_blocked",
         "last_message_at",
     )
     list_editable = ("human_handoff", "is_blocked")
-    search_fields = ("phone", "customer_name", "profile_name")
+    search_fields = ("phone", "wa_user_id", "username", "customer_name", "profile_name")
     list_filter = ("human_handoff", "is_blocked")
     readonly_fields = (
         "created_at",

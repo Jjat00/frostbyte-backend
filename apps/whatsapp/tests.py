@@ -7,7 +7,7 @@ prueba qué contesta el modelo, sino cuándo y cuántas veces lo llamamos).
 
 import threading
 import time
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from django.test import (
     TestCase,
@@ -17,7 +17,9 @@ from django.test import (
 
 from .agent import AgentTurn, build_system_prompt
 from .tools import build_tools
-from .models import ChatMessage, WebhookEvent, WhatsAppContact
+from apps.orders.models import Order
+
+from .models import ChatMessage, SentMessage, WebhookEvent, WhatsAppContact
 from .worker import _active, _pending, _process_event_safe
 
 PHONE = "573001112233"
@@ -553,3 +555,131 @@ class ArchivoDeConversacionTests(TestCase):
 
         self.assertIn("pasar por él", PICKUP_MESSAGES[Order.Status.READY])
         self.assertNotIn("va en camino", PICKUP_MESSAGES[Order.Status.READY])
+
+
+BSUID = "CO.2430294670795328"
+
+
+def bsuid_payload(text, sequence=1):
+    """Webhook real del 27/08: cliente con nombre de usuario, sin número."""
+    payload = webhook_payload(text, sequence)
+    entry = payload["data"][0]
+    entry["message"]["from"] = None
+    entry["message"]["from_user_id"] = BSUID
+    entry["message"]["username"] = "dayanab1088"
+    entry["conversation"] = {
+        "phone_number": None,
+        "business_scoped_user_id": BSUID,
+        "username": "dayanab1088",
+        "contact_name": "Dayana",
+    }
+    return payload
+
+
+def app_reply_payload(text, wamid="wamid.app1"):
+    """Saliente desde la app de WhatsApp Business a un cliente sin número."""
+    return {
+        "type": "whatsapp.message.sent",
+        "data": [
+            {
+                "phone_number_id": PHONE_NUMBER_ID,
+                "message": {
+                    "id": wamid,
+                    "to": None,
+                    "to_user_id": BSUID,
+                    "from": "573117814338",
+                    "type": "text",
+                    "text": {"body": text},
+                    "kapso": {"direction": "outbound", "origin": "business_app"},
+                },
+                "conversation": {"phone_number": None, "business_scoped_user_id": BSUID},
+            }
+        ],
+    }
+
+
+class ClientesSinNumeroTests(TestCase):
+    """Chat real del 27/08: WhatsApp ya no manda el número de los clientes con
+    nombre de usuario, solo su business-scoped user ID (BSUID, "CO.243…").
+
+    El agente contestaba al BSUID como si fuera un teléfono (campo "to") y
+    Meta devolvía 131026 "Message undeliverable": el cliente nunca lo vio, y
+    la respuesta del equipo desde el celular tampoco pausaba al agente.
+    """
+
+    def fake_post(self, posted):
+        def _post(url, json=None, headers=None, timeout=None):
+            posted.append(json)
+            response = Mock(status_code=200)
+            response.json.return_value = {"messages": [{"id": f"wamid.out{len(posted)}"}]}
+            return response
+
+        return _post
+
+    def test_el_entrante_sin_numero_se_identifica_por_bsuid(self):
+        from .worker import extract_inbound_messages
+
+        messages = extract_inbound_messages(bsuid_payload("Hola, hoy hay atención?"))
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(messages[0]["phone"], "")
+        self.assertEqual(messages[0]["wa_user_id"], BSUID)
+        self.assertEqual(messages[0]["username"], "dayanab1088")
+
+    def test_al_bsuid_se_le_escribe_en_recipient_no_en_to(self):
+        from . import kapso
+
+        posted = []
+        with override_settings(KAPSO_API_KEY="clave"):
+            with patch("apps.whatsapp.kapso.requests.post", side_effect=self.fake_post(posted)):
+                kapso.send_text(PHONE_NUMBER_ID, BSUID, "hola")
+                kapso.send_text(PHONE_NUMBER_ID, PHONE, "hola")
+                kapso.send_buttons(PHONE_NUMBER_ID, BSUID, "¿Sí?", [("si", "Sí")])
+
+        self.assertEqual(posted[0]["recipient"], BSUID)
+        self.assertNotIn("to", posted[0])
+        self.assertEqual(posted[1]["to"], PHONE)
+        self.assertNotIn("recipient", posted[1])
+        self.assertEqual(posted[2]["recipient"], BSUID)
+        # El wamid queda registrado como propio: no se confunde con un humano
+        self.assertTrue(SentMessage.objects.filter(wamid="wamid.out1", to_phone=BSUID).exists())
+
+    def test_el_saliente_desde_la_app_conserva_el_bsuid(self):
+        from .worker import extract_outbound_messages
+
+        out = extract_outbound_messages(app_reply_payload("Buenas tardes si señor"))
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["phone"], "")
+        self.assertEqual(out[0]["wa_user_id"], BSUID)
+        self.assertEqual(out[0]["origin"], "business_app")
+
+    def test_la_respuesta_humana_desde_la_app_pausa_al_agente(self):
+        from .worker import _handle_outbound, extract_outbound_messages
+
+        contact = WhatsAppContact.objects.create(phone=BSUID, wa_user_id=BSUID)
+        payload = app_reply_payload("Buenas tardes si señor")
+        event = WebhookEvent.objects.create(
+            idempotency_key="app-1", payload=payload, event_type="whatsapp.message.sent"
+        )
+        with patch("apps.whatsapp.agent.record_messages"):
+            _handle_outbound(event, extract_outbound_messages(payload))
+
+        contact.refresh_from_db()
+        self.assertIsNotNone(contact.human_until, "el humano ya está atendiendo")
+        self.assertEqual(WhatsAppContact.objects.count(), 1, "no crea un contacto vacío")
+        self.assertEqual(event.contact_phone, BSUID)
+
+    def test_el_contacto_se_reconoce_por_bsuid_aunque_deje_de_llegar_el_numero(self):
+        from .worker import _find_contact
+
+        known = WhatsAppContact.objects.create(phone=PHONE, wa_user_id=BSUID)
+        self.assertEqual(_find_contact(BSUID, BSUID), known)
+        self.assertEqual(WhatsAppContact.objects.count(), 1)
+
+    def test_el_pedido_de_un_cliente_sin_numero_se_empareja_por_bsuid(self):
+        from .tools import _customer_orders
+
+        contact = WhatsAppContact.objects.create(phone=BSUID, wa_user_id=BSUID)
+        order = Order.objects.create(
+            source=Order.Source.WHATSAPP, customer_phone=BSUID, customer_name="Dayana"
+        )
+        self.assertEqual(list(_customer_orders(contact)), [order])

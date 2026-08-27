@@ -136,6 +136,8 @@ def _order_summary(order):
 
 def _customer_orders(contact):
     """Pedidos históricos del contacto, emparejados por los últimos dígitos."""
+    if kapso.is_bsuid(contact.phone):  # sin número: el pedido guarda el BSUID
+        return Order.objects.filter(customer_phone=contact.phone)
     digits = normalize_phone(contact.phone)[-10:]
     if not digits:
         return Order.objects.none()
@@ -556,7 +558,13 @@ def build_tools(contact):
                     Order.OrderType.PICKUP if para_recoger else Order.OrderType.DELIVERY
                 ),
                 customer_name=nombre_cliente.strip()[:200],
-                customer_phone=normalize_phone(contact.phone),
+                # Si el cliente oculta su número, el pedido guarda su BSUID: es
+                # lo que permite notificarle el estado (signals) y reconocerlo
+                customer_phone=(
+                    contact.phone
+                    if kapso.is_bsuid(contact.phone)
+                    else normalize_phone(contact.phone)
+                ),
                 customer_notes=customer_notes,
                 payment_method=metodo_pago,
                 delivery_address="" if para_recoger else direccion.strip()[:300],

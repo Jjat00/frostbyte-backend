@@ -9,17 +9,26 @@ class WhatsAppContact(models.Model):
     """
 
     phone = models.CharField(
-        max_length=30,
+        max_length=160,
         unique=True,
         verbose_name="Teléfono",
-        help_text="Solo dígitos, con indicativo de país (ej. 573001234567)",
+        help_text=(
+            "Solo dígitos con indicativo de país (ej. 573001234567) o, si el "
+            "cliente oculta su número, su BSUID de Meta (ej. CO.2430294670795328)"
+        ),
     )
     wa_user_id = models.CharField(
-        max_length=64,
+        max_length=160,
         blank=True,
         db_index=True,
         verbose_name="ID de usuario de WhatsApp",
         help_text="business_scoped_user_id de Meta; estable aunque el número no venga",
+    )
+    username = models.CharField(
+        max_length=64,
+        blank=True,
+        verbose_name="Usuario de WhatsApp",
+        help_text="Nombre de usuario de WhatsApp, si el cliente tiene; puede cambiar",
     )
     profile_name = models.CharField(
         max_length=200,
@@ -123,7 +132,7 @@ class SentMessage(models.Model):
     """
 
     wamid = models.CharField(max_length=128, unique=True, verbose_name="ID de mensaje")
-    to_phone = models.CharField(max_length=30, blank=True, verbose_name="Destinatario")
+    to_phone = models.CharField(max_length=160, blank=True, verbose_name="Destinatario")
     created_at = models.DateTimeField(auto_now_add=True, db_index=True, verbose_name="Enviado")
 
     class Meta:
@@ -234,7 +243,7 @@ class WebhookEvent(models.Model):
         help_text="Header X-Idempotency-Key de Kapso (o hash del body si no vino)",
     )
     phone_number_id = models.CharField(max_length=64, blank=True, verbose_name="Número destino")
-    contact_phone = models.CharField(max_length=30, blank=True, verbose_name="Teléfono del cliente")
+    contact_phone = models.CharField(max_length=160, blank=True, verbose_name="Teléfono del cliente")
     event_type = models.CharField(max_length=64, blank=True, verbose_name="Tipo de evento")
     payload = models.JSONField(default=dict, verbose_name="Payload")
     status = models.CharField(

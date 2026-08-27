@@ -149,9 +149,10 @@ class Order(models.Model):
         verbose_name="Nombre del cliente",
     )
     customer_phone = models.CharField(
-        max_length=20,
+        max_length=160,
         blank=True,
         verbose_name="Teléfono",
+        help_text="Teléfono del cliente o, en pedidos de WhatsApp sin número, su BSUID de Meta",
     )
     customer_notes = models.TextField(
         blank=True,

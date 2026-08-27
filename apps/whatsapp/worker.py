@@ -178,6 +178,9 @@ def extract_inbound_messages(payload):
             {
                 "phone": phone,
                 "wa_user_id": wa_user_id,
+                "username": (
+                    message.get("username") or conversation.get("username") or ""
+                ),
                 "contact_name": (conversation.get("contact_name") or "").strip(),
                 "text": text.strip(),
                 "media": media,
@@ -194,9 +197,10 @@ def extract_inbound_messages(payload):
 def extract_outbound_messages(payload):
     """Extrae los mensajes salientes (whatsapp.message.sent) de un webhook.
 
-    Devuelve dicts con phone (el cliente destinatario), wamid, origin
-    (cloud_api | business_app | history_sync), text y phone_number_id; vacía
-    si el evento no trae salientes.
+    Devuelve dicts con phone (el cliente destinatario; vacío si WhatsApp omite
+    su número), wa_user_id (su BSUID), wamid, origin (cloud_api | business_app
+    | history_sync), text y phone_number_id; vacía si el evento no trae
+    salientes.
     """
     event_type = str(
         payload.get("event_type") or payload.get("event") or payload.get("type") or ""
@@ -219,6 +223,12 @@ def extract_outbound_messages(payload):
             or kapso_meta.get("to_phone")
             or conversation.get("phone_number")
         )
+        wa_user_id = (
+            message.get("to_user_id")
+            or kapso_meta.get("to_user_id")
+            or conversation.get("business_scoped_user_id")
+            or ""
+        )
         msg_type = message.get("type")
         if msg_type == "text":
             text = (message.get("text") or {}).get("body", "")
@@ -229,6 +239,7 @@ def extract_outbound_messages(payload):
         results.append(
             {
                 "phone": phone,
+                "wa_user_id": wa_user_id,
                 "wamid": message.get("id") or "",
                 "origin": kapso_meta.get("origin") or "",
                 "text": text.strip(),
@@ -407,6 +418,24 @@ def _start_typing(phone, stop_event):
         ).start()
 
 
+def _find_contact(key, wa_user_id):
+    """Contacto por su BSUID primero y por teléfono después (get_or_create).
+
+    Meta omite el número de los clientes con nombre de usuario, así que la
+    identidad estable es el business_scoped_user_id. `phone` guarda el número
+    si llegó y, si no, el propio BSUID: sirve igual como clave y como destino
+    (kapso.destination lo manda en "recipient").
+    """
+    contact = None
+    if wa_user_id:
+        contact = WhatsAppContact.objects.filter(wa_user_id=wa_user_id).first()
+    if contact is None:
+        contact, _ = WhatsAppContact.objects.get_or_create(
+            phone=key, defaults={"wa_user_id": wa_user_id}
+        )
+    return contact
+
+
 def _close_events(event_ids, status, error=""):
     WebhookEvent.objects.filter(pk__in=event_ids).update(status=status, error=error)
 
@@ -540,11 +569,13 @@ def _handle_outbound(event, outbounds):
     pause = timedelta(minutes=settings.WHATSAPP_HUMAN_PAUSE_MINUTES)
     groups = {}
     for msg in human:
-        if msg["phone"]:
-            groups.setdefault(msg["phone"], []).append(msg)
+        key = msg["phone"] or msg["wa_user_id"]
+        if key:
+            groups.setdefault(key, []).append(msg)
 
-    for phone, messages in groups.items():
-        contact, _ = WhatsAppContact.objects.get_or_create(phone=phone)
+    for key, messages in groups.items():
+        contact = _find_contact(key, messages[0]["wa_user_id"])
+        phone = contact.phone
         contact.human_until = timezone.now() + pause
         contact.save(update_fields=["human_until", "updated_at"])
         event.contact_phone = phone
@@ -615,15 +646,15 @@ def _process_event(event):
         first = messages[0]
         phone_number_id = next((m["phone_number_id"] for m in messages if m["phone_number_id"]), "")
 
-        contact, _ = WhatsAppContact.objects.get_or_create(
-            phone=key,
-            defaults={"wa_user_id": first["wa_user_id"]},
-        )
+        contact = _find_contact(key, first["wa_user_id"])
         updates = ["last_message_at", "updated_at"]
         contact.last_message_at = timezone.now()
         if first["wa_user_id"] and contact.wa_user_id != first["wa_user_id"]:
             contact.wa_user_id = first["wa_user_id"]
             updates.append("wa_user_id")
+        if first["username"] and contact.username != first["username"]:
+            contact.username = first["username"][:64]
+            updates.append("username")
         if first["contact_name"] and contact.profile_name != first["contact_name"]:
             contact.profile_name = first["contact_name"][:200]
             updates.append("profile_name")

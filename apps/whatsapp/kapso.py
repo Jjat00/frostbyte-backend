@@ -6,6 +6,7 @@ Docs: https://docs.kapso.ai/
 """
 
 import logging
+import re
 import time
 
 import requests
@@ -24,6 +25,25 @@ RETRY_BACKOFF_SECONDS = 2
 
 # Ventana para dar por "de esta conversación" un mensaje que no nos llegó
 UNDELIVERED_LOOKBACK_MINUTES = 60
+
+# Business-scoped user ID de Meta ("CO.2430294670795328", "US.ENT.5068…"): la
+# identidad del cliente cuando WhatsApp omite su número (nombres de usuario,
+# desde 2026). Se envía en "recipient"; en "to" Meta responde 131026.
+BSUID_RE = re.compile(r"^[A-Z]{2}\.[A-Za-z0-9.]+$")
+
+
+def is_bsuid(value):
+    """True si `value` es un business-scoped user ID y no un teléfono."""
+    return bool(BSUID_RE.match(str(value or "")))
+
+
+def destination(to):
+    """Campo de destinatario del payload: teléfono en "to", BSUID en "recipient"."""
+    return {"recipient": to} if is_bsuid(to) else {"to": to}
+
+
+def _recipient_of(payload):
+    return payload.get("to") or payload.get("recipient") or ""
 
 
 def _record_sent(data, to_phone, body=""):
@@ -68,11 +88,12 @@ def recent_undelivered(phone, within_minutes=UNDELIVERED_LOOKBACK_MINUTES, limit
     """
     if not settings.KAPSO_API_KEY or not phone:
         return []
+    identity = "business_scoped_user_id" if is_bsuid(phone) else "phone_number"
     try:
         response = requests.get(
             PLATFORM_MESSAGES_URL,
             params={
-                "phone_number": phone,
+                identity: phone,
                 "direction": "inbound",
                 "message_type": "unsupported",
                 "limit": limit,
@@ -122,10 +143,10 @@ def _post_message(phone_number_id, payload):
             response = requests.post(url, json=payload, headers=headers, timeout=15)
             if response.status_code < 300:
                 data = response.json()
-                if payload.get("to"):
+                if _recipient_of(payload):
                     _record_sent(
                         data,
-                        payload.get("to"),
+                        _recipient_of(payload),
                         (payload.get("text") or {}).get("body", ""),
                     )
                 return data
@@ -137,7 +158,9 @@ def _post_message(phone_number_id, payload):
             last_error = str(exc)
         time.sleep(RETRY_BACKOFF_SECONDS * (attempt + 1))
 
-    logger.error("Fallo enviando WhatsApp a %s vía %s: %s", payload.get("to"), phone_number_id, last_error)
+    logger.error(
+        "Fallo enviando WhatsApp a %s vía %s: %s", _recipient_of(payload), phone_number_id, last_error
+    )
     return None
 
 
@@ -160,7 +183,10 @@ def _split_text(body):
 
 
 def send_text(phone_number_id, to, body):
-    """Envía un mensaje de texto (dividido si supera el límite de WhatsApp)."""
+    """Envía un mensaje de texto (dividido si supera el límite de WhatsApp).
+
+    `to` es el teléfono del cliente o su BSUID (ver destination).
+    """
     results = []
     for part in _split_text(body):
         results.append(
@@ -168,7 +194,7 @@ def send_text(phone_number_id, to, body):
                 phone_number_id,
                 {
                     "messaging_product": "whatsapp",
-                    "to": to,
+                    **destination(to),
                     "type": "text",
                     "text": {"body": part},
                 },
@@ -201,7 +227,7 @@ def send_buttons(phone_number_id, to, body, buttons):
     """
     payload = {
         "messaging_product": "whatsapp",
-        "to": to,
+        **destination(to),
         "type": "interactive",
         "interactive": {
             "type": "button",
