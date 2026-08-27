@@ -174,9 +174,10 @@ def get_checkpointer():
 
 NO_PHONE_PROMPT = """\
 SOBRE ESTE CLIENTE: WhatsApp NO nos muestra su número de teléfono (usa nombre de usuario). \
-Antes de crear cualquier pedido, a domicilio o para recoger, pídele un celular de contacto de \
-10 dígitos explicándole que es por si el equipo necesita llamarle, y pásalo a crear_pedido en \
-telefono_contacto. Sin ese celular no se crea el pedido."""
+Si el pedido es A DOMICILIO, antes de crearlo pídele un celular de contacto de 10 dígitos \
+explicándole que es por si el domiciliario necesita llamarle, y pásalo a crear_pedido en \
+telefono_contacto: sin ese celular no se crea el domicilio. Si es PARA RECOGER en el local, NO \
+le pidas ningún número."""
 
 KNOWN_PHONE_PROMPT = """ Ya nos dio el {celular}: en vez de pedirlo otra vez confírmalo \
 ("¿te llamamos al {celular} si hace falta?") y pásalo igual en telefono_contacto."""

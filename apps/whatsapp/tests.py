@@ -699,7 +699,8 @@ class ClientesSinNumeroTests(TestCase):
 
 class ClienteSinNumeroPideCelularTests(TestCase):
     """Pedido de Jaime (27/08): si WhatsApp no muestra el número del cliente,
-    el agente pide un celular de contacto para poder llamarlo si hace falta."""
+    el agente pide un celular de contacto para poder llamarlo si hace falta.
+    Solo en domicilios: quien pasa a recoger viene al local."""
 
     def setUp(self):
         from apps.business.models import Business
@@ -719,9 +720,18 @@ class ClienteSinNumeroPideCelularTests(TestCase):
         cfg = StoreSettings.load()
         cfg.is_open = True
         cfg.pickup_enabled = True
+        cfg.customer_ordering_enabled = True
         cfg.save()
 
-        self.contact = WhatsAppContact.objects.create(phone=BSUID, wa_user_id=BSUID)
+        # Ubicación compartida en el propio local: dentro de la zona seguro
+        from django.conf import settings as dj_settings
+
+        self.contact = WhatsAppContact.objects.create(
+            phone=BSUID,
+            wa_user_id=BSUID,
+            last_location_lat=dj_settings.DELIVERY_CENTER_LAT,
+            last_location_lng=dj_settings.DELIVERY_CENTER_LNG,
+        )
         self.tools = {t.name: t for t in build_tools(self.contact)}
 
     def _crear(self, **kwargs):
@@ -730,16 +740,26 @@ class ClienteSinNumeroPideCelularTests(TestCase):
             "nombre_cliente": "Dayana",
             "metodo_pago": "cash",
             "paga_con": "exacto",
-            "para_recoger": True,
+            "direccion": "Carrera 11 #21-17",
         }
         datos.update(kwargs)
         return self.tools["crear_pedido"].invoke(datos)
 
-    def test_sin_celular_no_se_crea_el_pedido(self):
+    def test_sin_celular_no_se_crea_el_domicilio(self):
         resultado = self._crear()
         self.assertIn("ERROR", resultado)
         self.assertIn("celular", resultado)
         self.assertEqual(Order.objects.count(), 0)
+
+    def test_para_recoger_no_se_pide_ningun_numero(self):
+        resultado = self._crear(para_recoger=True, direccion="")
+        self.assertIn("PEDIDO CREADO", resultado)
+        order = Order.objects.get()
+        self.assertEqual(order.customer_phone, BSUID, "sin celular, el pedido conserva la identidad")
+        # y la notificación de "listo" sigue saliendo por WhatsApp
+        from .signals import _destination
+
+        self.assertEqual(_destination(order.customer_phone), (self.contact, BSUID))
 
     def test_un_celular_mal_dado_se_vuelve_a_pedir(self):
         resultado = self._crear(telefono_contacto="123")
@@ -755,16 +775,25 @@ class ClienteSinNumeroPideCelularTests(TestCase):
         self.contact.refresh_from_db()
         self.assertEqual(self.contact.contact_phone, "573001234567")
 
-    def test_el_segundo_pedido_no_vuelve_a_pedir_el_celular(self):
+    def test_el_segundo_domicilio_no_vuelve_a_pedir_el_celular(self):
         self.contact.contact_phone = "573001234567"
         self.contact.save()
         resultado = self._crear()
         self.assertIn("PEDIDO CREADO", resultado)
         self.assertEqual(Order.objects.get().customer_phone, "573001234567")
 
+    def test_el_historial_junta_los_pedidos_con_celular_y_los_de_recoger(self):
+        from .tools import _customer_orders
+
+        self._crear(para_recoger=True, direccion="")
+        self._crear(telefono_contacto="300 123 4567")
+        self.assertEqual(_customer_orders(self.contact).count(), 2)
+
     def test_el_prompt_le_avisa_al_agente_que_pida_el_celular(self):
         prompt = build_system_prompt(self.contact)
         self.assertIn("NO nos muestra su número", prompt)
+        self.assertIn("A DOMICILIO", prompt)
+        self.assertIn("NO \\\nle pidas ningún número".replace("\\\n", ""), prompt.replace("\\\n", ""))
         self.assertNotIn("Ya nos dio", prompt)
 
         self.contact.contact_phone = "573001234567"

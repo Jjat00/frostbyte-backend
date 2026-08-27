@@ -146,9 +146,15 @@ def _order_summary(order):
 
 def _customer_orders(contact):
     """Pedidos históricos del contacto, emparejados por los últimos dígitos."""
-    # Si WhatsApp oculta su número, el pedido lleva el celular que él dio
-    phone = contact.contact_phone if kapso.is_bsuid(contact.phone) else contact.phone
-    digits = normalize_phone(phone)[-10:]
+    if kapso.is_bsuid(contact.phone):
+        # Si WhatsApp oculta su número, el pedido lleva el celular que él dio
+        # (domicilios) o el propio BSUID (para recoger)
+        orders = Order.objects.filter(customer_phone=contact.phone)
+        digits = normalize_phone(contact.contact_phone)[-10:]
+        if digits:
+            orders = orders | Order.objects.filter(customer_phone__endswith=digits)
+        return orders
+    digits = normalize_phone(contact.phone)[-10:]
     if not digits:
         return Order.objects.none()
     return Order.objects.filter(customer_phone__endswith=digits)
@@ -496,9 +502,9 @@ def build_tools(contact):
                 un valor que el cliente no mencionó.
             notas: aclaraciones generales del pedido
             para_recoger: True si el cliente pasa por el pedido al local
-            telefono_contacto: celular del cliente (10 dígitos) SOLO cuando el
-                sistema avisa que WhatsApp no nos muestra su número; si no,
-                déjalo vacío
+            telefono_contacto: celular del cliente (10 dígitos) SOLO para
+                domicilios de clientes a los que WhatsApp no les muestra el
+                número (el sistema te lo avisa); en otro caso déjalo vacío
         """
         cfg = StoreSettings.load()
         if not cfg.is_open:
@@ -530,19 +536,20 @@ def build_tools(contact):
         contact.refresh_from_db()
         celular = ""
         if kapso.is_bsuid(contact.phone):
-            # WhatsApp no nos muestra el número de este cliente: el pedido lleva
-            # el celular que él mismo dio, por si el equipo necesita llamarlo
+            # WhatsApp no nos muestra el número de este cliente. Un domicilio
+            # lleva el celular que él mismo dio, por si el equipo necesita
+            # llamarlo; para recoger no hace falta (viene al local)
             if telefono_contacto.strip() and not _celular_colombiano(telefono_contacto):
                 return (
                     "ERROR: ese celular de contacto no es válido. Pide un número celular "
                     "de 10 dígitos (ej. 300 123 4567)."
                 )
             celular = _celular_colombiano(telefono_contacto) or contact.contact_phone
-            if not celular:
+            if not celular and not para_recoger:
                 return (
                     "ERROR: WhatsApp no nos muestra el número de este cliente. Antes de "
-                    "crear el pedido pídele un celular de contacto de 10 dígitos, por si "
-                    "el equipo necesita llamarle, y pásalo en telefono_contacto."
+                    "crear un domicilio pídele un celular de contacto de 10 dígitos, por "
+                    "si el equipo necesita llamarle, y pásalo en telefono_contacto."
                 )
         if not para_recoger and (
             contact.last_location_lat is None or contact.last_location_lng is None
@@ -588,9 +595,11 @@ def build_tools(contact):
                     Order.OrderType.PICKUP if para_recoger else Order.OrderType.DELIVERY
                 ),
                 customer_name=nombre_cliente.strip()[:200],
-                # El número que el staff puede llamar (signals busca el contacto
-                # por él para notificarle el estado por WhatsApp)
-                customer_phone=celular or normalize_phone(contact.phone),
+                # El número que el staff puede llamar; si no hay (para recoger
+                # sin número visible) queda el BSUID, que es lo que signals
+                # necesita para notificarle el estado por WhatsApp
+                customer_phone=celular
+                or (contact.phone if kapso.is_bsuid(contact.phone) else normalize_phone(contact.phone)),
                 customer_notes=customer_notes,
                 payment_method=metodo_pago,
                 delivery_address="" if para_recoger else direccion.strip()[:300],
