@@ -2,14 +2,16 @@ from rest_framework import viewsets, filters, status, permissions
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
-from django.db.models import Sum, F, Count, Prefetch
+from django.db import transaction
+from django.db.models import Sum, F, Count, Prefetch, DecimalField
 from django.utils import timezone
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 
 from apps.products.models import ProductVariant
 from apps.accounts.permissions import IsAdminUser
 from apps.business.models import Business
 from .models import UnitOfMeasure, RawMaterial, Recipe, PurchaseOrder, PurchaseOrderItem
+from .costing import TARGET_FOOD_COST, costing_figures
 
 
 def apply_business_filter(queryset, request, lookup="business__slug"):
@@ -24,6 +26,7 @@ from .serializers import (
     RawMaterialListSerializer,
     RecipeSerializer,
     RecipeDetailSerializer,
+    RecipeBulkItemSerializer,
     PurchaseOrderSerializer,
     PurchaseOrderCreateSerializer,
     PurchaseOrderItemSerializer,
@@ -241,43 +244,188 @@ class RecipeViewSet(viewsets.ModelViewSet):
 
         return queryset
 
-    @action(detail=False, methods=["get"], url_path="by-variant/(?P<variant_id>[^/.]+)")
+    @action(
+        detail=False,
+        methods=["get", "put"],
+        url_path="by-variant/(?P<variant_id>[^/.]+)",
+    )
     def by_variant(self, request, variant_id=None):
-        """Obtener receta completa de una variante de producto"""
+        """Receta completa de una variante con su costeo.
+
+        GET devuelve ingredientes, costo total, ganancia, margen, food cost y
+        precio sugerido. PUT reemplaza la receta entera con
+        ``{"items": [{"raw_material_id", "quantity", "notes"}]}`` y devuelve
+        el mismo payload ya recalculado: el editor guarda en una sola llamada.
+        """
         try:
             variant = ProductVariant.objects.select_related(
-                "product").get(id=variant_id)
+                "product", "product__business"
+            ).get(id=variant_id)
         except ProductVariant.DoesNotExist:
             return Response(
                 {"error": "Variante no encontrada"},
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        recipe_items = Recipe.objects.filter(product_variant=variant).select_related(
-            "raw_material",
-            "raw_material__unit",
+        if request.method == "PUT":
+            error = self._replace_recipe(variant, request.data)
+            if error:
+                return Response(error, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response(self._variant_costing_payload(variant))
+
+    def _replace_recipe(self, variant, data):
+        """Sustituye la receta de la variante. Devuelve un dict de error o None."""
+        items = data.get("items") if isinstance(data, dict) else None
+        if not isinstance(items, list):
+            return {"items": "Se requiere una lista de ingredientes."}
+
+        serializer = RecipeBulkItemSerializer(data=items, many=True)
+        if not serializer.is_valid():
+            return {"items": serializer.errors}
+
+        rows = serializer.validated_data
+        seen = set()
+        for row in rows:
+            material = row["raw_material"]
+            if material.id in seen:
+                return {"items": f"'{material.name}' aparece más de una vez en la receta."}
+            seen.add(material.id)
+            # La receta solo puede usar materia prima del negocio del producto:
+            # el costeo por negocio y las ordenes de compra dependen de eso.
+            if material.business_id != variant.product.business_id:
+                return {"items": f"'{material.name}' pertenece a otro negocio."}
+
+        with transaction.atomic():
+            Recipe.objects.filter(product_variant=variant).exclude(
+                raw_material_id__in=seen
+            ).delete()
+            for row in rows:
+                Recipe.objects.update_or_create(
+                    product_variant=variant,
+                    raw_material=row["raw_material"],
+                    defaults={"quantity": row["quantity"], "notes": row.get("notes", "")},
+                )
+        return None
+
+    def _variant_costing_payload(self, variant):
+        recipe_items = list(
+            Recipe.objects.filter(product_variant=variant).select_related(
+                "raw_material",
+                "raw_material__unit",
+            )
         )
+        total_cost = sum((item.cost for item in recipe_items), Decimal("0"))
+        has_recipe = len(recipe_items) > 0
+        figures = costing_figures(variant.price, total_cost, has_recipe)
 
-        # Calcular costo total de la receta
-        total_cost = sum(item.cost for item in recipe_items)
+        return {
+            "variant_id": variant.id,
+            "product": variant.product.name,
+            "product_slug": variant.product.slug,
+            "variant": variant.name,
+            "sale_price": str(variant.price) if variant.price else None,
+            "ingredients": RecipeDetailSerializer(recipe_items, many=True).data,
+            "ingredient_count": len(recipe_items),
+            "has_recipe": has_recipe,
+            "total_cost": _money(figures["cost"]) if has_recipe else "0.00",
+            "profit": _money(figures["profit"]),
+            "profit_margin": _money(figures["margin_pct"]),
+            "food_cost_pct": _money(figures["food_cost_pct"]),
+            "suggested_price": _money(figures["suggested_price"]),
+            "target_food_cost_pct": str(TARGET_FOOD_COST * 100),
+        }
 
-        serializer = RecipeDetailSerializer(recipe_items, many=True)
+    @action(detail=False, methods=["get"], url_path="costing-summary")
+    def costing_summary(self, request):
+        """Costeo de todo el catalogo, variante por variante.
 
-        return Response(
-            {
-                "product": variant.product.name,
-                "variant": variant.name,
-                "sale_price": str(variant.price) if variant.price else None,
-                "ingredients": serializer.data,
-                "total_cost": str(total_cost),
-                "profit": str(variant.price - total_cost) if variant.price else None,
-                "profit_margin": (
-                    str(((variant.price - total_cost) / variant.price * 100))
-                    if variant.price and variant.price > 0
-                    else None
+        Filtros: ``?business=<slug>``, ``?category=<slug>`` e
+        ``?include_inactive=1`` (por defecto solo variantes y productos
+        activos). El costo se agrega en SQL para no cargar cada receta.
+        """
+        variants = (
+            ProductVariant.objects.select_related(
+                "product", "product__category", "product__business"
+            )
+            .annotate(
+                recipe_cost=Sum(
+                    F("recipe_items__quantity")
+                    * F("recipe_items__raw_material__cost_per_unit"),
+                    output_field=DecimalField(max_digits=12, decimal_places=2),
                 ),
-            }
+                ingredient_count=Count("recipe_items"),
+            )
+            .order_by("product__category__display_order", "product__name", "name")
         )
+        variants = apply_business_filter(
+            variants, request, lookup="product__business__slug"
+        )
+        category = request.query_params.get("category")
+        if category:
+            variants = variants.filter(product__category__slug=category)
+        if request.query_params.get("include_inactive") not in ("1", "true"):
+            variants = variants.filter(is_active=True, product__is_active=True)
+
+        rows = []
+        margins = []
+        target_margin = (Decimal("1") - TARGET_FOOD_COST) * 100
+        for variant in variants:
+            has_recipe = variant.ingredient_count > 0
+            figures = costing_figures(variant.price, variant.recipe_cost, has_recipe)
+            if figures["margin_pct"] is not None:
+                margins.append(figures["margin_pct"])
+            product = variant.product
+            rows.append(
+                {
+                    "variant_id": variant.id,
+                    "variant_name": variant.name,
+                    "is_default": variant.is_default,
+                    "product_id": product.id,
+                    "product_name": product.name,
+                    "product_slug": product.slug,
+                    "category_name": product.category.name if product.category_id else None,
+                    "category_slug": product.category.slug if product.category_id else None,
+                    "business_slug": product.business.slug,
+                    "business_name": product.business.name,
+                    "price": _money(variant.price),
+                    "has_recipe": has_recipe,
+                    "ingredient_count": variant.ingredient_count,
+                    "cost": _money(figures["cost"]),
+                    "profit": _money(figures["profit"]),
+                    "margin_pct": _money(figures["margin_pct"]),
+                    "food_cost_pct": _money(figures["food_cost_pct"]),
+                    "suggested_price": _money(figures["suggested_price"]),
+                }
+            )
+
+        total = len(rows)
+        costed = sum(1 for r in rows if r["has_recipe"])
+        avg_margin = (
+            (sum(margins) / len(margins)).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
+            if margins
+            else None
+        )
+        summary = {
+            "total_variants": total,
+            "costed_variants": costed,
+            "uncosted_variants": total - costed,
+            "coverage_pct": (
+                str((Decimal(costed) / Decimal(total) * 100).quantize(Decimal("0.1")))
+                if total
+                else "0.0"
+            ),
+            "avg_margin_pct": _money(avg_margin),
+            "below_target_count": sum(1 for m in margins if m < target_margin),
+            "target_margin_pct": str(target_margin),
+            "target_food_cost_pct": str(TARGET_FOOD_COST * 100),
+        }
+        return Response({"summary": summary, "items": rows})
+
+
+def _money(value):
+    """Decimal -> str para la API (None se respeta)."""
+    return None if value is None else str(value)
 
 
 class PurchaseOrderViewSet(viewsets.ModelViewSet):
