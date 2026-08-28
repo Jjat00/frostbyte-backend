@@ -138,7 +138,10 @@ def _order_summary(order):
         )
     if order.delivery_fee:
         lines.append(f"Envío: {_cop(order.delivery_fee)}")
-    lines.append(f"TOTAL: {_cop(order.total)} · pago: {order.get_payment_method_display() or 'sin definir'}")
+    pago = order.get_payment_method_display() or (
+        "al recoger en el local" if order.order_type == Order.OrderType.PICKUP else "sin definir"
+    )
+    lines.append(f"TOTAL: {_cop(order.total)} · pago: {pago}")
     if order.delivery_address:
         lines.append(f"Dirección: {order.delivery_address}")
     return "\n".join(lines)
@@ -470,9 +473,10 @@ def build_tools(contact):
         # Chat real del 27/08: el agente mostró la cotización como si el pedido
         # ya existiera ("te aviso cuando esté listo") y nunca llamó crear_pedido
         lines.append(
-            "ESTO ES SOLO UNA COTIZACIÓN: el pedido NO está creado. Muestra este "
-            "resumen al cliente, pregunta el método de pago si aún no lo sabes y "
-            "espera su confirmación; el pedido existe SOLO cuando crear_pedido "
+            "ESTO ES SOLO UNA COTIZACIÓN: el pedido NO está creado. Si es un "
+            "domicilio, muestra este resumen al cliente, pregunta el método de pago "
+            "si aún no lo sabes y espera su confirmación; si es para recoger, llama "
+            "crear_pedido de inmediato. El pedido existe SOLO cuando crear_pedido "
             "responda PEDIDO CREADO."
         )
         return "\n".join(lines)
@@ -480,8 +484,8 @@ def build_tools(contact):
     @tool
     def crear_pedido(
         items: list[ItemPedido],
-        nombre_cliente: str,
-        metodo_pago: str,
+        nombre_cliente: str = "",
+        metodo_pago: str = "",
         direccion: str = "",
         referencia: str = "",
         paga_con: str = "",
@@ -490,19 +494,23 @@ def build_tools(contact):
         telefono_contacto: str = "",
     ) -> str:
         """Crea el pedido DEFINITIVO, a domicilio o para recoger en el local.
-        Llámala SOLO después de que el cliente confirmó explícitamente el
-        resumen completo (items, total y método de pago).
 
-        A domicilio: la dirección y la ubicación de WhatsApp son OBLIGATORIAS;
-        la ubicación la toma el sistema por su cuenta (verifícala antes con
-        verificar_cobertura) y tú nunca manejas coordenadas.
-        Para recoger (para_recoger=True): no pidas dirección ni ubicación, no se
-        cobra envío y el cliente pasa por el pedido al local.
+        A domicilio: llámala SOLO después de que el cliente confirmó el resumen
+        completo (items, total y método de pago). La dirección y la ubicación
+        de WhatsApp son OBLIGATORIAS; la ubicación la toma el sistema por su
+        cuenta (verifícala antes con verificar_cobertura) y tú nunca manejas
+        coordenadas.
+        Para recoger (para_recoger=True): llámala apenas el cliente diga qué
+        quiere y que pasa por él. NO pidas dirección, ubicación, teléfono ni
+        método de pago (paga al recoger en el local, sin envío); responde con la
+        confirmación y el TOTAL que devuelve esta tool.
 
         Args:
             items: items del pedido con variante_id, cantidad y notas
-            nombre_cliente: nombre de quien recibe o de quien pasa a recoger
-            metodo_pago: uno de: cash, nequi (son los únicos que acepta el local)
+            nombre_cliente: nombre de quien recibe o de quien pasa a recoger; si
+                lo omites se usa el nombre ya conocido del cliente
+            metodo_pago: cash o nequi (los únicos que acepta el local). Obligatorio
+                a domicilio; para recoger déjalo vacío (paga al recoger)
             direccion: dirección de entrega completa (solo domicilio)
             referencia: punto de referencia para el domiciliario (solo domicilio)
             paga_con: SOLO efectivo: billete que DIJO el cliente (ej. '50000'),
@@ -535,13 +543,24 @@ def build_tools(contact):
             )
         if not para_recoger and not direccion.strip():
             return "ERROR: para un domicilio hace falta la dirección de entrega."
-        if metodo_pago not in Order.ACTIVE_PAYMENT_METHODS:
+        if metodo_pago and metodo_pago not in Order.ACTIVE_PAYMENT_METHODS:
             return f"ERROR: metodo_pago inválido. Usa uno de: {', '.join(Order.ACTIVE_PAYMENT_METHODS)}."
+        if not para_recoger and not metodo_pago:
+            return "ERROR: para un domicilio hace falta el método de pago (cash o nequi)."
         if not items:
             return "ERROR: el pedido no tiene items."
         if metodo_pago == Order.PaymentMethod.CASH and not paga_con:
             return "ERROR: para pago en efectivo pregunta primero con qué billete paga (paga_con)."
         contact.refresh_from_db()
+        nombre = (
+            nombre_cliente.strip() or contact.customer_name or contact.profile_name
+        ).strip()[:200]
+        if not nombre:
+            return (
+                "ERROR: falta el nombre de quien "
+                + ("pasa a recoger el pedido" if para_recoger else "recibe el pedido")
+                + ": pregúntale solo eso."
+            )
         celular = ""
         if kapso.is_bsuid(contact.phone):
             # WhatsApp no nos muestra el número de este cliente. Un domicilio
@@ -602,7 +621,7 @@ def build_tools(contact):
                 order_type=(
                     Order.OrderType.PICKUP if para_recoger else Order.OrderType.DELIVERY
                 ),
-                customer_name=nombre_cliente.strip()[:200],
+                customer_name=nombre,
                 # El número que el staff puede llamar; si no hay (para recoger
                 # sin número visible) queda el BSUID, que es lo que signals
                 # necesita para notificarle el estado por WhatsApp
@@ -632,7 +651,7 @@ def build_tools(contact):
             order.calculate_totals()
             order.save()
 
-        contact.customer_name = nombre_cliente.strip()[:200]
+        contact.customer_name = nombre
         campos = ["customer_name", "updated_at"]
         if celular and contact.contact_phone != celular:
             contact.contact_phone = celular
@@ -648,7 +667,8 @@ def build_tools(contact):
         broadcast_orders_update()
 
         cierre = (
-            "El cliente pasa por él al local; avísale cuando esté listo."
+            "El cliente pasa por él al local y paga al recogerlo; dile el TOTAL y "
+            "que le avisas cuando esté listo."
             if para_recoger
             else "Sale a domicilio."
         )

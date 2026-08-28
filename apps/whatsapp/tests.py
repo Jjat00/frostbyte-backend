@@ -487,6 +487,48 @@ class PedidoParaRecogerTests(TestCase):
         self.cfg.save()
         self.assertIn("ERROR", self._crear(para_recoger=True))
 
+    def test_para_recoger_no_hace_falta_metodo_de_pago_ni_nada_mas(self):
+        """Regla de Jaime (27/08): para recoger solo se confirma el total y se
+        crea el pedido; el cliente paga al recogerlo."""
+        from apps.orders.models import Order
+
+        resultado = self._crear(para_recoger=True, metodo_pago="", paga_con="")
+        self.assertIn("PEDIDO CREADO", resultado)
+        self.assertIn("paga al recogerlo", resultado)
+        self.assertIn("TOTAL: $18.000 · pago: al recoger en el local", resultado)
+        order = Order.objects.get()
+        self.assertEqual(order.payment_method, "")
+        self.assertEqual(order.order_type, Order.OrderType.PICKUP)
+
+    def test_para_recoger_usa_el_nombre_que_ya_se_conoce(self):
+        from apps.orders.models import Order
+
+        self.contact.profile_name = "Milena Irua Studio"
+        self.contact.save()
+        resultado = self._crear(para_recoger=True, metodo_pago="", nombre_cliente="")
+        self.assertIn("PEDIDO CREADO", resultado)
+        self.assertEqual(Order.objects.get().customer_name, "Milena Irua Studio")
+
+    def test_sin_ningun_nombre_se_pregunta_solo_eso(self):
+        from apps.orders.models import Order
+
+        resultado = self._crear(para_recoger=True, metodo_pago="", nombre_cliente="")
+        self.assertIn("ERROR", resultado)
+        self.assertIn("nombre", resultado)
+        self.assertEqual(Order.objects.count(), 0)
+
+    def test_el_domicilio_sigue_exigiendo_metodo_de_pago(self):
+        self.cfg.customer_ordering_enabled = True
+        self.cfg.save()
+        resultado = self._crear(metodo_pago="", direccion="Carrera 11 #21-17")
+        self.assertIn("ERROR", resultado)
+        self.assertIn("método de pago", resultado)
+
+    def test_el_prompt_no_pregunta_nada_para_recoger(self):
+        prompt = build_system_prompt()
+        self.assertIn("NO preguntes método de pago, celular, dirección ni ubicación", prompt)
+        self.assertIn("Solo para domicilio: pregunta el método de pago", prompt)
+
     def test_el_local_cerrado_manda_sobre_los_dos_canales(self):
         self.cfg.is_open = False
         self.cfg.save()

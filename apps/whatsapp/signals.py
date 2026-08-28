@@ -86,6 +86,8 @@ def _notify_status_change(sender, instance, created, **kwargs):
         payment_line = "Ten listo el pago en efectivo, por favor."
     elif instance.is_paid:
         payment_line = "Tu pago ya está confirmado."
+    elif instance.order_type == Order.OrderType.PICKUP and not instance.payment_method:
+        payment_line = "Pagas al recogerlo."
     else:
         payment_line = "Recuerda enviar el comprobante si aún no has pagado."
 
