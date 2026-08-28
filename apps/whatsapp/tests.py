@@ -499,6 +499,18 @@ class PedidoParaRecogerTests(TestCase):
         self.assertIn("TOTAL: $18.000", cotizacion)
         self.assertNotIn("Envío:", cotizacion)
 
+    def test_la_cotizacion_avisa_que_el_pedido_no_existe_todavia(self):
+        """Chat real 2026-08-27: el agente cotizó un granizado para recoger y le
+        dijo a la clienta "te avisaré cuando esté listo" sin crear el pedido."""
+        cotizacion = self.tools["cotizar_pedido"].invoke(
+            {"items": [{"variante_id": self.variante.id, "cantidad": 1}], "para_recoger": True}
+        )
+        self.assertIn("NO está creado", cotizacion)
+        self.assertIn("PEDIDO CREADO", cotizacion)
+        prompt = build_system_prompt()
+        self.assertIn("cotizar_pedido NO crea nada", prompt)
+        self.assertNotIn("y dile que le avisas cuando esté listo. Todo", prompt)
+
     def test_el_estado_avisa_que_se_puede_encargar(self):
         estado = self.tools["consultar_estado_tienda"].invoke({})
         self.assertIn("Puedes tomar pedidos A DOMICILIO: NO", estado)

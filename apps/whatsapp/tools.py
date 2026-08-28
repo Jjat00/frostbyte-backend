@@ -467,6 +467,14 @@ def build_tools(contact):
                     f"Billete OK ({_cop(billete)}). NO menciones vueltas al cliente: "
                     "el dato queda en el pedido y el equipo las alista."
                 )
+        # Chat real del 27/08: el agente mostró la cotización como si el pedido
+        # ya existiera ("te aviso cuando esté listo") y nunca llamó crear_pedido
+        lines.append(
+            "ESTO ES SOLO UNA COTIZACIÓN: el pedido NO está creado. Muestra este "
+            "resumen al cliente, pregunta el método de pago si aún no lo sabes y "
+            "espera su confirmación; el pedido existe SOLO cuando crear_pedido "
+            "responda PEDIDO CREADO."
+        )
         return "\n".join(lines)
 
     @tool
