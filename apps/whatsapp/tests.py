@@ -524,10 +524,14 @@ class PedidoParaRecogerTests(TestCase):
         self.assertIn("ERROR", resultado)
         self.assertIn("método de pago", resultado)
 
-    def test_el_prompt_no_pregunta_nada_para_recoger(self):
+    def test_el_prompt_no_pregunta_nada_para_recoger_pero_si_confirma(self):
         prompt = build_system_prompt()
         self.assertIn("NO preguntes método de pago, celular, dirección ni ubicación", prompt)
         self.assertIn("Solo para domicilio: pregunta el método de pago", prompt)
+        # Regla de Jaime: items + total, el cliente confirma, y solo ahí se crea
+        self.assertIn("muestra items y TOTAL, y espera su", prompt)
+        self.assertIn('espera un "sí" explícito', prompt)
+        self.assertNotIn("DE INMEDIATO", prompt)
 
     def test_el_local_cerrado_manda_sobre_los_dos_canales(self):
         self.cfg.is_open = False

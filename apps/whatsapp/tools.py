@@ -473,11 +473,10 @@ def build_tools(contact):
         # Chat real del 27/08: el agente mostró la cotización como si el pedido
         # ya existiera ("te aviso cuando esté listo") y nunca llamó crear_pedido
         lines.append(
-            "ESTO ES SOLO UNA COTIZACIÓN: el pedido NO está creado. Si es un "
-            "domicilio, muestra este resumen al cliente, pregunta el método de pago "
-            "si aún no lo sabes y espera su confirmación; si es para recoger, llama "
-            "crear_pedido de inmediato. El pedido existe SOLO cuando crear_pedido "
-            "responda PEDIDO CREADO."
+            "ESTO ES SOLO UNA COTIZACIÓN: el pedido NO está creado. Muestra este "
+            "resumen al cliente (a domicilio, pregunta antes el método de pago si "
+            "aún no lo sabes) y espera su confirmación; el pedido existe SOLO "
+            "cuando crear_pedido responda PEDIDO CREADO."
         )
         return "\n".join(lines)
 
@@ -500,10 +499,10 @@ def build_tools(contact):
         de WhatsApp son OBLIGATORIAS; la ubicación la toma el sistema por su
         cuenta (verifícala antes con verificar_cobertura) y tú nunca manejas
         coordenadas.
-        Para recoger (para_recoger=True): llámala apenas el cliente diga qué
-        quiere y que pasa por él. NO pidas dirección, ubicación, teléfono ni
-        método de pago (paga al recoger en el local, sin envío); responde con la
-        confirmación y el TOTAL que devuelve esta tool.
+        Para recoger (para_recoger=True): llámala cuando el cliente confirme el
+        resumen (items y TOTAL de cotizar_pedido). NO pidas dirección,
+        ubicación, teléfono ni método de pago (paga al recoger en el local, sin
+        envío); responde que el pedido quedó creado.
 
         Args:
             items: items del pedido con variante_id, cantidad y notas
