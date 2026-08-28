@@ -32,6 +32,7 @@ from .serializers import (
     ProductVariantSerializer,
     ProductVariantCreateUpdateSerializer,
 )
+from apps.search import PlainSearchFilter
 
 
 class CategoryViewSet(viewsets.ModelViewSet):
@@ -48,7 +49,7 @@ class CategoryViewSet(viewsets.ModelViewSet):
     queryset = Category.objects.all().select_related("business")
     permission_classes = [IsAdminOrReadOnly]
     lookup_field = "slug"
-    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    filter_backends = [PlainSearchFilter, filters.OrderingFilter]
     search_fields = ["name", "description"]
     ordering_fields = ["display_order", "name"]
     ordering = ["display_order"]
@@ -107,7 +108,7 @@ class ProductViewSet(viewsets.ModelViewSet):
         ))
     permission_classes = [IsAdminOrReadOnly]
     lookup_field = "slug"
-    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    filter_backends = [PlainSearchFilter, filters.OrderingFilter]
     search_fields = ["name", "description"]
     ordering_fields = ["name", "created_at", "category"]
     ordering = ["category__display_order", "name"]
@@ -194,7 +195,7 @@ class ProductVariantViewSet(viewsets.ModelViewSet):
     queryset = ProductVariant.objects.all().select_related("product", "product__category")
     serializer_class = ProductVariantSerializer
     permission_classes = [IsAdminOrReadOnly]
-    filter_backends = [filters.SearchFilter]
+    filter_backends = [PlainSearchFilter]
     search_fields = ["name", "sku", "product__name"]
 
     def get_queryset(self):
@@ -237,7 +238,7 @@ class ModifierGroupViewSet(viewsets.ModelViewSet):
     serializer_class = ModifierGroupSerializer
     permission_classes = [IsAdminOrReadOnly]
     pagination_class = None
-    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    filter_backends = [PlainSearchFilter, filters.OrderingFilter]
     search_fields = ["name", "description"]
     ordering_fields = ["name"]
     ordering = ["name"]
@@ -266,7 +267,7 @@ class ModifierOptionViewSet(viewsets.ModelViewSet):
     serializer_class = ModifierOptionSerializer
     permission_classes = [IsAdminOrReadOnly]
     pagination_class = None
-    filter_backends = [filters.SearchFilter]
+    filter_backends = [PlainSearchFilter]
     search_fields = ["name"]
 
     def get_queryset(self):

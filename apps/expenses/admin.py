@@ -1,9 +1,10 @@
 from django.contrib import admin
 from .models import ExpenseCategory, OperationalExpense, RecurringExpenseTemplate
+from apps.search import PlainSearchAdminMixin
 
 
 @admin.register(ExpenseCategory)
-class ExpenseCategoryAdmin(admin.ModelAdmin):
+class ExpenseCategoryAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     list_display = ['name', 'slug', 'icon', 'color', 'is_active', 'display_order']
     list_filter = ['is_active', 'is_recurring_default']
     search_fields = ['name', 'description']
@@ -12,7 +13,7 @@ class ExpenseCategoryAdmin(admin.ModelAdmin):
 
 
 @admin.register(OperationalExpense)
-class OperationalExpenseAdmin(admin.ModelAdmin):
+class OperationalExpenseAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     list_display = [
         'expense_number', 'business', 'description', 'category', 'amount',
         'expense_date', 'status', 'payment_method', 'created_by'
@@ -26,7 +27,7 @@ class OperationalExpenseAdmin(admin.ModelAdmin):
 
 
 @admin.register(RecurringExpenseTemplate)
-class RecurringExpenseTemplateAdmin(admin.ModelAdmin):
+class RecurringExpenseTemplateAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     list_display = [
         'name', 'business', 'category', 'amount', 'recurrence_type',
         'is_active', 'next_due_date', 'last_generated_at'

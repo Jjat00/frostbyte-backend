@@ -38,6 +38,7 @@ from .serializers import (
     CustomerOrderListSerializer,
     build_table_label,
 )
+from apps.search import PlainSearchFilter
 
 
 class OrderViewSet(viewsets.ModelViewSet):
@@ -54,7 +55,7 @@ class OrderViewSet(viewsets.ModelViewSet):
     queryset = Order.objects.select_related("table").prefetch_related(
         "items", "items__product_variant__product", "items__business")
     permission_classes = [IsAuthenticated]
-    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    filter_backends = [PlainSearchFilter, filters.OrderingFilter]
     search_fields = ["order_number", "customer_name", "customer_phone"]
     ordering_fields = ["created_at", "total", "status"]
     ordering = ["-created_at"]

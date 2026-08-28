@@ -2,10 +2,11 @@ from django.contrib import admin
 from django.utils.html import format_html, format_html_join
 
 from .models import ChatMessage, SentMessage, WebhookEvent, WhatsAppContact
+from apps.search import PlainSearchAdminMixin
 
 
 @admin.register(WhatsAppContact)
-class WhatsAppContactAdmin(admin.ModelAdmin):
+class WhatsAppContactAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     list_display = (
         "phone",
         "customer_name",
@@ -86,7 +87,7 @@ class WhatsAppContactAdmin(admin.ModelAdmin):
 
 
 @admin.register(SentMessage)
-class SentMessageAdmin(admin.ModelAdmin):
+class SentMessageAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     list_display = ("created_at", "to_phone", "wamid")
     search_fields = ("to_phone", "wamid")
     readonly_fields = [f.name for f in SentMessage._meta.fields]
@@ -96,7 +97,7 @@ class SentMessageAdmin(admin.ModelAdmin):
 
 
 @admin.register(ChatMessage)
-class ChatMessageAdmin(admin.ModelAdmin):
+class ChatMessageAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     """Archivo de las conversaciones.
 
     Filtrar por `author` es lo que permite revisar los chats que terminó
@@ -115,7 +116,7 @@ class ChatMessageAdmin(admin.ModelAdmin):
 
 
 @admin.register(WebhookEvent)
-class WebhookEventAdmin(admin.ModelAdmin):
+class WebhookEventAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     list_display = ("created_at", "event_type", "contact_phone", "phone_number_id", "status")
     list_filter = ("status",)
     search_fields = ("contact_phone", "idempotency_key")

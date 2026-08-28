@@ -1,10 +1,11 @@
 from django.contrib import admin
 from django.utils.html import format_html
 from .models import AIImageGeneration
+from apps.search import PlainSearchAdminMixin
 
 
 @admin.register(AIImageGeneration)
-class AIImageGenerationAdmin(admin.ModelAdmin):
+class AIImageGenerationAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     list_display = ['id', 'user', 'status', 'created_at']
     list_filter = ['status', 'created_at']
     search_fields = ['id', 'user__email']

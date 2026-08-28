@@ -16,36 +16,37 @@ from .models import (
     UserMission,
     UserScore,
 )
+from apps.search import PlainSearchAdminMixin
 
 
 @admin.register(Tournament)
-class TournamentAdmin(admin.ModelAdmin):
+class TournamentAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     list_display = ["name", "kickoff", "awards_lock_at", "prize", "api_season", "is_active"]
     list_filter = ["is_active"]
 
 
 @admin.register(Group)
-class GroupAdmin(admin.ModelAdmin):
+class GroupAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     list_display = ["letter", "name", "display_order"]
     ordering = ["display_order", "letter"]
 
 
 @admin.register(Team)
-class TeamAdmin(admin.ModelAdmin):
+class TeamAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     list_display = ["code", "name", "group", "confederation", "is_host", "api_team_id"]
     list_filter = ["confederation", "group", "is_host"]
     search_fields = ["code", "name"]
 
 
 @admin.register(Player)
-class PlayerAdmin(admin.ModelAdmin):
+class PlayerAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     list_display = ["name", "team", "is_keeper", "api_player_id"]
     list_filter = ["is_keeper", "team"]
     search_fields = ["name"]
 
 
 @admin.register(Match)
-class MatchAdmin(admin.ModelAdmin):
+class MatchAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     list_display = [
         "number", "slug", "stage", "round_label", "home_team", "away_team",
         "kickoff", "status", "home_score", "away_score", "winner_team", "featured",
@@ -58,7 +59,7 @@ class MatchAdmin(admin.ModelAdmin):
 
 
 @admin.register(Prediction)
-class PredictionAdmin(admin.ModelAdmin):
+class PredictionAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     list_display = [
         "user", "match", "home_score", "away_score",
         "points_earned", "is_exact", "is_correct_outcome", "scored",
@@ -69,21 +70,21 @@ class PredictionAdmin(admin.ModelAdmin):
 
 
 @admin.register(Award)
-class AwardAdmin(admin.ModelAdmin):
+class AwardAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     list_display = ["code", "title", "award_type", "points", "resolved",
                     "resolved_team", "resolved_player", "display_order"]
     list_filter = ["award_type", "resolved"]
 
 
 @admin.register(AwardPick)
-class AwardPickAdmin(admin.ModelAdmin):
+class AwardPickAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     list_display = ["user", "award", "team", "player", "points_earned", "scored"]
     list_filter = ["award", "scored"]
     raw_id_fields = ["user", "team", "player"]
 
 
 @admin.register(BracketPick)
-class BracketPickAdmin(admin.ModelAdmin):
+class BracketPickAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     list_display = ["user", "match", "winner_team", "points_earned", "scored"]
     list_filter = ["scored", "match__stage"]
     search_fields = ["user__username", "user__email"]
@@ -91,20 +92,20 @@ class BracketPickAdmin(admin.ModelAdmin):
 
 
 @admin.register(Mission)
-class MissionAdmin(admin.ModelAdmin):
+class MissionAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     list_display = ["code", "title", "kind", "target", "bonus_points", "param", "display_order"]
     list_filter = ["kind"]
 
 
 @admin.register(UserMission)
-class UserMissionAdmin(admin.ModelAdmin):
+class UserMissionAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     list_display = ["user", "mission", "progress", "done", "completed_at"]
     list_filter = ["done", "mission"]
     raw_id_fields = ["user"]
 
 
 @admin.register(UserScore)
-class UserScoreAdmin(admin.ModelAdmin):
+class UserScoreAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     list_display = [
         "position", "user", "points", "match_points", "award_points",
         "bracket_points", "mission_points", "referral_points", "exact_hits",
@@ -116,7 +117,7 @@ class UserScoreAdmin(admin.ModelAdmin):
 
 
 @admin.register(Referral)
-class ReferralAdmin(admin.ModelAdmin):
+class ReferralAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     list_display = ["inviter", "invitee", "qualified", "created_at", "qualified_at"]
     list_filter = ["qualified"]
     search_fields = [
@@ -127,7 +128,7 @@ class ReferralAdmin(admin.ModelAdmin):
 
 
 @admin.register(GranizadoReward)
-class GranizadoRewardAdmin(admin.ModelAdmin):
+class GranizadoRewardAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     list_display = ["code", "user", "match", "status", "issued_at", "expires_at", "redeemed", "redeemed_at"]
     list_filter = ["redeemed", "match"]
     search_fields = ["code", "user__username", "user__email"]

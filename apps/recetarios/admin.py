@@ -5,6 +5,7 @@ from .models import (
     RecipeBookIngredient,
     RecipeBookImage,
 )
+from apps.search import PlainSearchAdminMixin
 
 
 class RecipeBookStepInline(admin.TabularInline):
@@ -26,7 +27,7 @@ class RecipeBookImageInline(admin.TabularInline):
 
 
 @admin.register(RecipeBook)
-class RecipeBookAdmin(admin.ModelAdmin):
+class RecipeBookAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     list_display = ["name", "category", "difficulty", "product", "is_active", "created_at"]
     list_filter = ["category", "difficulty", "is_active"]
     search_fields = ["name", "description"]

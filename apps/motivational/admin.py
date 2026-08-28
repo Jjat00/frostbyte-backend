@@ -1,9 +1,10 @@
 from django.contrib import admin
 from .models import RecommenderLog
+from apps.search import PlainSearchAdminMixin
 
 
 @admin.register(RecommenderLog)
-class RecommenderLogAdmin(admin.ModelAdmin):
+class RecommenderLogAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     list_display = (
         "created_at",
         "session_type",

@@ -1,9 +1,10 @@
 from django.contrib import admin
 from .models import Table, GameRoom, GameParticipant, GameRound, GameRoundResult, GameUsage
+from apps.search import PlainSearchAdminMixin
 
 
 @admin.register(Table)
-class TableAdmin(admin.ModelAdmin):
+class TableAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     list_display = ["table_number", "qr_code", "is_active", "created_at"]
     list_filter = ["is_active"]
     search_fields = ["qr_code", "table_number"]
@@ -23,7 +24,7 @@ class GameRoundInline(admin.TabularInline):
 
 
 @admin.register(GameRoom)
-class GameRoomAdmin(admin.ModelAdmin):
+class GameRoomAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     list_display = [
         "room_code",
         "table",
@@ -64,7 +65,7 @@ class GameRoomAdmin(admin.ModelAdmin):
 
 
 @admin.register(GameParticipant)
-class GameParticipantAdmin(admin.ModelAdmin):
+class GameParticipantAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     list_display = ["player_name", "room", "joined_at", "last_active"]
     list_filter = ["joined_at"]
     search_fields = ["player_name", "player_device_id", "room__room_code"]
@@ -78,7 +79,7 @@ class GameRoundResultInline(admin.TabularInline):
 
 
 @admin.register(GameRound)
-class GameRoundAdmin(admin.ModelAdmin):
+class GameRoundAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     list_display = [
         "room",
         "round_number",
@@ -93,7 +94,7 @@ class GameRoundAdmin(admin.ModelAdmin):
 
 
 @admin.register(GameRoundResult)
-class GameRoundResultAdmin(admin.ModelAdmin):
+class GameRoundResultAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     list_display = [
         "participant",
         "round",
@@ -125,7 +126,7 @@ class GameRoundResultAdmin(admin.ModelAdmin):
 
 
 @admin.register(GameUsage)
-class GameUsageAdmin(admin.ModelAdmin):
+class GameUsageAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     list_display = [
         "player_name",
         "player_device_id_short",

@@ -56,6 +56,7 @@ from .serializers import (
     TeamSerializer,
     TournamentSerializer,
 )
+from apps.search import matches_search
 
 
 def _predictions_map(user, matches=None):
@@ -1183,11 +1184,11 @@ class PollaAdminViewSet(viewsets.ViewSet):
     def list(self, request):
         """Jugadores con su desglose, ordenados como el ranking. ``?q=`` filtra."""
         _ensure_customer_scores()
-        q = (request.query_params.get("q") or "").strip().lower()
+        q = request.query_params.get("q") or ""
         rows = []
         for i, score in enumerate(_ranked_scores(), start=1):
             row = _score_breakdown(score, pos=i)
-            if q and q not in f"{row['name']} {row['email']}".lower():
+            if not matches_search(q, row["name"], row["email"]):
                 continue
             rows.append(row)
         return Response({"players": rows, "total": len(rows)})

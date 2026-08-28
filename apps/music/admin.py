@@ -1,15 +1,16 @@
 from django.contrib import admin
 from .models import SongRequest, SpotifyToken, MusicSettings
+from apps.search import PlainSearchAdminMixin
 
 
 @admin.register(MusicSettings)
-class MusicSettingsAdmin(admin.ModelAdmin):
+class MusicSettingsAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     list_display = ["source", "updated_at"]
     readonly_fields = ["created_at", "updated_at"]
 
 
 @admin.register(SongRequest)
-class SongRequestAdmin(admin.ModelAdmin):
+class SongRequestAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     list_display = [
         "song_name",
         "artist_name",
@@ -26,7 +27,7 @@ class SongRequestAdmin(admin.ModelAdmin):
 
 
 @admin.register(SpotifyToken)
-class SpotifyTokenAdmin(admin.ModelAdmin):
+class SpotifyTokenAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     list_display = [
         "floor",
         "token_type",

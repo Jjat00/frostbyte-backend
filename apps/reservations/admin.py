@@ -1,10 +1,11 @@
 from django.contrib import admin
 
 from .models import Reservation, ReservationSettings
+from apps.search import PlainSearchAdminMixin
 
 
 @admin.register(Reservation)
-class ReservationAdmin(admin.ModelAdmin):
+class ReservationAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     list_display = (
         "id", "reservation_type", "customer_name", "customer_phone",
         "party_size", "floor", "date", "start_time", "status", "source",
@@ -16,7 +17,7 @@ class ReservationAdmin(admin.ModelAdmin):
 
 
 @admin.register(ReservationSettings)
-class ReservationSettingsAdmin(admin.ModelAdmin):
+class ReservationSettingsAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     def has_add_permission(self, request):
         # Singleton: solo se edita la fila existente
         return not ReservationSettings.objects.exists()

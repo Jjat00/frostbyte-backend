@@ -10,6 +10,7 @@ from apps.products.models import ProductVariant
 from apps.accounts.permissions import IsAdminUser
 from apps.business.models import Business
 from .models import UnitOfMeasure, RawMaterial, Recipe, PurchaseOrder, PurchaseOrderItem
+from apps.search import PlainSearchFilter
 
 
 def apply_business_filter(queryset, request, lookup="business__slug"):
@@ -38,7 +39,7 @@ class UnitOfMeasureViewSet(viewsets.ModelViewSet):
     serializer_class = UnitOfMeasureSerializer
     permission_classes = [IsAdminUser]
     pagination_class = None  # Deshabilitamos paginación para obtener todas las unidades
-    filter_backends = [filters.SearchFilter]
+    filter_backends = [PlainSearchFilter]
     search_fields = ["name", "abbreviation"]
 
 
@@ -57,7 +58,7 @@ class RawMaterialViewSet(viewsets.ModelViewSet):
         is_active=True).select_related("unit", "business")
     permission_classes = [IsAdminUser]
     pagination_class = None  # Deshabilitamos paginación para obtener todos los materiales
-    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    filter_backends = [PlainSearchFilter, filters.OrderingFilter]
     search_fields = ["name", "supplier"]
     ordering_fields = ["name", "current_stock",
                        "cost_per_unit", "minimum_stock"]
@@ -213,7 +214,7 @@ class RecipeViewSet(viewsets.ModelViewSet):
     )
     serializer_class = RecipeSerializer
     permission_classes = [IsAdminUser]
-    filter_backends = [filters.SearchFilter]
+    filter_backends = [PlainSearchFilter]
     search_fields = [
         "product_variant__product__name",
         "product_variant__name",
@@ -295,7 +296,7 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
     )
     permission_classes = [IsAdminUser]
     pagination_class = None  # Sin paginación, filtrado por mes
-    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    filter_backends = [PlainSearchFilter, filters.OrderingFilter]
     search_fields = ["order_number", "notes"]
     ordering = ["-created_at"]
 

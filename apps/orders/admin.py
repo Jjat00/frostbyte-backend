@@ -2,6 +2,7 @@ from django.contrib import admin
 from django.utils.html import format_html
 from django.db.models import Count
 from .models import Order, OrderItem, Table, PageVisit, StoreSettings
+from apps.search import PlainSearchAdminMixin
 
 
 class OrderItemInline(admin.TabularInline):
@@ -12,7 +13,7 @@ class OrderItemInline(admin.TabularInline):
 
 
 @admin.register(Order)
-class OrderAdmin(admin.ModelAdmin):
+class OrderAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     list_display = [
         "order_number",
         "access_code",
@@ -82,7 +83,7 @@ class OrderAdmin(admin.ModelAdmin):
 
 
 @admin.register(OrderItem)
-class OrderItemAdmin(admin.ModelAdmin):
+class OrderItemAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     list_display = [
         "order",
         "product_variant",
@@ -99,7 +100,7 @@ class OrderItemAdmin(admin.ModelAdmin):
 
 
 @admin.register(Table)
-class TableAdmin(admin.ModelAdmin):
+class TableAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     list_display = [
         "floor",
         "table_number",
@@ -122,7 +123,7 @@ class TableAdmin(admin.ModelAdmin):
 
 
 @admin.register(PageVisit)
-class PageVisitAdmin(admin.ModelAdmin):
+class PageVisitAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     list_display = [
         "path",
         "page_name",
@@ -144,7 +145,7 @@ class PageVisitAdmin(admin.ModelAdmin):
 
 
 @admin.register(StoreSettings)
-class StoreSettingsAdmin(admin.ModelAdmin):
+class StoreSettingsAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     list_display = [
         "__str__",
         "is_open",

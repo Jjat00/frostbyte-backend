@@ -8,6 +8,7 @@ from .serializers import (
     RecipeBookDetailSerializer,
     RecipeBookCreateUpdateSerializer,
 )
+from apps.search import PlainSearchFilter
 
 
 class RecipeBookViewSet(viewsets.ModelViewSet):
@@ -28,7 +29,7 @@ class RecipeBookViewSet(viewsets.ModelViewSet):
     ).prefetch_related("steps", "ingredients", "images")
     permission_classes = [IsStaffMember]
     lookup_field = "slug"
-    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    filter_backends = [PlainSearchFilter, filters.OrderingFilter]
     search_fields = ["name", "description", "ingredients__name"]
     ordering_fields = ["name", "created_at", "difficulty"]
     ordering = ["category__display_order", "name"]

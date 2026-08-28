@@ -1,10 +1,11 @@
 from django.contrib import admin
 from django.utils.html import format_html
 from .models import UnitOfMeasure, RawMaterial, Recipe, PurchaseOrder, PurchaseOrderItem
+from apps.search import PlainSearchAdminMixin
 
 
 @admin.register(UnitOfMeasure)
-class UnitOfMeasureAdmin(admin.ModelAdmin):
+class UnitOfMeasureAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     list_display = ["name", "abbreviation"]
     search_fields = ["name", "abbreviation"]
     ordering = ["name"]
@@ -17,7 +18,7 @@ class RecipeInline(admin.TabularInline):
 
 
 @admin.register(RawMaterial)
-class RawMaterialAdmin(admin.ModelAdmin):
+class RawMaterialAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     list_display = [
         "name",
         "business",
@@ -52,7 +53,7 @@ class RawMaterialAdmin(admin.ModelAdmin):
 
 
 @admin.register(Recipe)
-class RecipeAdmin(admin.ModelAdmin):
+class RecipeAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     list_display = [
         "product_variant",
         "raw_material",
@@ -88,7 +89,7 @@ class PurchaseOrderItemInline(admin.TabularInline):
 
 
 @admin.register(PurchaseOrder)
-class PurchaseOrderAdmin(admin.ModelAdmin):
+class PurchaseOrderAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     list_display = [
         "order_number",
         "business",
@@ -127,7 +128,7 @@ class PurchaseOrderAdmin(admin.ModelAdmin):
 
 
 @admin.register(PurchaseOrderItem)
-class PurchaseOrderItemAdmin(admin.ModelAdmin):
+class PurchaseOrderItemAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     list_display = [
         "purchase_order",
         "raw_material",

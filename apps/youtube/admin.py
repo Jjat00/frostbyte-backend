@@ -1,15 +1,16 @@
 from django.contrib import admin
 from .models import VideoRequest, TVState
+from apps.search import PlainSearchAdminMixin
 
 
 @admin.register(TVState)
-class TVStateAdmin(admin.ModelAdmin):
+class TVStateAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     list_display = ["video_id", "title", "is_mix", "updated_at"]
     readonly_fields = ["updated_at"]
 
 
 @admin.register(VideoRequest)
-class VideoRequestAdmin(admin.ModelAdmin):
+class VideoRequestAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     list_display = [
         "title",
         "channel_name",

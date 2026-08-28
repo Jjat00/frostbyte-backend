@@ -20,6 +20,7 @@ from .serializers import (
     RecurringExpenseTemplateSerializer,
     MarkExpensePaidSerializer,
 )
+from apps.search import PlainSearchFilter
 
 
 class ExpenseCategoryViewSet(viewsets.ModelViewSet):
@@ -28,7 +29,7 @@ class ExpenseCategoryViewSet(viewsets.ModelViewSet):
     serializer_class = ExpenseCategorySerializer
     permission_classes = [IsAdminUser]
     lookup_field = 'slug'
-    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    filter_backends = [PlainSearchFilter, filters.OrderingFilter]
     search_fields = ['name', 'description']
     ordering = ['display_order', 'name']
 
@@ -63,7 +64,7 @@ class OperationalExpenseViewSet(viewsets.ModelViewSet):
     """ViewSet para gastos operativos"""
     queryset = OperationalExpense.objects.select_related('category', 'created_by', 'business')
     permission_classes = [IsAdminUser]
-    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    filter_backends = [PlainSearchFilter, filters.OrderingFilter]
     search_fields = ['expense_number', 'description', 'reference_number']
     ordering = ['-expense_date', '-created_at']
 

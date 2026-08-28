@@ -1,9 +1,10 @@
 from django.contrib import admin
 from .models import Feedback
+from apps.search import PlainSearchAdminMixin
 
 
 @admin.register(Feedback)
-class FeedbackAdmin(admin.ModelAdmin):
+class FeedbackAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     list_display = [
         "id",
         "customer_name",

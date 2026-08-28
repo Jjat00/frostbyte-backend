@@ -4,6 +4,7 @@ from apps.accounts.permissions import IsAdminOrReadOnly
 
 from .models import Business
 from .serializers import BusinessSerializer
+from apps.search import PlainSearchFilter
 
 
 class BusinessViewSet(viewsets.ModelViewSet):
@@ -18,7 +19,7 @@ class BusinessViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAdminOrReadOnly]
     lookup_field = "slug"
     pagination_class = None
-    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    filter_backends = [PlainSearchFilter, filters.OrderingFilter]
     search_fields = ["name", "description"]
     ordering_fields = ["display_order", "name"]
     ordering = ["display_order", "name"]

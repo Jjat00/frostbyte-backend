@@ -7,6 +7,7 @@ from .models import (
     ProductModifierGroup,
     ProductVariant,
 )
+from apps.search import PlainSearchAdminMixin
 
 
 class ProductVariantInline(admin.TabularInline):
@@ -23,7 +24,7 @@ class ProductModifierGroupInline(admin.TabularInline):
 
 
 @admin.register(Category)
-class CategoryAdmin(admin.ModelAdmin):
+class CategoryAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     list_display = ["name", "business", "slug", "display_order", "is_active", "products_count"]
     list_filter = ["business", "is_active"]
     search_fields = ["name", "description"]
@@ -37,7 +38,7 @@ class CategoryAdmin(admin.ModelAdmin):
 
 
 @admin.register(Product)
-class ProductAdmin(admin.ModelAdmin):
+class ProductAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     list_display = ["name", "business", "category", "is_active", "is_coming_soon", "variants_count", "created_at"]
     list_filter = ["business", "category", "is_active", "is_coming_soon"]
     search_fields = ["name", "description"]
@@ -53,7 +54,7 @@ class ProductAdmin(admin.ModelAdmin):
 
 
 @admin.register(ProductVariant)
-class ProductVariantAdmin(admin.ModelAdmin):
+class ProductVariantAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     list_display = ["__str__", "sku", "is_default", "is_active"]
     list_filter = ["product__category", "is_active", "is_default"]
     search_fields = ["name", "sku", "product__name"]
@@ -67,7 +68,7 @@ class ModifierOptionInline(admin.TabularInline):
 
 
 @admin.register(ModifierGroup)
-class ModifierGroupAdmin(admin.ModelAdmin):
+class ModifierGroupAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     list_display = ["name", "business", "min_select", "max_select", "is_required", "is_active"]
     list_filter = ["business", "is_active"]
     search_fields = ["name", "description"]
@@ -82,7 +83,7 @@ class ModifierGroupAdmin(admin.ModelAdmin):
 
 
 @admin.register(ModifierOption)
-class ModifierOptionAdmin(admin.ModelAdmin):
+class ModifierOptionAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     list_display = ["name", "group", "price_delta", "is_default", "is_active", "display_order"]
     list_filter = ["group__business", "group", "is_active"]
     search_fields = ["name", "group__name"]
@@ -90,7 +91,7 @@ class ModifierOptionAdmin(admin.ModelAdmin):
 
 
 @admin.register(ProductModifierGroup)
-class ProductModifierGroupAdmin(admin.ModelAdmin):
+class ProductModifierGroupAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     list_display = ["product", "group", "display_order", "effective_min", "effective_max", "is_active"]
     list_filter = ["group__business", "is_active"]
     search_fields = ["product__name", "group__name"]

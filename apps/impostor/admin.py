@@ -7,6 +7,7 @@ from .models import (
     ImpostorRound,
     ImpostorRoundPlayer,
 )
+from apps.search import PlainSearchAdminMixin
 
 
 class WordInline(admin.TabularInline):
@@ -16,7 +17,7 @@ class WordInline(admin.TabularInline):
 
 
 @admin.register(WordCategory)
-class WordCategoryAdmin(admin.ModelAdmin):
+class WordCategoryAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     list_display = ["name", "slug", "icon", "word_count", "has_images", "is_active"]
     list_filter = ["is_active", "has_images"]
     search_fields = ["name", "slug"]
@@ -25,7 +26,7 @@ class WordCategoryAdmin(admin.ModelAdmin):
 
 
 @admin.register(Word)
-class WordAdmin(admin.ModelAdmin):
+class WordAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     list_display = ["word", "trap_word", "category", "is_active"]
     list_filter = ["category", "is_active"]
     search_fields = ["word", "trap_word"]
@@ -44,7 +45,7 @@ class ImpostorRoundInline(admin.TabularInline):
 
 
 @admin.register(ImpostorGameSession)
-class ImpostorGameSessionAdmin(admin.ModelAdmin):
+class ImpostorGameSessionAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     list_display = [
         "short_id",
         "player_count",
@@ -66,7 +67,7 @@ class ImpostorGameSessionAdmin(admin.ModelAdmin):
 
 
 @admin.register(ImpostorPlayer)
-class ImpostorPlayerAdmin(admin.ModelAdmin):
+class ImpostorPlayerAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     list_display = ["name", "color", "total_score", "session", "joined_at"]
     list_filter = ["joined_at"]
     search_fields = ["name"]
@@ -79,7 +80,7 @@ class ImpostorRoundPlayerInline(admin.TabularInline):
 
 
 @admin.register(ImpostorRound)
-class ImpostorRoundAdmin(admin.ModelAdmin):
+class ImpostorRoundAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     list_display = [
         "session",
         "round_number",
@@ -95,7 +96,7 @@ class ImpostorRoundAdmin(admin.ModelAdmin):
 
 
 @admin.register(ImpostorRoundPlayer)
-class ImpostorRoundPlayerAdmin(admin.ModelAdmin):
+class ImpostorRoundPlayerAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     list_display = [
         "player",
         "round",
