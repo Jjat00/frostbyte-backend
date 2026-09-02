@@ -10,6 +10,7 @@ from django.db import transaction
 from django.db.models import Sum, Count, Q
 from django.db.models.functions import TruncDate, ExtractHour, ExtractWeekDay
 from django.utils import timezone
+from django.utils.dateparse import parse_time
 from datetime import timedelta
 
 from .models import (
@@ -82,8 +83,8 @@ class OrderViewSet(viewsets.ModelViewSet):
 
         GET  -> estado actual.
         PATCH-> actualiza `is_open`, `customer_ordering_enabled`,
-                `pickup_enabled` y/o `delivery_radius_km`. Al cambiar `is_open` se registra quién y
-                cuándo; el radio solo lo puede cambiar un admin.
+                `pickup_enabled`, `opening_time` y/o `delivery_radius_km`. Al cambiar
+                `is_open` se registra quién y cuándo; el radio solo lo puede cambiar un admin.
         """
         cfg = StoreSettings.load()
 
@@ -106,6 +107,20 @@ class OrderViewSet(viewsets.ModelViewSet):
             if "pickup_enabled" in request.data:
                 cfg.pickup_enabled = bool(request.data.get("pickup_enabled"))
                 update_fields.append("pickup_enabled")
+
+            # Hora que el agente de WhatsApp le dice al cliente que escribe
+            # con el local cerrado. No abre ni cierra nada.
+            if "opening_time" in request.data:
+                raw = str(request.data.get("opening_time") or "").strip()
+                parsed = parse_time(raw)
+                if parsed is None:
+                    return Response(
+                        {"opening_time": "Escribe la hora como HH:MM (ej: 13:30)."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                if parsed != cfg.opening_time:
+                    cfg.opening_time = parsed
+                    update_fields.append("opening_time")
 
             # La zona define hasta dónde vendemos: decisión de negocio,
             # reservada al admin, se exprese como radio o como polígono.
@@ -159,6 +174,7 @@ class OrderViewSet(viewsets.ModelViewSet):
             "pickup_enabled": cfg.pickup_enabled,
             "can_order": cfg.is_open and cfg.customer_ordering_enabled,
             "can_pickup": cfg.is_open and cfg.pickup_enabled,
+            "opening_time": cfg.opening_time.strftime("%H:%M"),
             "delivery_fee": str(cfg.delivery_fee),
             "delivery_radius_km": float(cfg.delivery_radius_km),
             "delivery_area": cfg.delivery_area or [],

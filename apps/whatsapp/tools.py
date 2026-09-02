@@ -174,26 +174,42 @@ def build_tools(contact):
 
     @tool
     def consultar_estado_tienda() -> str:
-        """Consulta si Frostbyte está abierto y si los domicilios están activos.
-        Úsala SIEMPRE antes de ofrecer productos o crear un pedido.
+        """Consulta si Frostbyte está abierto y qué canales admiten pedido ahora
+        (domicilio y para recoger). Úsala SIEMPRE antes de ofrecer productos o
+        crear un pedido, y responde en el orden que te indique.
         """
         cfg = StoreSettings.load()
-        abierto = "ABIERTO" if cfg.is_open else "CERRADO"
+        # Chat real del 01/09: con el local cerrado el agente habló de los
+        # canales ("no hay domicilios ni recogida") y encima ofreció pasar por
+        # el pedido. El local cerrado no es un dato más de la lista: manda
+        # sobre todo lo demás, así que la tool no devuelve nada más que eso.
+        if not cfg.is_open:
+            return (
+                "LOCAL CERRADO ahora mismo. No se puede tomar NINGÚN pedido: ni a "
+                "domicilio ni para recoger. Dile de una que el local está cerrado y "
+                f"que {cfg.reopening_hint()}. NO le ofrezcas encargar, ni pasar por el "
+                "pedido, ni hablar de domicilios: no hay ningún canal abierto. Si "
+                "insiste o pregunta por otra cosa del local, pásale el número de "
+                "contacto."
+            )
         domicilios = "ACTIVOS" if cfg.customer_ordering_enabled else "SIN SERVICIO AHORA"
         recoger = "ACTIVOS" if cfg.pickup_enabled else "SIN SERVICIO AHORA"
-        puede_domicilio = cfg.is_open and cfg.customer_ordering_enabled
-        puede_recoger = cfg.is_open and cfg.pickup_enabled
         lineas = [
-            f"Local: {abierto}. Domicilios: {domicilios}. Pedidos para recoger: {recoger}.",
+            f"Local ABIERTO. Domicilios: {domicilios}. Pedidos para recoger: {recoger}.",
             f"Tarifa de envío: {_cop(cfg.delivery_fee)} (para recoger no se cobra envío).",
-            f"Puedes tomar pedidos A DOMICILIO: {'sí' if puede_domicilio else 'NO'}.",
-            f"Puedes tomar pedidos PARA RECOGER: {'sí' if puede_recoger else 'NO'}.",
+            f"Puedes tomar pedidos A DOMICILIO: {'sí' if cfg.customer_ordering_enabled else 'NO'}.",
+            f"Puedes tomar pedidos PARA RECOGER: {'sí' if cfg.pickup_enabled else 'NO'}.",
         ]
-        if puede_recoger and not puede_domicilio:
+        if cfg.pickup_enabled and not cfg.customer_ordering_enabled:
             lineas.append(
                 "Ahora mismo no hay servicio de domicilios pero el local SÍ encarga para "
                 "recoger: dile al cliente 'justo en este momento no tenemos servicio de "
                 "domicilios' y ofrécele encargar y pasar por el pedido antes de despedir a nadie."
+            )
+        elif not cfg.pickup_enabled and not cfg.customer_ordering_enabled:
+            lineas.append(
+                "El local está abierto pero ningún canal recibe pedidos por WhatsApp: "
+                "díselo sin ofrecer el otro canal y pásale el número de contacto."
             )
         return " ".join(lineas)
 
@@ -523,7 +539,11 @@ def build_tools(contact):
         """
         cfg = StoreSettings.load()
         if not cfg.is_open:
-            return "ERROR: el local está CERRADO ahora mismo; no se pueden crear pedidos."
+            return (
+                "ERROR: el local está CERRADO ahora mismo; no se pueden crear pedidos "
+                "de ningún tipo. Dile al cliente que está cerrado y que "
+                f"{cfg.reopening_hint()}; no le ofrezcas encargar ni recoger."
+            )
         if para_recoger and not cfg.pickup_enabled:
             return (
                 "ERROR: justo en este momento no se reciben pedidos para recoger; "

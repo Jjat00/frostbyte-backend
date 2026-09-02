@@ -5,6 +5,7 @@ lleva la fecha del chat que reprodujo. El LLM se sustituye por un doble (no se
 prueba qué contesta el modelo, sino cuándo y cuántas veces lo llamamos).
 """
 
+import datetime
 import threading
 import time
 from unittest.mock import Mock, patch
@@ -581,6 +582,81 @@ class PedidoParaRecogerTests(TestCase):
 
         self.assertIn("justo en este momento no tenemos servicio de domicilios", SYSTEM_PROMPT)
         self.assertIn("NUNCA digas al cliente que un servicio está \"pausado\"", SYSTEM_PROMPT)
+
+
+class LocalCerradoTests(TestCase):
+    """Chat real 2026-09-01, 21:44: Nancy cerró el local a las 21:42 y el agente
+    respondió "no tenemos servicio de domicilios ni de recogida. Pero puedes
+    encargar tu pedido y pasar por él al local", sin decir que estaba cerrado y
+    contradiciéndose en la misma frase."""
+
+    def setUp(self):
+        from apps.orders.models import StoreSettings
+
+        self.cfg = StoreSettings.load()
+        self.cfg.is_open = False
+        self.cfg.customer_ordering_enabled = False
+        self.cfg.pickup_enabled = False
+        self.cfg.opening_time = datetime.time(13, 30)
+        self.cfg.save()
+
+        self.contact = WhatsAppContact.objects.create(phone=PHONE)
+        self.tools = {t.name: t for t in build_tools(self.contact)}
+
+    def test_el_estado_dice_cerrado_y_nada_mas(self):
+        estado = self.tools["consultar_estado_tienda"].invoke({})
+        self.assertIn("LOCAL CERRADO", estado)
+        # Ni una palabra de canales: es lo que el modelo calcó para contradecirse
+        self.assertNotIn("Puedes tomar pedidos", estado)
+        self.assertNotIn("Tarifa de envío", estado)
+        self.assertIn("NO le ofrezcas encargar", estado)
+
+    def test_el_estado_dice_cuando_abrimos(self):
+        estado = self.tools["consultar_estado_tienda"].invoke({})
+        self.assertIn("1:30 p. m.", estado)
+        self.assertIn("normalmente", estado)
+
+    def test_con_el_local_abierto_si_se_ofrecen_los_canales(self):
+        self.cfg.is_open = True
+        self.cfg.pickup_enabled = True
+        self.cfg.save()
+        estado = self.tools["consultar_estado_tienda"].invoke({})
+        self.assertIn("Local ABIERTO", estado)
+        self.assertIn("Puedes tomar pedidos PARA RECOGER: sí", estado)
+        self.assertNotIn("LOCAL CERRADO", estado)
+
+    def test_abierto_sin_ningun_canal_no_ofrece_el_otro(self):
+        self.cfg.is_open = True
+        self.cfg.save()  # los dos canales siguen apagados
+        estado = self.tools["consultar_estado_tienda"].invoke({})
+        self.assertIn("ningún canal recibe pedidos", estado)
+        self.assertNotIn("ofrécele encargar", estado)
+
+    def test_crear_pedido_cerrado_no_ofrece_recoger(self):
+        error = self.tools["crear_pedido"].invoke(
+            {"items": [], "para_recoger": True, "nombre_cliente": "Daniel"}
+        )
+        self.assertIn("CERRADO", error)
+        self.assertIn("no le ofrezcas encargar ni recoger", error)
+
+    def test_antes_de_abrir_dice_hoy_y_despues_manana(self):
+        from apps.orders.models import StoreSettings
+
+        cfg = StoreSettings.load()
+        cfg.opening_time = datetime.time(23, 59)
+        cfg.save()
+        self.assertIn("hoy normalmente abrimos", cfg.reopening_hint())
+
+        cfg.opening_time = datetime.time(0, 1)
+        cfg.save()
+        self.assertIn("mañana normalmente abrimos", cfg.reopening_hint())
+
+    def test_el_prompt_ordena_local_domicilio_recoger(self):
+        from apps.whatsapp.agent import SYSTEM_PROMPT
+
+        self.assertIn("PRIMERO si el local está abierto o cerrado", SYSTEM_PROMPT)
+        self.assertIn("Con el local CERRADO se acabó la conversación de pedidos", SYSTEM_PROMPT)
+        self.assertIn("normalmente sí se puede pasar a recoger", SYSTEM_PROMPT)
 
 
 class ArchivoDeConversacionTests(TestCase):

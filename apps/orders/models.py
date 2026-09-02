@@ -3,6 +3,7 @@ from django.db import models, transaction
 from django.db.models.signals import post_delete
 from django.dispatch import receiver
 from django.utils import timezone
+from datetime import time
 from decimal import Decimal
 import uuid
 import random
@@ -738,6 +739,14 @@ class StoreSettings(models.Model):
             "puede seguir encargando y pasar por su pedido al local."
         ),
     )
+    opening_time = models.TimeField(
+        default=time(13, 30),
+        verbose_name="Hora de apertura habitual",
+        help_text=(
+            "Solo informativa: es la hora que se le dice al cliente cuando escribe "
+            "con el local cerrado. NO abre ni cierra nada (eso sigue siendo manual)."
+        ),
+    )
     status_changed_at = models.DateTimeField(
         null=True,
         blank=True,
@@ -766,6 +775,20 @@ class StoreSettings(models.Model):
         # Fuerza singleton: siempre la misma fila
         self.pk = 1
         super().save(*args, **kwargs)
+
+    def reopening_hint(self):
+        """Cuándo volvemos a abrir, en palabras, para un cliente que escribe cerrados.
+
+        La apertura es manual y la hora real varía (los domingos suelen abrir
+        antes), así que el texto nunca promete: dice "normalmente". Si la hora
+        habitual de hoy ya pasó, el cliente vuelve mañana.
+        """
+        ahora = timezone.localtime()
+        hora = self.opening_time.strftime("%I:%M %p").lstrip("0").lower()
+        hora = hora.replace("am", "a. m.").replace("pm", "p. m.")
+        if ahora.time() < self.opening_time:
+            return f"hoy normalmente abrimos a las {hora}"
+        return f"mañana normalmente abrimos a las {hora}"
 
     @classmethod
     def load(cls):
