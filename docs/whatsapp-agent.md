@@ -254,8 +254,11 @@ dato va limpio, y si el cliente está molesto o reclamando el chiste se acaba.
 El resto del prompt (reglas de oro, flujo del pedido, cobertura, pagos) no
 cambió.
 
-Lo configurable vive en el admin de Django, en **WhatsApp → Configuración del
-agente** (modelo `AgentSettings`, fila única):
+Lo configurable vive en dos sitios que leen la misma fila (`AgentSettings`,
+singleton): el módulo **Agente de WhatsApp** del panel (`/agente-whatsapp`,
+solo admin) y **WhatsApp → Configuración del agente** en el admin de Django. El
+módulo del panel existe porque es donde está el dueño —el celular—, y el cambio
+que quiere hacer suele ser de un toque:
 
 | Campo | Para qué |
 | --- | --- |
@@ -271,6 +274,23 @@ cumple, y el cliente lo lee como que el bot está roto.
 Las reglas del pedido **no** son configurables a propósito: tienen tests
 detrás, y volverlas editables convertiría un descuido de redacción en un pedido
 mal tomado.
+
+La API del módulo (`apps/whatsapp/api.py`, toda con `IsAdminUser`):
+
+| Endpoint | Qué hace |
+| --- | --- |
+| `GET/PATCH /api/v1/whatsapp/agent-settings/` | La fila de configuración. Los números del dueño se guardan normalizados a dígitos: en el celular se teclean con `+`, espacios y guiones, y así pegados `is_owner` no los reconocería. |
+| `GET/POST /api/v1/whatsapp/stickers/` | El banco entero (activos e inactivos), cada uno con su miniatura en `preview` como data URI. Sin paginar: el banco es corto y la pantalla lo pinta completo. |
+| `PATCH/DELETE /api/v1/whatsapp/stickers/<id>/` | Texto, interruptor o la imagen misma. Sin `archivo` la imagen guardada se conserva. |
+
+La subida va en multipart porque lleva el archivo, y ahí DRF lee un booleano
+**ausente** como `False` (asume checkbox HTML). Por eso `is_active` usa
+`OptionalBooleanField`: sin él, crear un sticker o corregirle el dibujo lo
+dejaba desactivado —guardado, invisible para el agente y sin decir por qué—.
+
+La miniatura viaja como data URI y no como enlace a `stickers/<id>.webp`: esa
+URL solo sirve los **activos** (justo los que no hay que revisar) y en local
+apunta al backend de producción, donde el sticker recién subido no existe.
 
 ### Lo que puede mandar además de texto
 
@@ -294,7 +314,9 @@ Cuando el turno respondió sin texto, el worker no manda nada.
 
 ### El banco de stickers
 
-Se gestiona en **WhatsApp → Stickers**. Cada sticker tiene un nombre y un
+Se gestiona desde el panel (`/agente-whatsapp` → pestaña Stickers), desde
+**WhatsApp → Stickers** en el admin de Django, o mandándoselos al agente por
+WhatsApp desde el número del dueño. Cada sticker tiene un nombre y un
 **"cuándo usarlo"**, que es lo único que el agente lee para elegirlo: describe
 el momento, no el dibujo ("para celebrar que el pedido quedó listo", no "un
 vaso azul con ojos"). Los activos se renderizan en el prompt.

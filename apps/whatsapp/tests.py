@@ -1770,3 +1770,233 @@ class LimpiezaDeArchivosPendientesTests(TestCase):
 
         StickerDraft.objects.filter(created_at__lt=timezone.now() - DRAFT_TTL).delete()
         self.assertEqual([d.contact_id for d in StickerDraft.objects.all()], [otro.pk])
+
+
+class ModuloDeConfiguracionEnElPanelTests(TestCase):
+    """El mismo agente, configurado desde la app en vez del admin de Django.
+
+    Lo que se prueba aquí no es la configuración (ya tiene sus tests) sino la
+    puerta: quién puede entrar y qué pasa con un archivo que llega del celular.
+    """
+
+    def setUp(self):
+        from django.contrib.auth import get_user_model
+        from rest_framework.test import APIClient
+
+        User = get_user_model()
+        self.api = APIClient()
+        self.admin = User.objects.create(username="dueno", email="d@x.com", role="admin")
+        self.empleado = User.objects.create(username="mesero", email="m@x.com", role="employee")
+
+    def _upload(self, mode="RGBA", color=(255, 0, 0, 255), fmt="PNG", name="sticker.png"):
+        from io import BytesIO
+
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        from PIL import Image
+
+        buffer = BytesIO()
+        Image.new(mode, (300, 200), color[: 3 if mode == "RGB" else 4]).save(buffer, format=fmt)
+        return SimpleUploadedFile(name, buffer.getvalue(), content_type="image/png")
+
+    def test_sin_sesion_no_se_ve_la_configuracion(self):
+        self.assertIn(
+            self.api.get("/api/v1/whatsapp/agent-settings/").status_code, (401, 403)
+        )
+
+    def test_un_empleado_no_puede_cambiar_como_habla_el_negocio(self):
+        self.api.force_authenticate(self.empleado)
+        self.assertEqual(self.api.get("/api/v1/whatsapp/agent-settings/").status_code, 403)
+        self.assertEqual(self.api.get("/api/v1/whatsapp/stickers/").status_code, 403)
+
+    def test_el_dueno_lee_y_edita_la_configuracion(self):
+        self.api.force_authenticate(self.admin)
+        resp = self.api.get("/api/v1/whatsapp/agent-settings/")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["agent_name"], "Frosty")
+
+        resp = self.api.patch(
+            "/api/v1/whatsapp/agent-settings/",
+            {"tone": "trata al cliente de usted", "stickers_enabled": False},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 200)
+        config = AgentSettings.load()
+        self.assertEqual(config.tone, "trata al cliente de usted")
+        self.assertFalse(config.stickers_enabled)
+
+    def test_el_numero_del_dueno_se_guarda_en_digitos_aunque_se_escriba_bonito(self):
+        """En el celular el número sale con espacios y con +; así pegado no lo reconocería."""
+        self.api.force_authenticate(self.admin)
+        resp = self.api.patch(
+            "/api/v1/whatsapp/agent-settings/",
+            {"owner_phones": "+57 316 427 7879, 573001112233"},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["owner_phones"], "573164277879,573001112233")
+        self.assertTrue(AgentSettings.load().is_owner("3164277879"))
+
+    def test_un_numero_incompleto_se_rechaza_con_un_mensaje_util(self):
+        self.api.force_authenticate(self.admin)
+        resp = self.api.patch(
+            "/api/v1/whatsapp/agent-settings/", {"owner_phones": "3164"}, format="json"
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("indicativo", str(resp.data))
+
+    def test_subir_una_imagen_desde_el_panel_deja_un_webp_listo_para_whatsapp(self):
+        self.api.force_authenticate(self.admin)
+        resp = self.api.post(
+            "/api/v1/whatsapp/stickers/",
+            {
+                "label": "Granizado Feliz",
+                "description": "para saludar al cliente",
+                "archivo": self._upload(),
+            },
+            format="multipart",
+        )
+        self.assertEqual(resp.status_code, 201, resp.data)
+        sticker = Sticker.objects.get(label="granizado feliz")
+        self.assertTrue(bytes(sticker.data).startswith(b"RIFF"), "no salió un WebP")
+        self.assertLessEqual(sticker.byte_size, 100 * 1024)
+        self.assertTrue(resp.data["preview"].startswith("data:image/webp;base64,"))
+
+    def test_el_fondo_opaco_avisa_en_la_respuesta_pero_guarda_igual(self):
+        self.api.force_authenticate(self.admin)
+        resp = self.api.post(
+            "/api/v1/whatsapp/stickers/",
+            {
+                "label": "pulgar arriba",
+                "description": "para cerrar un acuerdo",
+                "archivo": self._upload(mode="RGB", color=(255, 255, 255)),
+            },
+            format="multipart",
+        )
+        self.assertEqual(resp.status_code, 201, resp.data)
+        self.assertIn("transparente", resp.data["warning"])
+        self.assertTrue(Sticker.objects.filter(label="pulgar arriba").exists())
+
+    def test_un_archivo_roto_no_revienta_y_explica_el_problema(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        self.api.force_authenticate(self.admin)
+        resp = self.api.post(
+            "/api/v1/whatsapp/stickers/",
+            {
+                "label": "x",
+                "description": "y",
+                "archivo": SimpleUploadedFile("x.png", b"no soy una imagen"),
+            },
+            format="multipart",
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("No se pudo leer la imagen", str(resp.data))
+        self.assertFalse(Sticker.objects.exists())
+
+    def test_sin_archivo_no_se_crea_el_sticker(self):
+        self.api.force_authenticate(self.admin)
+        resp = self.api.post(
+            "/api/v1/whatsapp/stickers/",
+            {"label": "x", "description": "cuando sea"},
+            format="multipart",
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertFalse(Sticker.objects.exists())
+
+    def test_editar_el_texto_sin_resubir_conserva_la_imagen(self):
+        self.api.force_authenticate(self.admin)
+        creado = self.api.post(
+            "/api/v1/whatsapp/stickers/",
+            {"label": "moto", "description": "cuando sale el pedido", "archivo": self._upload()},
+            format="multipart",
+        )
+        original = bytes(Sticker.objects.get(pk=creado.data["id"]).data)
+
+        resp = self.api.patch(
+            f"/api/v1/whatsapp/stickers/{creado.data['id']}/",
+            {"description": "cuando el domiciliario ya salió", "is_active": False},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 200, resp.data)
+        sticker = Sticker.objects.get(pk=creado.data["id"])
+        self.assertEqual(bytes(sticker.data), original)
+        self.assertFalse(sticker.is_active)
+        self.assertNotIn("warning", resp.data)
+
+    def test_desactivar_un_sticker_lo_saca_del_banco_que_ve_el_agente(self):
+        self.api.force_authenticate(self.admin)
+        creado = self.api.post(
+            "/api/v1/whatsapp/stickers/",
+            {"label": "triste", "description": "cuando algo no se pudo", "archivo": self._upload()},
+            format="multipart",
+        )
+        self.assertEqual(len(Sticker.catalog()), 1)
+        self.api.patch(
+            f"/api/v1/whatsapp/stickers/{creado.data['id']}/",
+            {"is_active": False},
+            format="json",
+        )
+        self.assertEqual(Sticker.catalog(), [])
+
+    def test_borrar_un_sticker_lo_saca_del_banco(self):
+        self.api.force_authenticate(self.admin)
+        creado = self.api.post(
+            "/api/v1/whatsapp/stickers/",
+            {"label": "brindis", "description": "para celebrar", "archivo": self._upload()},
+            format="multipart",
+        )
+        resp = self.api.delete(f"/api/v1/whatsapp/stickers/{creado.data['id']}/")
+        self.assertEqual(resp.status_code, 204)
+        self.assertFalse(Sticker.objects.exists())
+
+    def test_la_lista_llega_completa_sin_paginar(self):
+        """El banco es corto y la pantalla lo pinta entero: paginarlo escondería stickers."""
+        self.api.force_authenticate(self.admin)
+        for i in range(3):
+            self.api.post(
+                "/api/v1/whatsapp/stickers/",
+                {"label": f"s{i}", "description": "cuando sea", "archivo": self._upload()},
+                format="multipart",
+            )
+        resp = self.api.get("/api/v1/whatsapp/stickers/")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(len(resp.data), 3)
+
+    def test_el_endpoint_publico_del_archivo_sigue_abierto_para_meta(self):
+        """Los servidores de Meta lo piden sin token: protegerlo rompería el envío."""
+        self.api.force_authenticate(self.admin)
+        creado = self.api.post(
+            "/api/v1/whatsapp/stickers/",
+            {"label": "hola", "description": "para saludar", "archivo": self._upload()},
+            format="multipart",
+        )
+        anonimo = self.client.get(f"/api/v1/whatsapp/stickers/{creado.data['id']}.webp")
+        self.assertEqual(anonimo.status_code, 200)
+        self.assertEqual(anonimo["Content-Type"], "image/webp")
+
+    def test_reemplazar_la_imagen_no_apaga_el_sticker(self):
+        """Subir la imagen buena encima es lo que hace quien se equivocó de archivo.
+
+        Va en multipart por el archivo, y DRF lee un booleano ausente en un
+        formulario como `False`: sin cuidado, corregir el dibujo dejaba el
+        sticker desactivado sin que nadie lo pidiera.
+        """
+        self.api.force_authenticate(self.admin)
+        creado = self.api.post(
+            "/api/v1/whatsapp/stickers/",
+            {"label": "brindis", "description": "para celebrar", "archivo": self._upload()},
+            format="multipart",
+        )
+        original = bytes(Sticker.objects.get(pk=creado.data["id"]).data)
+
+        resp = self.api.patch(
+            f"/api/v1/whatsapp/stickers/{creado.data['id']}/",
+            {"archivo": self._upload(color=(0, 128, 255, 255))},
+            format="multipart",
+        )
+        self.assertEqual(resp.status_code, 200, resp.data)
+        sticker = Sticker.objects.get(pk=creado.data["id"])
+        self.assertNotEqual(bytes(sticker.data), original, "no se reemplazó la imagen")
+        self.assertEqual(sticker.byte_size, len(bytes(sticker.data)))
+        self.assertTrue(sticker.is_active, "un cambio de imagen no debe apagarlo")
+        self.assertEqual(sticker.label, "brindis")
