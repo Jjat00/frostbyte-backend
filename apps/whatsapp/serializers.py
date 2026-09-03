@@ -11,6 +11,7 @@ from base64 import b64encode
 from rest_framework import serializers
 
 from .models import AgentSettings, Sticker
+from .tones import TONE_PRESETS
 
 
 class AgentSettingsSerializer(serializers.ModelSerializer):
@@ -18,13 +19,21 @@ class AgentSettingsSerializer(serializers.ModelSerializer):
 
     El prompt base (reglas del pedido, cobertura, pagos) NO se expone: eso es
     lógica con tests detrás, no una preferencia editable desde una pantalla.
+
+    El catálogo de tonos viaja con la configuración —nombre, para qué sirve y
+    una frase de ejemplo— para que la pantalla no tenga que repetir esos textos
+    por su cuenta: si aquí se afina un tono, allá se ve afinado.
     """
+
+    tone_presets = serializers.SerializerMethodField()
 
     class Meta:
         model = AgentSettings
         fields = (
             "agent_name",
             "owner_phones",
+            "tone_preset",
+            "tone_presets",
             "tone",
             "stickers_enabled",
             "reactions_enabled",
@@ -33,6 +42,23 @@ class AgentSettingsSerializer(serializers.ModelSerializer):
             "updated_at",
         )
         read_only_fields = ("updated_at",)
+
+    def get_tone_presets(self, obj):
+        """Los tonos entre los que se puede elegir, sin el texto del prompt.
+
+        Las instrucciones que van al modelo no salen de aquí a propósito: son
+        prompt, no contenido de pantalla, y verlas a medias invita a editarlas
+        donde no se pueden probar.
+        """
+        return [
+            {
+                "key": preset["key"],
+                "name": preset["name"],
+                "description": preset["description"],
+                "sample": preset["sample"],
+            }
+            for preset in TONE_PRESETS
+        ]
 
     def validate_agent_name(self, value):
         value = (value or "").strip()

@@ -556,8 +556,10 @@ def build_tools(contact, turn=None):
             items: items del pedido con variante_id, cantidad y notas
             nombre_cliente: nombre de quien recibe o de quien pasa a recoger; si
                 lo omites se usa el nombre ya conocido del cliente
-            metodo_pago: cash o nequi (los únicos que acepta el local). Obligatorio
-                a domicilio; para recoger déjalo vacío (paga al recoger)
+            metodo_pago: cash o nequi (los únicos que acepta el local; un pago
+                por llave Bre-B va como nequi, porque la llave es ese mismo
+                número). Obligatorio a domicilio; para recoger déjalo vacío
+                (paga al recoger)
             direccion: dirección de entrega completa (solo domicilio)
             referencia: punto de referencia para el domiciliario (solo domicilio)
             paga_con: SOLO efectivo: billete que DIJO el cliente (ej. '50000'),
@@ -597,7 +599,10 @@ def build_tools(contact, turn=None):
         if metodo_pago and metodo_pago not in Order.ACTIVE_PAYMENT_METHODS:
             return f"ERROR: metodo_pago inválido. Usa uno de: {', '.join(Order.ACTIVE_PAYMENT_METHODS)}."
         if not para_recoger and not metodo_pago:
-            return "ERROR: para un domicilio hace falta el método de pago (cash o nequi)."
+            return (
+                "ERROR: para un domicilio hace falta el método de pago (cash o nequi; "
+                "un pago por Bre-B va como nequi)."
+            )
         if not items:
             return "ERROR: el pedido no tiene items."
         if metodo_pago == Order.PaymentMethod.CASH and not paga_con:
@@ -980,12 +985,12 @@ def build_tools(contact, turn=None):
     @tool
     def enviar_botones(texto: str, opciones: list[str]) -> str:
         """Manda un mensaje con botones para que el cliente toque en vez de
-        escribir. Úsala SOLO donde la respuesta es cerrada: confirmar el pedido
-        (Sí / Cambiar algo / Cancelar) o elegir el pago (Efectivo / Nequi).
-        Lo que toque te llega como si lo hubiera escrito.
+        escribir. Su único uso es confirmar el pedido (Sí / Cambiar algo /
+        Cancelar). Lo que toque te llega como si lo hubiera escrito.
 
-        NO la uses para preguntas abiertas (qué quiere pedir, su dirección, el
-        sabor): ahí los botones dejan fuera respuestas válidas.
+        NUNCA la uses para el método de pago: esa pregunta va en texto. Tampoco
+        en preguntas abiertas (qué quiere pedir, su dirección, el sabor): ahí
+        los botones dejan fuera respuestas válidas.
 
         Args:
             texto: la pregunta completa, con el resumen o el total si aplica
@@ -1146,8 +1151,12 @@ def build_tools(contact, turn=None):
 
     @tool
     def ajustar_tono(instrucciones: str) -> str:
-        """Cambia CÓMO hablas con los clientes, de forma permanente. Solo para
+        """Ajusta CÓMO hablas con los clientes, de forma permanente. Solo para
         el dueño, y solo cuando te lo pide explícitamente.
+
+        Son retoques sobre la personalidad que el dueño ya eligió en el panel
+        ("trata de usted", "sin emojis"), no la personalidad entera: cambiarla
+        por completo se hace allá, no por chat.
 
         Lo que guardes aquí manda sobre tu estilo por defecto y se aplica desde
         la siguiente conversación. Escribe el texto COMPLETO que debe quedar, no

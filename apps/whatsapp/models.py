@@ -2,6 +2,8 @@ import re
 
 from django.db import models
 
+from .tones import DEFAULT_TONE, TONE_CHOICES, persona_for
+
 
 class WhatsAppContact(models.Model):
     """Contacto de WhatsApp que interactúa con el agente de pedidos.
@@ -301,13 +303,23 @@ class AgentSettings(models.Model):
             "y su tono por chat. Sigue tomándole pedidos de verdad."
         ),
     )
+    tone_preset = models.CharField(
+        max_length=20,
+        choices=TONE_CHOICES,
+        default=DEFAULT_TONE,
+        verbose_name="Tono",
+        help_text=(
+            "Con cuál de las personalidades habla. Reemplaza el bloque de QUIÉN ERES "
+            "del prompt: no se suma al de por defecto, lo sustituye."
+        ),
+    )
     tone = models.TextField(
         blank=True,
-        verbose_name="Tono y personalidad",
+        verbose_name="Ajustes de tono",
         help_text=(
             "Instrucciones extra sobre CÓMO habla (no sobre qué hace). Se añaden al "
-            "final del prompt, así que mandan sobre el estilo por defecto. "
-            "Ej.: 'Trata al cliente de usted' o 'sin emojis'. Vacío = el tono por defecto."
+            "final del prompt, así que mandan sobre el tono elegido. "
+            "Ej.: 'Trata al cliente de usted' o 'sin emojis'. Vacío = solo el tono elegido."
         ),
     )
     stickers_enabled = models.BooleanField(
@@ -328,7 +340,10 @@ class AgentSettings(models.Model):
     quick_replies_enabled = models.BooleanField(
         default=True,
         verbose_name="Puede mandar botones",
-        help_text="Botones de respuesta rápida (máx. 3) para confirmar el pedido o elegir pago.",
+        help_text=(
+            "Botones de respuesta rápida (máx. 3) para confirmar el pedido. El método "
+            "de pago NUNCA se pregunta con botones."
+        ),
     )
     updated_at = models.DateTimeField(auto_now=True, verbose_name="Actualizado")
 
@@ -344,6 +359,10 @@ class AgentSettings(models.Model):
         """Devuelve la única instancia de configuración, creándola si no existe."""
         obj, _ = cls.objects.get_or_create(pk=1)
         return obj
+
+    def persona(self):
+        """El bloque QUIEN ERES que le toca segun el tono elegido."""
+        return persona_for(self.tone_preset)
 
     def owner_numbers(self):
         """Los números del dueño, ya en dígitos."""

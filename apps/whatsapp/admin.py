@@ -142,7 +142,16 @@ class AgentSettingsAdmin(admin.ModelAdmin):
     """
 
     fieldsets = (
-        ("Identidad", {"fields": ("agent_name", "tone")}),
+        (
+            "Identidad",
+            {
+                "fields": ("agent_name", "tone_preset", "tone"),
+                "description": (
+                    "El tono elegido reemplaza la personalidad por defecto; los ajustes "
+                    "se suman encima y mandan sobre ella."
+                ),
+            },
+        ),
         (
             "El dueño",
             {

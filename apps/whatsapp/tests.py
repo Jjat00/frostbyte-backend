@@ -313,6 +313,55 @@ class PromptTests(TestCase):
         self.assertIn("3009998877", prompt)
         self.assertNotIn("{", prompt, "quedó un placeholder sin reemplazar")
 
+    def test_la_hora_va_de_ultima_para_no_tirar_el_cache_del_prefijo(self):
+        """El proveedor cachea por prefijo: un dato del minuto arriba lo anula todo."""
+        prompt = build_system_prompt()
+        self.assertIn("FECHA Y HORA ACTUAL", prompt.split("REGLAS DE ORO")[1])
+        self.assertLess(
+            len(prompt) - prompt.index("FECHA Y HORA ACTUAL"),
+            60,
+            "detrás de la hora no puede quedar nada del prompt",
+        )
+
+    def test_el_tono_elegido_reemplaza_la_personalidad_por_defecto(self):
+        """Elegir "serio" no puede dejar dentro al parcero: se contradirían."""
+        config = AgentSettings.load()
+        config.tone_preset = "serio"
+        config.save()
+        prompt = build_system_prompt()
+        self.assertIn("USTED siempre", prompt)
+        self.assertNotIn("parcero del pueblo", prompt)
+
+    def test_el_tono_por_defecto_es_el_parcero_de_siempre(self):
+        self.assertIn("parcero del pueblo", build_system_prompt())
+
+    def test_un_tono_que_ya_no_existe_no_deja_al_agente_sin_personalidad(self):
+        config = AgentSettings.load()
+        AgentSettings.objects.filter(pk=config.pk).update(tone_preset="inventado")
+        self.assertIn("QUIÉN ERES", build_system_prompt())
+
+    def test_los_ajustes_de_tono_se_suman_al_tono_elegido(self):
+        config = AgentSettings.load()
+        config.tone_preset = "cercano"
+        config.tone = "No uses emojis."
+        config.save()
+        prompt = build_system_prompt()
+        self.assertIn("cálido y atento", prompt)
+        self.assertIn("No uses emojis.", prompt)
+
+    def test_los_botones_no_se_ofrecen_para_elegir_el_pago(self):
+        """Los quiso el dueño solo para confirmar; el pago se pregunta escribiendo."""
+        turn = TurnContext(phone_number_id=PHONE_NUMBER_ID)
+        prompt = build_system_prompt(turn=turn)
+        self.assertIn("enviar_botones", prompt)
+        self.assertIn("NUNCA los uses para el método de pago", prompt)
+
+    def test_la_llave_bre_b_es_el_mismo_nequi(self):
+        """Tercer medio de pago del local: la llave es el número del Nequi."""
+        prompt = build_system_prompt()
+        self.assertIn("Bre-B", prompt)
+        self.assertIn("MISMO número del Nequi", prompt)
+
 
 class CoberturaSinUbicacionTests(TestCase):
     """La ubicación que el cliente sí mandó pero WhatsApp no nos entregó."""
@@ -1823,6 +1872,33 @@ class ModuloDeConfiguracionEnElPanelTests(TestCase):
         config = AgentSettings.load()
         self.assertEqual(config.tone, "trata al cliente de usted")
         self.assertFalse(config.stickers_enabled)
+
+    def test_el_catalogo_de_tonos_viaja_con_la_configuracion(self):
+        """La pantalla no repite los textos de los tonos: los recibe de aquí."""
+        self.api.force_authenticate(self.admin)
+        resp = self.api.get("/api/v1/whatsapp/agent-settings/")
+        self.assertEqual(resp.data["tone_preset"], "parcero")
+        claves = [preset["key"] for preset in resp.data["tone_presets"]]
+        self.assertEqual(claves, ["parcero", "cercano", "serio", "directo"])
+        self.assertTrue(all(p["sample"] for p in resp.data["tone_presets"]))
+        self.assertNotIn(
+            "persona", resp.data["tone_presets"][0], "el prompt no sale a la pantalla"
+        )
+
+    def test_el_dueno_cambia_el_tono_desde_la_app(self):
+        self.api.force_authenticate(self.admin)
+        resp = self.api.patch(
+            "/api/v1/whatsapp/agent-settings/", {"tone_preset": "serio"}, format="json"
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(AgentSettings.load().tone_preset, "serio")
+
+    def test_un_tono_inventado_se_rechaza(self):
+        self.api.force_authenticate(self.admin)
+        resp = self.api.patch(
+            "/api/v1/whatsapp/agent-settings/", {"tone_preset": "pirata"}, format="json"
+        )
+        self.assertEqual(resp.status_code, 400)
 
     def test_el_numero_del_dueno_se_guarda_en_digitos_aunque_se_escriba_bonito(self):
         """En el celular el número sale con espacios y con +; así pegado no lo reconocería."""

@@ -47,14 +47,7 @@ SYSTEM_PROMPT = """Eres {agent_name}, el que atiende por WhatsApp en Frostbyte, 
 granizados, cocteles y comida rápida en Cumbal, Nariño (Colombia). Tu trabajo es tomar pedidos \
 de principio a fin para que la cocina solo cocine.
 
-QUIÉN ERES: un parcero del pueblo atendiendo su local, no un formulario. Caluroso, chistoso y \
-rápido. Tuteas siempre, hablas como se habla en Nariño ("parce", "de una", "listo pues", \
-"hágale", "qué más", "bacano") sin exagerar el acento ni sonar a caricatura. El chiste va \
-DENTRO de la frase que ya ibas a decir, nunca en un mensaje aparte ni alargándola: eres el \
-amigo que contesta corto y con chispa, no el que hace show. Si el cliente está molesto, tiene \
-un problema o está reclamando, se acabó el chiste: ahí eres puro respeto y solución.
-
-FECHA Y HORA ACTUAL: {now}
+{persona}
 
 REGLAS DE ORO:
 1. Al empezar una conversación usa consultar_estado_tienda y léela SIEMPRE en este orden: \
@@ -135,15 +128,17 @@ verificar_cobertura ANTES de responder (te dirá si hubo un mensaje que no lleg�
 que te indique. Nunca pidas la ubicación más de dos veces ni repitas la misma instrucción: a \
 la tercera, o si el cliente no puede compartirla, usa solicitar_humano para que el equipo lo \
 atienda.
-c) Solo para domicilio: pregunta el método de pago, efectivo o Nequi. Son los ÚNICOS que aceptamos: si pide \
-tarjeta, transferencia bancaria o Daviplata, dile con amabilidad que por ahora solo hay \
-efectivo y Nequi.
+c) Solo para domicilio: pregunta el método de pago con TEXTO (nunca con botones): efectivo o \
+Nequi. También recibimos por llave Bre-B, que es el MISMO número del Nequi: si el cliente lo \
+prefiere así, dale ese número como llave y regístralo igual que un Nequi. Efectivo, Nequi y \
+Bre-B son los ÚNICOS que aceptamos: si pide tarjeta, transferencia bancaria o Daviplata, dile \
+con amabilidad que por ahora solo hay efectivo, Nequi o Bre-B.
    - Efectivo: pregunta SIEMPRE con qué billete paga y nada más. NO hables de vueltas ni de \
 cuánto recibirá de vuelta: ese dato queda registrado en el pedido y el equipo las alista. \
 Si dice que paga con el valor completo/exacto, usa paga_con='exacto'; NUNCA inventes un \
 billete que el cliente no dijo.
-   - Nequi: comparte estos datos de pago y pide que envíe el \
-comprobante cuando pague: {transfer_info}
+   - Nequi o Bre-B: comparte estos datos de pago —el mismo número sirve de llave Bre-B— y \
+pide que envíe el comprobante cuando pague: {transfer_info}
 d) Llama cotizar_pedido con los items (para_recoger=True si pasa por él; y paga_con si es \
 efectivo a domicilio, para validar que el billete alcance) y arma el resumen: items y TOTAL, \
 más dirección y envío si es domicilio, copiando EXACTAMENTE sus cifras: NUNCA calcules \
@@ -174,7 +169,7 @@ hacer ("permíteme reviso"), no expliques por qué preguntas algo, no cierres ca
 "¿algo más?" ni con un resumen de lo que ya se dijo. Contesta lo que preguntó y ya.
 - Una pregunta por mensaje. Si necesitas tres datos, los pides de a uno.
 - Sin Markdown (WhatsApp no lo muestra): listas con guiones, *negrilla* de WhatsApp muy de vez \
-en cuando. Emojis con medida, uno por mensaje y solo cuando aporta.
+en cuando. Emojis con medida, uno por mensaje y solo cuando aporta (si tu personalidad dice que no uses, no usas ninguno).
 - Los precios se escriben como $8.000. En las cifras y en la dirección no hay chiste que valga: \
 el dato va limpio y exacto, aunque el resto del mensaje sea relajado.
 - Si piden hablar con una persona, hay una queja seria o algo fuera de tu alcance, usa \
@@ -200,10 +195,10 @@ PHOTO_ABILITY = """- enviar_foto_producto manda la foto real de un producto. Ús
 cliente pregunte cómo es algo o pida verlo: se lo muestras en vez de describírselo."""
 
 BUTTONS_ABILITY = """- enviar_botones manda la pregunta con botones para que el cliente toque \
-en vez de escribir. Solo donde la respuesta es cerrada: confirmar el pedido (Sí, confírmalo / \
-Cambiar algo / Cancelar) y elegir el pago (Efectivo / Nequi). En preguntas abiertas no: los \
-botones dejarían fuera lo que el cliente sí quiere. La pregunta va DENTRO de los botones, no \
-la repitas después en texto."""
+en vez de escribir. Su único uso es confirmar el pedido (Sí, confírmalo / Cambiar algo / \
+Cancelar). NUNCA los uses para el método de pago: eso se pregunta escribiendo. Tampoco en \
+preguntas abiertas: los botones dejarían fuera lo que el cliente sí quiere. La pregunta va \
+DENTRO de los botones, no la repitas después en texto."""
 
 REACTION_ABILITY = """- reaccionar pone un emoji sobre el mensaje del cliente, como haces tú \
 en WhatsApp. Va donde hay algo que registrar (un gracias, un chiste, una buena noticia, algo \
@@ -215,9 +210,14 @@ STICKER_BANK_PROMPT = """
 BANCO DE STICKERS (nombre: cuándo usarlo). Solo existen estos, no te inventes otros:
 {bank}"""
 
+NOW_PROMPT = """
+
+FECHA Y HORA ACTUAL: {now}"""
+
 TONE_PROMPT = """
 
-CÓMO TE PIDIÓ HABLAR EL NEGOCIO (manda sobre el estilo de arriba):
+AJUSTES DE ESTILO QUE PIDIÓ EL NEGOCIO (mandan sobre todo lo de arriba, incluida tu \
+personalidad):
 {tone}"""
 
 OWNER_PROMPT = """
@@ -299,6 +299,13 @@ def build_system_prompt(contact=None, turn=None):
     Las secciones de lo que puede mandar se arman a la vez que la lista de
     tools (ver tools.build_tools) y con las mismas condiciones: el prompt no
     debe nombrarle al modelo una capacidad que no tiene en las manos.
+
+    ORDEN: de lo que nunca cambia a lo que cambia en cada turno. Primero el
+    prompt fijo, luego la configuración del negocio, después lo que depende
+    del cliente y de último la hora. El proveedor cachea por prefijo común,
+    así que un dato volátil arriba —la hora estaba en la tercera línea— tira
+    el descuento de TODO lo que viene detrás, prompt e historial incluidos.
+    Cualquier cosa que se añada aquí va antes de NOW_PROMPT.
     """
     config = AgentSettings.load()
     transfer_info = settings.WHATSAPP_TRANSFER_INFO or (
@@ -306,7 +313,7 @@ def build_system_prompt(contact=None, turn=None):
     )
     prompt = SYSTEM_PROMPT.format(
         agent_name=config.agent_name or "Frosty",
-        now=timezone.localtime().strftime("%A %d/%m/%Y %H:%M"),
+        persona=config.persona(),
         transfer_info=transfer_info,
         site_url=settings.SITE_URL,
         delivery_coverage=coverage_label(),
@@ -331,23 +338,29 @@ def build_system_prompt(contact=None, turn=None):
     if config.tone.strip():
         prompt += TONE_PROMPT.format(tone=config.tone.strip())
 
+    draft = None
     if contact is not None and config.is_owner(contact.phone):
         prompt += OWNER_PROMPT
         draft = StickerDraft.objects.filter(contact=contact).first()
-        if draft is not None:
-            prompt += OWNER_MEDIA_PROMPT.format(
-                kind_label={
-                    StickerDraft.Kind.IMAGE: "una imagen",
-                    StickerDraft.Kind.STICKER: "un sticker",
-                    StickerDraft.Kind.VIDEO: "un video",
-                }.get(draft.kind, "un archivo")
-            )
 
     if contact is not None and kapso.is_bsuid(contact.phone):
         prompt += "\n\n" + NO_PHONE_PROMPT
         if contact.contact_phone:
             prompt += KNOWN_PHONE_PROMPT.format(celular=contact.contact_phone)
-    return prompt
+
+    # Lo que cambia entre un turno y el siguiente va de último, sin nada
+    # detrás: el archivo que el dueño acaba de mandar y, sobre todo, la hora.
+    if draft is not None:
+        prompt += OWNER_MEDIA_PROMPT.format(
+            kind_label={
+                StickerDraft.Kind.IMAGE: "una imagen",
+                StickerDraft.Kind.STICKER: "un sticker",
+                StickerDraft.Kind.VIDEO: "un video",
+            }.get(draft.kind, "un archivo")
+        )
+    return prompt + NOW_PROMPT.format(
+        now=timezone.localtime().strftime("%A %d/%m/%Y %H:%M")
+    )
 
 
 def _build_agent(contact, turn=None):
