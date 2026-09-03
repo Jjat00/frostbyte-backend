@@ -386,7 +386,16 @@ KAPSO_PHONE_NUMBER_IDS = [
 ]
 # Interruptor general del agente (los webhooks se registran igual, sin responder)
 WHATSAPP_AGENT_ENABLED = os.getenv('WHATSAPP_AGENT_ENABLED', 'True').lower() == 'true'
-WHATSAPP_AGENT_MODEL = os.getenv('WHATSAPP_AGENT_MODEL', 'gpt-4o-mini')
+WHATSAPP_AGENT_MODEL = os.getenv('WHATSAPP_AGENT_MODEL', 'gpt-5.6-terra')
+# Cuánto razona antes de responder (none|low|medium|high|xhigh|max). Solo lo
+# usan los modelos de razonamiento (GPT-5 en adelante); 'low' es el equilibrio
+# entre calidad y latencia que aguanta un chat de WhatsApp.
+WHATSAPP_AGENT_REASONING_EFFORT = os.getenv('WHATSAPP_AGENT_REASONING_EFFORT', 'low')
+# Leer lo que manda el cliente (audios e imágenes) es trabajo mecánico: va con
+# modelos baratos aparte, y el modelo caro del agente queda solo para conversar
+# y decidir. Un comprobante de pago sí se lee con visión buena: los montos.
+WHATSAPP_VISION_MODEL = os.getenv('WHATSAPP_VISION_MODEL', 'gpt-5.6-luna')
+WHATSAPP_TRANSCRIBE_MODEL = os.getenv('WHATSAPP_TRANSCRIBE_MODEL', 'gpt-4o-mini-transcribe')
 # Datos de pago por transferencia que el agente comparte (Nequi/cuenta/etc.)
 WHATSAPP_TRANSFER_INFO = os.getenv('WHATSAPP_TRANSFER_INFO', '')
 # Número al que el agente remite cuando no sabe algo (contacto directo del local)

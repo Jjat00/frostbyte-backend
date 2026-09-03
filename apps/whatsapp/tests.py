@@ -936,3 +936,77 @@ class ClienteSinNumeroPideCelularTests(TestCase):
 
         normal = WhatsAppContact.objects.create(phone=PHONE)
         self.assertNotIn("NO nos muestra su número", build_system_prompt(normal))
+
+
+class ParametrosDelModeloTests(TestCase):
+    """Cada familia de modelos se llama distinto (2026-09-03, cambio a GPT-5.6 Terra).
+
+    Los modelos que razonan (GPT-5 en adelante) rechazan `temperature` y cobran
+    los tokens de razonamiento contra el presupuesto de salida; los clásicos
+    (`gpt-4o-mini`) siguen esperando `temperature` y `max_tokens`.
+    """
+
+    def test_terra_no_manda_temperature_y_si_esfuerzo_de_razonamiento(self):
+        from .llm import chat_model_params
+
+        with override_settings(WHATSAPP_AGENT_REASONING_EFFORT="low"):
+            params = chat_model_params("gpt-5.6-terra", temperature=0.3)
+        self.assertNotIn("temperature", params, "la API devuelve 400 si se manda")
+        self.assertEqual(params["reasoning_effort"], "low")
+        self.assertTrue(params["use_responses_api"], "conserva el razonamiento entre tools")
+
+    def test_sin_razonamiento_terra_vuelve_a_aceptar_temperature(self):
+        from .llm import chat_model_params
+
+        with override_settings(WHATSAPP_AGENT_REASONING_EFFORT="none"):
+            params = chat_model_params("gpt-5.6-terra", temperature=0.3)
+        self.assertEqual(params["temperature"], 0.3)
+        self.assertEqual(params["reasoning_effort"], "none")
+
+    def test_un_modelo_clasico_se_sigue_llamando_como_antes(self):
+        from .llm import chat_model_params, completion_params
+
+        self.assertEqual(chat_model_params("gpt-4o-mini", temperature=0.3), {"temperature": 0.3})
+        self.assertEqual(
+            completion_params("gpt-4o-mini", temperature=0, max_output_tokens=200),
+            {"temperature": 0, "max_tokens": 200},
+        )
+
+    def test_la_vision_con_terra_deja_margen_para_los_tokens_de_razonamiento(self):
+        from .llm import completion_params
+
+        with override_settings(WHATSAPP_AGENT_REASONING_EFFORT="low"):
+            params = completion_params("gpt-5.6-terra", temperature=0, max_output_tokens=200)
+        self.assertNotIn("max_tokens", params, "gpt-5 usa max_completion_tokens")
+        self.assertGreater(
+            params["max_completion_tokens"],
+            200,
+            "sin margen el modelo gasta el cupo pensando y la descripción llega vacía",
+        )
+
+    def test_la_vision_no_arrastra_el_esfuerzo_del_agente(self):
+        from .llm import completion_params
+        from .media import VISION_REASONING_EFFORT
+
+        with override_settings(WHATSAPP_AGENT_REASONING_EFFORT="high"):
+            params = completion_params(
+                "gpt-5.6-luna", temperature=0, max_output_tokens=200, effort=VISION_REASONING_EFFORT
+            )
+        self.assertEqual(params["reasoning_effort"], "low", "leer un comprobante no paga razonamiento alto")
+
+    def test_leer_media_no_usa_el_modelo_caro_del_agente(self):
+        from django.conf import settings
+
+        self.assertNotEqual(
+            settings.WHATSAPP_VISION_MODEL,
+            settings.WHATSAPP_AGENT_MODEL,
+            "las imágenes van con un modelo barato; el del agente es para conversar",
+        )
+        self.assertIn("mini", settings.WHATSAPP_TRANSCRIBE_MODEL)
+
+    def test_gpt_5_chat_no_cuenta_como_modelo_de_razonamiento(self):
+        from .llm import is_reasoning_model
+
+        self.assertTrue(is_reasoning_model("gpt-5.6-terra"))
+        self.assertFalse(is_reasoning_model("gpt-5-chat-latest"))
+        self.assertFalse(is_reasoning_model("gpt-4o-mini"))

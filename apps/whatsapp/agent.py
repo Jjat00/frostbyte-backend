@@ -18,6 +18,7 @@ from django.utils import timezone
 from apps.orders.coverage import coverage_label
 
 from . import kapso
+from .llm import chat_model_params
 from .tools import build_tools
 
 logger = logging.getLogger(__name__)
@@ -224,7 +225,7 @@ def _build_agent(contact):
     model = ChatOpenAI(
         model=settings.WHATSAPP_AGENT_MODEL,
         api_key=settings.OPENAI_API_KEY,
-        temperature=0.3,
+        **chat_model_params(settings.WHATSAPP_AGENT_MODEL, temperature=0.3),
     )
     return create_agent(
         model=model,

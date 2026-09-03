@@ -16,7 +16,8 @@ Cliente WhatsApp
       │                        │
       │                        ▼
       └──API mensajes──  Agente LangChain/LangGraph (agent.py)
-                               │   modelo: OPENAI (WHATSAPP_AGENT_MODEL)
+                               │   modelo: OPENAI (WHATSAPP_AGENT_MODEL,
+                               │   default gpt-5.6-terra con razonamiento bajo)
                                │   memoria: PostgresSaver, thread por contacto+día
                                ▼
                          Tools → ORM (tools.py): menú activo, búsqueda
@@ -114,6 +115,33 @@ Cliente WhatsApp
   LangGraph, se crean solas). Lo duradero (nombre, dirección habitual,
   preferencias) vive en `WhatsAppContact` y el historial real en `Order`.
 
+## El modelo
+
+El agente corre sobre **`gpt-5.6-terra`** (OpenAI, familia GPT-5.6), un modelo
+que razona antes de responder. Eso cambia cómo se lo llama y `llm.py` arma los
+parámetros según el modelo configurado, así que volver a un modelo clásico
+(`WHATSAPP_AGENT_MODEL=gpt-4o-mini`) no exige tocar código:
+
+- **No acepta `temperature`** salvo con `WHATSAPP_AGENT_REASONING_EFFORT=none`;
+  mandarla devuelve HTTP 400. Con un modelo clásico se sigue enviando 0.3.
+- **Responses API** en vez de Chat Completions: es la que conserva el
+  razonamiento entre las llamadas a tools de un mismo turno (un pedido encadena
+  varias) en lugar de tirarlo en cada ida y vuelta.
+- **El presupuesto de salida incluye los tokens de razonamiento**, así que la
+  descripción de imágenes pide `max_completion_tokens` con margen; con el tope
+  viejo de 200 el modelo gastaba el cupo pensando y devolvía texto vacío.
+- **Costo**: $2 por millón de tokens de entrada ($0.20 si vienen del caché) y
+  $12 de salida, contra $0.15/$0.60 de `gpt-4o-mini`. El system prompt es fijo y
+  largo, así que el caché de OpenAI absorbe buena parte de la entrada.
+
+**Leer media no usa el modelo del agente.** Transcribir un audio y describir una
+imagen es trabajo mecánico y va con modelos baratos propios: `gpt-4o-mini-transcribe`
+($0.003 por minuto, el más barato de la línea de transcripción) y `gpt-5.6-luna`
+($0.20/$1.20 por millón, ~10x más barato que Terra y con la visión de la familia
+GPT-5.6, que es lo que importa para leer el monto de un comprobante). La visión
+usa esfuerzo de razonamiento `low` fijo (`media.VISION_REASONING_EFFORT`), sin
+seguir al del agente: el cliente está esperando en el chat.
+
 ## Variables de entorno
 
 | Variable | Descripción |
@@ -122,7 +150,10 @@ Cliente WhatsApp
 | `KAPSO_WEBHOOK_SECRET` | Secret definido al crear el webhook en Kapso |
 | `KAPSO_PHONE_NUMBER_IDS` | `phone_number_id` de los números propios, separados por coma |
 | `WHATSAPP_AGENT_ENABLED` | `False` apaga al agente (los webhooks se registran igual) |
-| `WHATSAPP_AGENT_MODEL` | Modelo de OpenAI (default `gpt-4o-mini`) |
+| `WHATSAPP_AGENT_MODEL` | Modelo de OpenAI (default `gpt-5.6-terra`) |
+| `WHATSAPP_AGENT_REASONING_EFFORT` | Cuánto razona antes de responder: `none`, `low` (default), `medium`, `high`, `xhigh`, `max`. Solo aplica a modelos de razonamiento (GPT-5 en adelante); más esfuerzo = mejor criterio pero más lento y más caro |
+| `WHATSAPP_VISION_MODEL` | Modelo que describe las imágenes del cliente (default `gpt-5.6-luna`) |
+| `WHATSAPP_TRANSCRIBE_MODEL` | Modelo que transcribe las notas de voz (default `gpt-4o-mini-transcribe`) |
 | `WHATSAPP_TRANSFER_INFO` | Datos de pago por transferencia que comparte el agente |
 | `WHATSAPP_CONTACT_PHONE` | Número al que remite cuando no sabe algo (default `3164277879`) |
 | `WHATSAPP_HUMAN_PAUSE_MINUTES` | Minutos de pausa del agente tras cada mensaje de un humano del equipo (default 30) |
@@ -183,9 +214,9 @@ Para probar el webhook con Kapso real en local se necesita un túnel
 
 - **Notas de voz**: se descargan vía Kapso (`GET /meta/whatsapp/v24.0/{media_id}`
   → `download_url` firmado) y se transcriben con OpenAI
-  (`gpt-4o-mini-transcribe`). El agente recibe la transcripción como texto.
+  (`WHATSAPP_TRANSCRIBE_MODEL`). El agente recibe la transcripción como texto.
 - **Imágenes**: se descargan igual y se describen con el modelo de visión
-  (`WHATSAPP_AGENT_MODEL`). Si es un comprobante de pago, la descripción extrae
+  (`WHATSAPP_VISION_MODEL`). Si es un comprobante de pago, la descripción extrae
   monto, fecha, remitente y referencia. El caption del cliente se conserva.
 - **Ubicación compartida**: el worker guarda lat/lng en el contacto
   (`last_location_*`) y el agente solo recibe el aviso de que quedó

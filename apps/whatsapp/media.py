@@ -4,6 +4,10 @@ Kapso expone los media de Meta en dos pasos: el GET del media id devuelve un
 download_url firmado (expira a los ~4 min) y ese download_url entrega el
 binario sin más auth. Como el agente solo lee texto, los audios se transcriben
 y las imágenes se describen con OpenAI antes de entrar a la conversación.
+
+Esto es trabajo mecánico y va con modelos baratos propios
+(`WHATSAPP_TRANSCRIBE_MODEL`, `WHATSAPP_VISION_MODEL`): el modelo del agente,
+que es el caro, se reserva para conversar y decidir.
 """
 
 import base64
@@ -13,11 +17,15 @@ import logging
 import requests
 from django.conf import settings
 
+from .llm import completion_params
+
 logger = logging.getLogger(__name__)
 
 MEDIA_URL = "https://api.kapso.ai/meta/whatsapp/v24.0/{media_id}"
 
-TRANSCRIBE_MODEL = "gpt-4o-mini-transcribe"
+# Leer un comprobante no necesita más razonamiento que este, y el cliente está
+# esperando en el chat: la visión no sigue al esfuerzo del agente.
+VISION_REASONING_EFFORT = "low"
 
 # Extensión por mime: la API de transcripción detecta el formato por el nombre
 _AUDIO_EXT = {
@@ -70,7 +78,7 @@ def transcribe_audio(media_id, phone_number_id):
     buffer = io.BytesIO(content)
     buffer.name = f"audio.{_AUDIO_EXT.get(mime, 'ogg')}"
     result = _openai_client().audio.transcriptions.create(
-        model=TRANSCRIBE_MODEL,
+        model=settings.WHATSAPP_TRANSCRIBE_MODEL,
         file=buffer,
         language="es",
     )
@@ -83,8 +91,9 @@ def describe_image(media_id, phone_number_id):
     if not mime.startswith("image/"):
         mime = "image/jpeg"
     data_uri = f"data:{mime};base64,{base64.b64encode(content).decode()}"
+    model = settings.WHATSAPP_VISION_MODEL
     result = _openai_client().chat.completions.create(
-        model=settings.WHATSAPP_AGENT_MODEL,
+        model=model,
         messages=[
             {
                 "role": "user",
@@ -94,7 +103,6 @@ def describe_image(media_id, phone_number_id):
                 ],
             }
         ],
-        max_tokens=200,
-        temperature=0,
+        **completion_params(model, temperature=0, max_output_tokens=200, effort=VISION_REASONING_EFFORT),
     )
     return (result.choices[0].message.content or "").strip()
