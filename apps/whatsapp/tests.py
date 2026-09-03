@@ -16,12 +16,17 @@ from django.test import (
     override_settings,
 )
 
+from django.utils import timezone
+
+from . import mood
 from .agent import AgentTurn, _for_whatsapp, build_system_prompt
+from .mood import StickerUrge
 from .stickers import StickerError, has_transparency, normalize
 from .tools import TurnContext, build_tools
 from apps.orders.models import Order
 
 from .models import (
+    STICKER_MEMORY,
     AgentSettings,
     AgentTone,
     ChatMessage,
@@ -121,7 +126,7 @@ class WorkerAgrupadoTests(TransactionTestCase):
     def fake_turn(self, reply="ok", mutated=False, delay=0.0, on_call=None):
         """Doble del LLM: registra el texto que recibió y tarda `delay`."""
 
-        def _run(contact, text, phone_number_id="", message_id=""):
+        def _run(contact, text, phone_number_id="", message_id="", customer_sticker=False):
             self.turns.append(text)
             if on_call:
                 on_call()
@@ -1224,6 +1229,55 @@ class PersonalidadYStickersTests(TestCase):
         self.assertFalse(turn.answered, "sigue debiendo una respuesta de texto")
         self.assertIn("texto", salida.lower())
 
+    def test_el_sticker_enviado_queda_en_la_memoria_del_contacto(self):
+        """Sin esta memoria el siguiente turno no sabe qué mandó ni cuándo."""
+        self._sticker()
+        turn = TurnContext(phone_number_id=PHONE_NUMBER_ID)
+        tool = next(t for t in build_tools(self.contact, turn) if t.name == "enviar_sticker")
+        with patch("apps.whatsapp.kapso.send_sticker", return_value={"ok": True}):
+            tool.invoke({"nombre": "granizado feliz"})
+        self.contact.refresh_from_db()
+        self.assertEqual(
+            [label for label, _ in self.contact.stickers_today()], ["granizado feliz"]
+        )
+
+    def test_el_turno_sin_sticker_no_manda_aunque_el_modelo_lo_pida(self):
+        """El 'a veces no' es del sistema: si dependiera del prompt sería un 'casi nunca no'."""
+        self._sticker()
+        turn = TurnContext(
+            phone_number_id=PHONE_NUMBER_ID, sticker_urge=StickerUrge(False, mood.NO_URGE)
+        )
+        tool = next(t for t in build_tools(self.contact, turn) if t.name == "enviar_sticker")
+        with patch("apps.whatsapp.kapso.send_sticker") as send:
+            salida = tool.invoke({"nombre": "granizado feliz"})
+        send.assert_not_called()
+        self.assertFalse(turn.posted)
+        self.assertIn("texto", salida.lower())
+        self.assertEqual(self.contact.stickers_today(), [])
+
+    def test_el_pulso_del_turno_llega_al_prompt_y_nombra_el_ultimo(self):
+        self._sticker()
+        rato = timezone.now() - datetime.timedelta(minutes=mood.COOLDOWN_MINUTES + 1)
+        self.contact.sticker_log = [{"label": "granizado feliz", "at": rato.isoformat()}]
+        self.contact.save(update_fields=["sticker_log"])
+        turn = TurnContext(
+            phone_number_id=PHONE_NUMBER_ID,
+            message_id="wamid.1",
+            sticker_urge=mood.sticker_urge(self.contact, roll=0.0),
+        )
+        prompt = build_system_prompt(self.contact, turn)
+        self.assertIn("STICKERS EN ESTE TURNO", prompt)
+        self.assertIn("«granizado feliz»", prompt, "sin esto repetiría el mismo")
+
+    def test_sin_banco_no_hay_nota_de_stickers_en_el_prompt(self):
+        """Nada que mandar, nada que contarle: es prompt que se paga en cada turno."""
+        turn = TurnContext(
+            phone_number_id=PHONE_NUMBER_ID,
+            message_id="wamid.1",
+            sticker_urge=mood.sticker_urge(self.contact, roll=0.0),
+        )
+        self.assertNotIn("STICKERS EN ESTE TURNO", build_system_prompt(self.contact, turn))
+
     def test_los_botones_rechazan_opciones_que_whatsapp_no_acepta(self):
         turn = TurnContext(phone_number_id=PHONE_NUMBER_ID)
         tool = next(t for t in build_tools(self.contact, turn) if t.name == "enviar_botones")
@@ -1296,6 +1350,78 @@ class RespuestaVaciaTests(TestCase):
 
     def test_el_texto_normal_no_cambia(self):
         self.assertEqual(_for_whatsapp("Listo parce", already_answered=True), "Listo parce")
+
+
+class PulsoDeStickersTests(TestCase):
+    """Cuándo le dan ganas de mandar uno (mood.py).
+
+    Lo que se protege aquí es que el sticker siga siendo un gesto: que a veces
+    no toque, que no lleguen dos seguidos y que una conversación no acabe
+    empapelada. El dado se fija con `roll` para que la prueba no dependa de la
+    suerte.
+    """
+
+    def setUp(self):
+        self.contact = WhatsAppContact.objects.create(phone=PHONE)
+
+    def test_el_dado_decide_el_turno(self):
+        self.assertTrue(mood.sticker_urge(self.contact, roll=0.0).allowed)
+        self.assertFalse(mood.sticker_urge(self.contact, roll=0.99).allowed)
+
+    def test_dos_seguidos_no(self):
+        """Un sticker detrás de otro no es cercanía, es ruido."""
+        self.contact.remember_sticker("granizado feliz")
+        self.assertFalse(mood.sticker_urge(self.contact, roll=0.0).allowed)
+
+    def test_pasado_el_enfriamiento_vuelve_a_ser_posible(self):
+        self.contact.remember_sticker("granizado feliz")
+        antes = timezone.now() - datetime.timedelta(minutes=mood.COOLDOWN_MINUTES + 1)
+        self.contact.sticker_log = [{"label": "granizado feliz", "at": antes.isoformat()}]
+        self.contact.save(update_fields=["sticker_log"])
+        urge = mood.sticker_urge(self.contact, roll=0.0)
+        self.assertTrue(urge.allowed)
+        self.assertIn("granizado feliz", urge.note, "tiene que saber cuál para no repetirlo")
+
+    def test_el_tope_del_dia_apaga_los_stickers_pase_lo_que_pase(self):
+        viejo = timezone.now() - datetime.timedelta(hours=1)
+        self.contact.sticker_log = [
+            {"label": f"sticker {i}", "at": viejo.isoformat()}
+            for i in range(len(mood.CHANCE_BY_COUNT))
+        ]
+        self.contact.save(update_fields=["sticker_log"])
+        self.assertFalse(mood.sticker_urge(self.contact, roll=0.0).allowed)
+        self.assertFalse(
+            mood.sticker_urge(self.contact, answering_sticker=True, roll=0.0).allowed,
+            "ni siquiera devolviendo el gesto: el tope del día manda",
+        )
+
+    def test_responder_al_sticker_del_cliente_es_lo_natural(self):
+        """El mismo dado que dice que no en un turno normal dice que sí aquí."""
+        roll = (mood.CHANCE_BY_COUNT[0] + mood.CHANCE_ANSWERING_STICKER) / 2
+        self.assertFalse(mood.sticker_urge(self.contact, roll=roll).allowed)
+        self.assertTrue(
+            mood.sticker_urge(self.contact, answering_sticker=True, roll=roll).allowed
+        )
+
+    def test_los_de_ayer_no_cuentan_hoy(self):
+        """El hilo del agente también se renueva a diario."""
+        ayer = timezone.now() - datetime.timedelta(days=1)
+        self.contact.sticker_log = [{"label": "granizado feliz", "at": ayer.isoformat()}]
+        self.contact.save(update_fields=["sticker_log"])
+        self.assertEqual(self.contact.stickers_today(), [])
+        self.assertIn("todavía no le has mandado", mood.sticker_urge(self.contact, roll=0.0).note)
+
+    def test_la_memoria_no_crece_sin_fin(self):
+        for i in range(12):
+            self.contact.remember_sticker(f"sticker {i}")
+        self.assertEqual(len(self.contact.sticker_log), STICKER_MEMORY)
+        self.assertEqual(self.contact.sticker_log[0]["label"], "sticker 11")
+
+    def test_una_fecha_ilegible_no_tumba_el_turno(self):
+        """El log es JSON suelto: lo que no se entienda se ignora, no revienta."""
+        self.contact.sticker_log = [{"label": "raro", "at": "no es una fecha"}, "basura"]
+        self.contact.save(update_fields=["sticker_log"])
+        self.assertEqual(self.contact.stickers_today(), [])
 
 
 class ConversionDeStickersTests(TestCase):

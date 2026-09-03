@@ -183,13 +183,17 @@ class TurnContext:
     `answered`: el turno ya respondió algo, aunque no haya sido un mensaje. Una
     reacción sola es una respuesta completa —el prompt se lo permite—, y sin
     esto un "gracias" contestado con un ❤️ recibía además un "¿me lo repites?".
+    `sticker_urge`: si este turno puede llevar sticker (ver mood.py). Se tira
+    una vez y lo leen los dos lados, el prompt y la tool. En None —pruebas por
+    shell— no hay dado y la tool manda lo que le pidan.
     """
 
-    def __init__(self, phone_number_id="", message_id=""):
+    def __init__(self, phone_number_id="", message_id="", sticker_urge=None):
         self.phone_number_id = phone_number_id
         self.message_id = message_id
         self.posted = False
         self.answered = False
+        self.sticker_urge = sticker_urge
 
     @property
     def can_send(self):
@@ -940,6 +944,14 @@ def build_tools(contact, turn=None):
         Args:
             nombre: el nombre exacto del sticker, tal como aparece en tu lista
         """
+        # El turno que no toca se respeta aquí y no solo en el prompt: es lo
+        # que convierte el "a veces sí, a veces no" en algo real y no en una
+        # sugerencia que el modelo sigue cuando le parece.
+        if turn.sticker_urge is not None and not turn.sticker_urge.allowed:
+            return (
+                "Este turno va sin sticker. Responde con texto y no menciones que ibas "
+                "a mandar uno."
+            )
         wanted = _normalize(nombre)
         catalog = Sticker.catalog()
         sticker = next((s for s in catalog if _normalize(s.label) == wanted), None)
@@ -954,6 +966,7 @@ def build_tools(contact, turn=None):
         turn.posted = True
         turn.answered = True
         Sticker.objects.filter(pk=sticker.pk).update(sent_count=models.F("sent_count") + 1)
+        contact.remember_sticker(sticker.label)
         return "Sticker enviado. El cliente ya lo vio: no lo describas."
 
     @tool

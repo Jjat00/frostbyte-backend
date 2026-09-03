@@ -1,10 +1,15 @@
 import re
 
 from django.db import models
-
+from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 from django.utils.text import slugify
 
 from .tones import DEFAULT_TONE, SEED_TONES, seed_persona, seed_tone
+
+# Cuántos stickers recuerda cada contacto. Solo hacen falta los del día, y un
+# día no da para más de un puñado.
+STICKER_MEMORY = 5
 
 
 class WhatsAppContact(models.Model):
@@ -114,6 +119,17 @@ class WhatsAppContact(models.Model):
             "equipo intervino en el chat. Se renueva con cada mensaje del humano"
         ),
     )
+    sticker_log = models.JSONField(
+        default=list,
+        blank=True,
+        editable=False,
+        verbose_name="Stickers recientes",
+        help_text=(
+            "Los últimos que el agente le mandó a este contacto, del más nuevo al más "
+            "viejo. Es su memoria corta: sin ella repetiría el mismo sticker y lo "
+            "mandaría en cada mensaje (ver mood.sticker_urge)"
+        ),
+    )
     is_blocked = models.BooleanField(
         default=False,
         verbose_name="Bloqueado",
@@ -135,6 +151,36 @@ class WhatsAppContact(models.Model):
     def __str__(self):
         name = self.customer_name or self.profile_name or "sin nombre"
         return f"{self.phone} ({name})"
+
+    def remember_sticker(self, label):
+        """Anota el sticker que se le acaba de mandar.
+
+        Se guardan unos pocos y no todos a propósito: lo único que hay que
+        saber después es cuántos van hoy y cuál fue el último, y un historial
+        completo por contacto solo engordaría la fila.
+        """
+        entry = {"label": label, "at": timezone.now().isoformat()}
+        previous = [e for e in (self.sticker_log or []) if isinstance(e, dict)]
+        self.sticker_log = [entry] + previous[: STICKER_MEMORY - 1]
+        self.save(update_fields=["sticker_log", "updated_at"])
+
+    def stickers_today(self):
+        """Los de hoy, del más reciente al más viejo: [(nombre, cuándo)].
+
+        Hoy, y no las últimas horas, porque el hilo del agente también se
+        renueva cada día: la conversación de ayer no cuenta para el pulso de
+        la de hoy.
+        """
+        today = timezone.localdate()
+        recent = []
+        for entry in self.sticker_log or []:
+            if not isinstance(entry, dict):
+                continue
+            moment = parse_datetime(entry.get("at") or "")
+            if moment is None or timezone.localtime(moment).date() != today:
+                continue
+            recent.append((entry.get("label") or "", moment))
+        return recent
 
 
 class SentMessage(models.Model):
@@ -521,6 +567,11 @@ class Sticker(models.Model):
     sticker guardado como archivo desaparecería sin avisar. El agente no puede
     "ver" el banco cuando responde, así que elige por la descripción: ahí está
     escrito PARA QUÉ sirve cada uno, no qué se dibuja en él.
+
+    La descripción orienta, no reparte: dos stickers pueden servir para el
+    mismo momento y el agente elige entre ellos (ver mood.py). Un banco con un
+    solo sticker por situación siempre va a sonar igual, por mucho que el
+    prompt le pida variar.
     """
 
     label = models.CharField(
@@ -533,8 +584,10 @@ class Sticker(models.Model):
         max_length=200,
         verbose_name="Cuándo usarlo",
         help_text=(
-            "Lo único que el agente lee para elegirlo. Describe el MOMENTO, no el dibujo: "
-            "'para celebrar que el pedido quedó listo', no 'un vaso azul con ojos'."
+            "Lo único que el agente lee para elegirlo. Describe el MOMENTO o el ánimo, no "
+            "el dibujo: 'para celebrar que el pedido quedó listo', no 'un vaso azul con "
+            "ojos'. No es exclusivo: varios pueden servir para lo mismo, y cuantos más "
+            "haya para un mismo ánimo menos se repite el agente."
         ),
     )
     data = models.BinaryField(verbose_name="Archivo WebP", editable=False)

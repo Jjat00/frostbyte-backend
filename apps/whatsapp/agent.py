@@ -19,6 +19,7 @@ from apps.orders.coverage import coverage_label
 
 from . import kapso
 from .llm import chat_model_params
+from .mood import sticker_urge
 from .models import AgentSettings, Sticker, StickerDraft
 from .tools import TurnContext, build_tools
 
@@ -184,12 +185,17 @@ LO QUE PUEDES MANDAR ADEMÁS DE TEXTO:
 - Cuando una de estas tools ya puso algo en el chat, escribe UNA línea corta o ninguna. Nunca \
 describas lo que acabas de mandar: el cliente lo está viendo."""
 
-STICKER_ABILITY = """- enviar_sticker manda uno del banco de abajo. Úsalo como usarías un \
-sticker tú. Donde mejor caen: el saludo del principio, el momento en que el pedido queda \
-creado, cuando el cliente agradece y cuando toca dar una mala noticia (fuera de zona, algo \
-agotado). En el resto de la conversación —armando el pedido, pidiendo datos, cotizando— no \
-van. Elígelo por el "cuándo usarlo", no por el nombre; máximo uno por mensaje. Si ninguno \
-cuadra con el momento, no fuerces ninguno: mejor sin sticker que con el que no era."""
+STICKER_ABILITY = """- enviar_sticker manda uno del banco de abajo. Es un gesto, no un \
+recurso de atención: va donde tú pondrías uno escribiéndole a alguien —hay algo que \
+celebrar, agradecer o lamentar, el cliente hace un chiste, se cierra un trato, se despiden, \
+o simplemente le va a sacar una sonrisa—, y eso puede pasar en cualquier momento de la \
+conversación, no en unos momentos fijos. Donde NO va: pegado a un dato que el cliente tiene \
+que leer (precios, dirección, el resumen del pedido) ni sustituyendo una respuesta que él \
+está esperando. El "cuándo usarlo" del banco es la idea de cada sticker, no una etiqueta \
+exclusiva: si el ánimo cuadra sirve, aunque el momento no sea idéntico, y cuando cuadre más \
+de uno elige otro distinto del que mandaste la última vez. Máximo uno por mensaje. Si \
+ninguno cuadra, no fuerces ninguno: la mayoría de los mensajes van sin sticker y es \
+precisamente eso lo que hace que el que llega se sienta de una persona."""
 
 PHOTO_ABILITY = """- enviar_foto_producto manda la foto real de un producto. Úsalo cuando el \
 cliente pregunte cómo es algo o pida verlo: se lo muestras en vez de describírselo."""
@@ -209,6 +215,13 @@ STICKER_BANK_PROMPT = """
 
 BANCO DE STICKERS (nombre: cuándo usarlo). Solo existen estos, no te inventes otros:
 {bank}"""
+
+# El pulso del turno (ver mood.py). Va abajo del todo, con la hora, porque
+# cambia en cada turno: puesto arriba tiraría el caché de todo el prompt.
+STICKER_URGE_PROMPT = """
+
+STICKERS EN ESTE TURNO (nota interna: no la menciones nunca, y jamás le digas al cliente que \
+no puedes mandar stickers): {note}"""
 
 NOW_PROMPT = """
 
@@ -239,8 +252,9 @@ LO QUE ÉL PUEDE CONFIGURAR POR CHAT:
 llamarlo y en qué momento usarlo; tú lo guardas con guardar_sticker. Necesitas las \
 dos cosas, nombre y momento: si te da solo una, pregunta la otra antes de guardar. El \
 "cuándo usarlo" describe el MOMENTO, no el dibujo — si te dice "es un granizado con \
-ojos", conviértelo tú en un momento ("para saludar") y confírmaselo. También puedes \
-listar_stickers, actualizar_sticker y quitar_sticker.
+ojos", conviértelo tú en un momento ("para saludar") y confírmaselo. Que ya tengas otro \
+para ese mismo momento no es problema, al revés: tener varios para lo mismo es lo que te \
+deja no repetirte. También puedes listar_stickers, actualizar_sticker y quitar_sticker.
 - Cómo hablas: ajustar_tono guarda instrucciones de estilo que mandan sobre las \
 tuyas, para siempre y con todos los clientes. Es un cambio grande: dile con qué texto \
 exacto te vas a quedar y espera que te diga que sí antes de guardarlo.
@@ -349,7 +363,10 @@ def build_system_prompt(contact=None, turn=None):
             prompt += KNOWN_PHONE_PROMPT.format(celular=contact.contact_phone)
 
     # Lo que cambia entre un turno y el siguiente va de último, sin nada
-    # detrás: el archivo que el dueño acaba de mandar y, sobre todo, la hora.
+    # detrás: el pulso de los stickers, el archivo que el dueño acaba de
+    # mandar y, sobre todo, la hora.
+    if bank and turn is not None and turn.sticker_urge is not None:
+        prompt += STICKER_URGE_PROMPT.format(note=turn.sticker_urge.note)
     if draft is not None:
         prompt += OWNER_MEDIA_PROMPT.format(
             kind_label={
@@ -448,14 +465,25 @@ class AgentTurn(NamedTuple):
     mutated: bool
 
 
-def run_turn(contact, user_text, phone_number_id="", message_id=""):
+def run_turn(contact, user_text, phone_number_id="", message_id="", customer_sticker=False):
     """Corre un turno del agente y devuelve un AgentTurn.
 
     `phone_number_id` y `message_id` son por dónde y sobre qué mensaje puede el
     agente mandar un sticker, una foto, unos botones o una reacción. Sin ellos
     esas tools no se le ofrecen y el turno es solo de texto.
+
+    `customer_sticker`: el cliente mandó un sticker en este mensaje. Sube las
+    ganas de devolverle el gesto, que es lo que hace cualquiera.
+
+    El dado de los stickers se tira aquí, una sola vez: el prompt y la tool
+    tienen que estar de acuerdo dentro del mismo turno, o el modelo intentaría
+    mandar uno que la tool le va a negar.
     """
-    turn_ctx = TurnContext(phone_number_id=phone_number_id, message_id=message_id)
+    turn_ctx = TurnContext(
+        phone_number_id=phone_number_id,
+        message_id=message_id,
+        sticker_urge=sticker_urge(contact, answering_sticker=customer_sticker),
+    )
     agent = _build_agent(contact, turn_ctx)
     config = {
         "configurable": {"thread_id": _thread_id(contact)},

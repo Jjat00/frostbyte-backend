@@ -571,6 +571,11 @@ def _run_turn(phone, batch):
             text,
             phone_number_id=phone_number_id,
             message_id=(messages[-1].get("message_id") or "") if messages else "",
+            # El agente no ve el sticker que le mandaron, pero saber que se lo
+            # mandaron le cambia las ganas de responder con otro
+            customer_sticker=any(
+                (m.get("media") or {}).get("kind") == "sticker" for m in messages
+            ),
         )
 
         # ¿Escribió mientras el agente pensaba? Entonces esta respuesta ya nació
