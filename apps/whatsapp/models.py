@@ -2,7 +2,9 @@ import re
 
 from django.db import models
 
-from .tones import DEFAULT_TONE, TONE_CHOICES, persona_for
+from django.utils.text import slugify
+
+from .tones import DEFAULT_TONE, SEED_TONES, seed_persona, seed_tone
 
 
 class WhatsAppContact(models.Model):
@@ -277,6 +279,125 @@ class WebhookEvent(models.Model):
         return f"{self.event_type or 'evento'} · {self.contact_phone} · {self.get_status_display()}"
 
 
+class AgentTone(models.Model):
+    """Una de las personalidades con las que puede hablar el agente.
+
+    El texto de `persona` entra tal cual en el prompt, en el bloque QUIÉN ERES,
+    y REEMPLAZA al de fábrica en vez de sumarse. Vive en la base y no en el
+    código porque cómo habla el negocio es del negocio: el dueño afina el suyo
+    o se inventa uno nuevo sin esperar un despliegue.
+
+    Los cuatro de fábrica llegan con la siembra marcados `is_builtin`: se
+    editan igual que cualquier otro, pero su texto original sigue en el código
+    (`tones.SEED_TONES`) y por eso se pueden devolver a como estaban.
+    """
+
+    key = models.SlugField(
+        max_length=30,
+        unique=True,
+        verbose_name="Clave",
+        help_text="Identificador estable; se genera del nombre y no cambia después.",
+    )
+    name = models.CharField(
+        max_length=40,
+        verbose_name="Nombre",
+        help_text="Como se ve en el panel al elegirlo: 'Parcero', 'Serio'.",
+    )
+    description = models.CharField(
+        max_length=200,
+        verbose_name="De qué va",
+        help_text="Una línea que resuma el tono para quien elige. No la lee el agente.",
+    )
+    sample = models.CharField(
+        max_length=200,
+        blank=True,
+        verbose_name="Frase de ejemplo",
+        help_text="Cómo sonaría un saludo suyo. Tampoco la lee el agente: es para el panel.",
+    )
+    persona = models.TextField(
+        verbose_name="Personalidad",
+        help_text=(
+            "Esto SÍ lo lee el agente: es el bloque QUIÉN ERES del prompt. Escríbelo "
+            "en segunda persona ('eres…', 'tuteas…') y di también qué hacer cuando el "
+            "cliente está molesto."
+        ),
+    )
+    is_builtin = models.BooleanField(
+        default=False,
+        editable=False,
+        verbose_name="De fábrica",
+        help_text="Los que vinieron con el sistema; se pueden devolver a su texto original.",
+    )
+    display_order = models.PositiveIntegerField(default=0, verbose_name="Orden")
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="Creado")
+    updated_at = models.DateTimeField(auto_now=True, verbose_name="Actualizado")
+
+    class Meta:
+        verbose_name = "Tono del agente"
+        verbose_name_plural = "Tonos del agente"
+        ordering = ["display_order", "name"]
+
+    def __str__(self):
+        return self.name
+
+    @classmethod
+    def make_key(cls, name, exclude_pk=None):
+        """Una clave estable a partir del nombre, sin chocar con las que ya hay."""
+        base = slugify(name or "")[:24] or "tono"
+        taken = cls.objects.exclude(pk=exclude_pk) if exclude_pk else cls.objects.all()
+        taken = set(taken.values_list("key", flat=True))
+        key, sufijo = base, 2
+        while key in taken:
+            key = f"{base}-{sufijo}"[:30]
+            sufijo += 1
+        return key
+
+    @classmethod
+    def persona_for(cls, key):
+        """El bloque QUIÉN ERES del tono elegido.
+
+        Cae en cascada a propósito: el tono elegido, cualquier otro del
+        catálogo, y de último el texto de fábrica. Un agente sin personalidad
+        no puede ser el resultado de que alguien borrara un tono.
+        """
+        tone = cls.objects.filter(key=key).first() or cls.objects.first()
+        if tone and tone.persona.strip():
+            return tone.persona.strip()
+        return seed_persona(key)
+
+    @property
+    def seed(self):
+        """El texto de fábrica de este tono, si es uno de los que vinieron."""
+        return seed_tone(self.key) if self.is_builtin else None
+
+    @property
+    def is_modified(self):
+        """True si es de fábrica y alguien le cambió algo (habilita 'restaurar')."""
+        original = self.seed
+        if not original:
+            return False
+        return any(getattr(self, field) != original[field] for field in ("name", "description", "sample", "persona"))
+
+    def restore(self):
+        """Devuelve un tono de fábrica a su texto original."""
+        original = self.seed
+        if not original:
+            return False
+        for field in ("name", "description", "sample", "persona"):
+            setattr(self, field, original[field])
+        self.save(update_fields=["name", "description", "sample", "persona", "updated_at"])
+        return True
+
+    @classmethod
+    def seed_catalog(cls):
+        """Siembra los tonos de fábrica que falten. Idempotente."""
+        for orden, tone in enumerate(SEED_TONES):
+            cls.objects.get_or_create(
+                key=tone["key"],
+                defaults={**tone, "is_builtin": True, "display_order": orden},
+            )
+
+
 class AgentSettings(models.Model):
     """Configuración de Frosty, el agente de WhatsApp (singleton).
 
@@ -304,13 +425,12 @@ class AgentSettings(models.Model):
         ),
     )
     tone_preset = models.CharField(
-        max_length=20,
-        choices=TONE_CHOICES,
+        max_length=30,
         default=DEFAULT_TONE,
         verbose_name="Tono",
         help_text=(
-            "Con cuál de las personalidades habla. Reemplaza el bloque de QUIÉN ERES "
-            "del prompt: no se suma al de por defecto, lo sustituye."
+            "Clave del tono con el que habla (ver Tonos del agente). Reemplaza el bloque "
+            "de QUIÉN ERES del prompt: no se suma al de por defecto, lo sustituye."
         ),
     )
     tone = models.TextField(
@@ -362,7 +482,12 @@ class AgentSettings(models.Model):
 
     def persona(self):
         """El bloque QUIEN ERES que le toca segun el tono elegido."""
-        return persona_for(self.tone_preset)
+        return AgentTone.persona_for(self.tone_preset)
+
+    @property
+    def tone_catalog(self):
+        """Los tonos entre los que se puede elegir, para la pantalla."""
+        return AgentTone.objects.all()
 
     def owner_numbers(self):
         """Los números del dueño, ya en dígitos."""

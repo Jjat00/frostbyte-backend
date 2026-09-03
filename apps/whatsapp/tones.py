@@ -1,10 +1,10 @@
-"""Los tonos con los que puede hablar Frosty.
+"""Los tonos de fábrica con los que sabe hablar Frosty.
 
-Cada preset reemplaza el bloque QUIÉN ERES del prompt: no se suma al de por
-defecto, lo sustituye. Por eso viven aquí y no en la base de datos —son texto
-de prompt, con la misma exigencia de redacción que el resto— mientras que la
-elección (cuál de ellos está puesto) sí es del negocio y se guarda en
-AgentSettings.
+Un tono reemplaza el bloque QUIÉN ERES del prompt: no se suma al de por
+defecto, lo sustituye. Los de aquí son la semilla —lo que hay el día que se
+crea la base— y el suelo al que se vuelve cuando alguien edita uno de fábrica
+y se arrepiente; a partir del arranque el catálogo vive en la tabla `AgentTone`
+y se edita desde el panel, porque cómo habla el negocio es del negocio.
 
 El `sample` no lo lee nunca el modelo: es para que quien elige desde el panel
 vea de qué está hablando sin tener que leerse las instrucciones.
@@ -12,7 +12,7 @@ vea de qué está hablando sin tener que leerse las instrucciones.
 
 DEFAULT_TONE = "parcero"
 
-TONE_PRESETS = [
+SEED_TONES = [
     {
         "key": "parcero",
         "name": "Parcero",
@@ -68,22 +68,17 @@ TONE_PRESETS = [
     },
 ]
 
-TONE_CHOICES = [(preset["key"], preset["name"]) for preset in TONE_PRESETS]
+
+def seed_tone(key):
+    """El tono de fábrica con esa clave, o None si es uno creado a mano."""
+    return next((tone for tone in SEED_TONES if tone["key"] == key), None)
 
 
-def get_preset(key):
-    """El preset elegido, o el de por defecto si la clave ya no existe.
+def seed_persona(key=DEFAULT_TONE):
+    """La personalidad de fábrica, para cuando la tabla todavía no existe.
 
-    Nunca devuelve None a propósito: el agente sin bloque QUIÉN ERES es un
-    agente sin personalidad, y eso no puede depender de que alguien haya
-    borrado un preset del catálogo.
+    Nunca devuelve vacío a propósito: un agente sin bloque QUIÉN ERES es un
+    agente sin personalidad, y eso no puede depender de que la siembra haya
+    corrido o de que alguien haya borrado el catálogo entero.
     """
-    for preset in TONE_PRESETS:
-        if preset["key"] == key:
-            return preset
-    return TONE_PRESETS[0]
-
-
-def persona_for(key):
-    """El bloque QUIÉN ERES que va dentro del prompt."""
-    return get_preset(key)["persona"]
+    return (seed_tone(key) or SEED_TONES[0])["persona"]

@@ -23,6 +23,7 @@ from apps.orders.models import Order
 
 from .models import (
     AgentSettings,
+    AgentTone,
     ChatMessage,
     SentMessage,
     Sticker,
@@ -1874,16 +1875,19 @@ class ModuloDeConfiguracionEnElPanelTests(TestCase):
         self.assertFalse(config.stickers_enabled)
 
     def test_el_catalogo_de_tonos_viaja_con_la_configuracion(self):
-        """La pantalla no repite los textos de los tonos: los recibe de aquí."""
+        """La pantalla no repite los textos de los tonos: los recibe de aquí.
+
+        Desde que los tonos se editan, el texto del prompt también viaja: es
+        justo lo que el dueño abre a cambiar.
+        """
         self.api.force_authenticate(self.admin)
         resp = self.api.get("/api/v1/whatsapp/agent-settings/")
         self.assertEqual(resp.data["tone_preset"], "parcero")
         claves = [preset["key"] for preset in resp.data["tone_presets"]]
         self.assertEqual(claves, ["parcero", "cercano", "serio", "directo"])
         self.assertTrue(all(p["sample"] for p in resp.data["tone_presets"]))
-        self.assertNotIn(
-            "persona", resp.data["tone_presets"][0], "el prompt no sale a la pantalla"
-        )
+        self.assertIn("QUIÉN ERES", resp.data["tone_presets"][0]["persona"])
+        self.assertTrue(all(p["is_builtin"] for p in resp.data["tone_presets"]))
 
     def test_el_dueno_cambia_el_tono_desde_la_app(self):
         self.api.force_authenticate(self.admin)
@@ -2076,3 +2080,131 @@ class ModuloDeConfiguracionEnElPanelTests(TestCase):
         self.assertEqual(sticker.byte_size, len(bytes(sticker.data)))
         self.assertTrue(sticker.is_active, "un cambio de imagen no debe apagarlo")
         self.assertEqual(sticker.label, "brindis")
+
+    # ---- El catálogo de tonos ----
+
+    def _crear_tono(self, **campos):
+        datos = {
+            "name": "Poeta",
+            "description": "Habla bonito, con calma.",
+            "sample": "Buenas, ¿qué se le antoja a esta hora?",
+            "persona": (
+                "QUIÉN ERES: el que atiende con calma y buenas palabras. Tuteas, no metes "
+                "prisa y si el cliente está molesto, primero lo escuchas."
+            ),
+        }
+        datos.update(campos)
+        return self.api.post("/api/v1/whatsapp/agent-tones/", datos, format="json")
+
+    def test_un_empleado_no_toca_el_catalogo_de_tonos(self):
+        """Cómo habla el negocio lo decide el dueño, no quien tiene el turno abierto."""
+        self.api.force_authenticate(self.empleado)
+        self.assertEqual(self.api.get("/api/v1/whatsapp/agent-tones/").status_code, 403)
+        self.assertEqual(self._crear_tono().status_code, 403)
+
+    def test_el_dueno_afina_un_tono_y_el_agente_lo_habla(self):
+        """Editar la personalidad es el punto entero: tiene que llegar al prompt."""
+        self.api.force_authenticate(self.admin)
+        parcero = AgentTone.objects.get(key="parcero")
+        resp = self.api.patch(
+            f"/api/v1/whatsapp/agent-tones/{parcero.pk}/",
+            {"persona": "QUIÉN ERES: el más frentero del pueblo, y jamás dices la palabra bacano."},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 200, resp.data)
+        self.assertIn("el más frentero del pueblo", build_system_prompt())
+        self.assertTrue(resp.data["is_modified"])
+
+    def test_un_tono_nuevo_se_crea_y_se_puede_elegir(self):
+        self.assertIn(self._crear_tono().status_code, (401, 403), "sin sesión no se crea")
+
+        self.api.force_authenticate(self.admin)
+        resp = self._crear_tono()
+        self.assertEqual(resp.status_code, 201, resp.data)
+        self.assertEqual(resp.data["key"], "poeta", "la clave sale del nombre")
+        self.assertFalse(resp.data["is_builtin"])
+
+        elegido = self.api.patch(
+            "/api/v1/whatsapp/agent-settings/", {"tone_preset": "poeta"}, format="json"
+        )
+        self.assertEqual(elegido.status_code, 200, elegido.data)
+        self.assertIn("con calma y buenas palabras", build_system_prompt())
+
+    def test_una_personalidad_de_dos_palabras_se_rechaza(self):
+        """Reemplaza el bloque entero: dejarla en nada deja al agente sin nadie que ser."""
+        self.api.force_authenticate(self.admin)
+        resp = self._crear_tono(persona="sé amable")
+        self.assertEqual(resp.status_code, 400)
+
+    def test_dos_tonos_con_el_mismo_nombre_no_chocan(self):
+        self.api.force_authenticate(self.admin)
+        self.assertEqual(self._crear_tono().data["key"], "poeta")
+        self.assertEqual(self._crear_tono().data["key"], "poeta-2")
+
+    def test_no_se_borra_el_tono_con_el_que_esta_hablando(self):
+        """Borrarlo dejaría al agente hablando con la personalidad de otro."""
+        self.api.force_authenticate(self.admin)
+        parcero = AgentTone.objects.get(key=AgentSettings.load().tone_preset)
+        resp = self.api.delete(f"/api/v1/whatsapp/agent-tones/{parcero.pk}/")
+        self.assertEqual(resp.status_code, 400)
+        self.assertTrue(AgentTone.objects.filter(pk=parcero.pk).exists())
+
+    def test_un_tono_que_no_esta_en_uso_se_borra(self):
+        self.api.force_authenticate(self.admin)
+        serio = AgentTone.objects.get(key="serio")
+        resp = self.api.delete(f"/api/v1/whatsapp/agent-tones/{serio.pk}/")
+        self.assertEqual(resp.status_code, 204)
+        self.assertFalse(AgentTone.objects.filter(pk=serio.pk).exists())
+
+    def test_no_se_borra_el_ultimo_tono_que_queda(self):
+        """Sin catálogo no hay nada que elegir: la pantalla quedaría muerta."""
+        self.api.force_authenticate(self.admin)
+        AgentTone.objects.exclude(key="parcero").delete()
+        AgentSettings.objects.filter(pk=1).update(tone_preset="ninguno")
+        unico = AgentTone.objects.get(key="parcero")
+        resp = self.api.delete(f"/api/v1/whatsapp/agent-tones/{unico.pk}/")
+        self.assertEqual(resp.status_code, 400)
+
+    def test_un_tono_de_fabrica_editado_vuelve_a_su_texto_original(self):
+        self.api.force_authenticate(self.admin)
+        serio = AgentTone.objects.get(key="serio")
+        self.api.patch(
+            f"/api/v1/whatsapp/agent-tones/{serio.pk}/",
+            {"persona": "QUIÉN ERES: alguien completamente distinto al que venía de fábrica."},
+            format="json",
+        )
+        resp = self.api.post(f"/api/v1/whatsapp/agent-tones/{serio.pk}/restore/")
+        self.assertEqual(resp.status_code, 200, resp.data)
+        self.assertIn("USTED siempre", AgentTone.objects.get(pk=serio.pk).persona)
+        self.assertFalse(resp.data["is_modified"])
+
+    def test_un_tono_propio_no_tiene_original_al_que_volver(self):
+        self.api.force_authenticate(self.admin)
+        creado = self._crear_tono()
+        resp = self.api.post(f"/api/v1/whatsapp/agent-tones/{creado.data['id']}/restore/")
+        self.assertEqual(resp.status_code, 400)
+
+    def test_guardar_el_nombre_o_el_tono_no_apaga_los_interruptores(self):
+        """Los interruptores se guardan solos; el resto de la pantalla no los toca.
+
+        Un PATCH con los campos de texto no menciona los booleanos, y si el
+        serializer los tratara como ausentes-igual-a-falso, cambiar el nombre
+        del agente le apagaría los stickers sin que nadie lo pidiera.
+        """
+        self.api.force_authenticate(self.admin)
+        self.api.patch(
+            "/api/v1/whatsapp/agent-settings/",
+            {"reactions_enabled": False},
+            format="json",
+        )
+        resp = self.api.patch(
+            "/api/v1/whatsapp/agent-settings/",
+            {"agent_name": "Frosty", "tone_preset": "serio", "tone": "", "owner_phones": ""},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 200, resp.data)
+        config = AgentSettings.load()
+        self.assertTrue(config.stickers_enabled, "el que estaba encendido sigue encendido")
+        self.assertFalse(config.reactions_enabled, "el que estaba apagado sigue apagado")
+        self.assertTrue(config.product_photos_enabled)
+        self.assertTrue(config.quick_replies_enabled)

@@ -9,14 +9,15 @@ cambiarle el tono al agente o subirle un sticker.
 """
 
 from rest_framework import status, viewsets
+from rest_framework.decorators import action
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.accounts.permissions import IsAdminUser
 
-from .models import AgentSettings, Sticker
-from .serializers import AgentSettingsSerializer, StickerSerializer
+from .models import AgentSettings, AgentTone, Sticker
+from .serializers import AgentSettingsSerializer, AgentToneSerializer, StickerSerializer
 from .stickers import StickerError, from_upload, has_transparency
 
 # Un sticker sale de una imagen o de un video corto grabado en el celular; más
@@ -60,6 +61,55 @@ def _read_upload(request):
         )
     kind = "video" if (upload.content_type or "").startswith("video/") else "image"
     return upload.read(), kind
+
+
+class AgentToneViewSet(viewsets.ModelViewSet):
+    """El catálogo de personalidades: crear, afinar y descartar tonos.
+
+    Lo que se edita aquí es texto de prompt —entra tal cual en el bloque QUIÉN
+    ERES—, así que el catálogo se protege por los dos extremos: no se borra el
+    tono con el que el agente está hablando ahora mismo, ni el último que
+    quede. Quedarse sin catálogo sería quedarse sin manera de elegir.
+    """
+
+    queryset = AgentTone.objects.all()
+    serializer_class = AgentToneSerializer
+    permission_classes = [IsAdminUser]
+    pagination_class = None
+
+    def destroy(self, request, *args, **kwargs):
+        tone = self.get_object()
+        if AgentSettings.load().tone_preset == tone.key:
+            return Response(
+                {
+                    "detail": (
+                        f"«{tone.name}» es el tono con el que habla ahora mismo. Elige otro "
+                        "antes de borrarlo."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if AgentTone.objects.count() <= 1:
+            return Response(
+                {"detail": "Es el único tono que queda: crea otro antes de borrar este."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return super().destroy(request, *args, **kwargs)
+
+    @action(detail=True, methods=["post"])
+    def restore(self, request, pk=None):
+        """Devuelve un tono de fábrica al texto con el que vino.
+
+        Solo tiene sentido en los de fábrica: de los demás no hay original al
+        que volver, y decir que sí sin hacer nada sería peor que negarse.
+        """
+        tone = self.get_object()
+        if not tone.restore():
+            return Response(
+                {"detail": "Este tono lo creaste tú: no hay un original al que volver."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response(self.get_serializer(tone).data)
 
 
 class StickerViewSet(viewsets.ModelViewSet):

@@ -5,7 +5,15 @@ from django.contrib import admin, messages
 from django.urls import reverse
 from django.utils.html import format_html, format_html_join
 
-from .models import AgentSettings, ChatMessage, SentMessage, Sticker, WebhookEvent, WhatsAppContact
+from .models import (
+    AgentSettings,
+    AgentTone,
+    ChatMessage,
+    SentMessage,
+    Sticker,
+    WebhookEvent,
+    WhatsAppContact,
+)
 from .stickers import StickerError, has_transparency, normalize
 from apps.search import PlainSearchAdminMixin
 
@@ -131,6 +139,32 @@ class WebhookEventAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
         return False
 
 
+@admin.register(AgentTone)
+class AgentToneAdmin(admin.ModelAdmin):
+    """El catálogo de personalidades del agente.
+
+    `persona` es lo único que lee el modelo: entra tal cual en el bloque QUIÉN
+    ERES del prompt, reemplazando al de fábrica. Lo demás es para quien elige.
+    """
+
+    list_display = ("name", "key", "description", "is_builtin", "display_order", "updated_at")
+    list_editable = ("display_order",)
+    list_filter = ("is_builtin",)
+    search_fields = ("name", "key", "description")
+    readonly_fields = ("key", "is_builtin", "created_at", "updated_at")
+
+    def has_delete_permission(self, request, obj=None):
+        """El tono en uso no se borra desde aquí: dejaría al agente apuntando a nada."""
+        if obj is not None and AgentSettings.load().tone_preset == obj.key:
+            return False
+        return super().has_delete_permission(request, obj)
+
+    def save_model(self, request, obj, form, change):
+        if not obj.key:
+            obj.key = AgentTone.make_key(obj.name)
+        super().save_model(request, obj, form, change)
+
+
 @admin.register(AgentSettings)
 class AgentSettingsAdmin(admin.ModelAdmin):
     """El panel de Frosty: quién es y qué puede hacer, sin tocar código.
@@ -183,6 +217,22 @@ class AgentSettingsAdmin(admin.ModelAdmin):
         ("Banco de stickers", {"fields": ("stickers_link",)}),
     )
     readonly_fields = ("stickers_link",)
+
+    def formfield_for_dbfield(self, db_field, request, **kwargs):
+        """El tono se elige de una lista, no se teclea.
+
+        Las opciones se arman al abrir el formulario porque el catálogo se
+        edita: un `choices` fijo en el modelo se quedaría atrás en cuanto
+        alguien cree un tono nuevo.
+        """
+        if db_field.name == "tone_preset":
+            tonos = [(t.key, t.name) for t in AgentTone.objects.all()]
+            return forms.ChoiceField(
+                choices=tonos or [(db_field.default, db_field.default)],
+                label=db_field.verbose_name,
+                help_text=db_field.help_text,
+            )
+        return super().formfield_for_dbfield(db_field, request, **kwargs)
 
     @admin.display(description="Stickers")
     def stickers_link(self, obj):
