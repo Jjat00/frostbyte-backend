@@ -3,7 +3,7 @@ from django.db import models, transaction
 from django.db.models.signals import post_delete
 from django.dispatch import receiver
 from django.utils import timezone
-from datetime import time
+from datetime import time, timedelta
 from decimal import Decimal
 import uuid
 import random
@@ -780,15 +780,43 @@ class StoreSettings(models.Model):
         """Cuándo volvemos a abrir, en palabras, para un cliente que escribe cerrados.
 
         La apertura es manual y la hora real varía (los domingos suelen abrir
-        antes), así que el texto nunca promete: dice "normalmente". Si la hora
-        habitual de hoy ya pasó, el cliente vuelve mañana.
+        antes), así que el texto nunca promete: dice "normalmente".
+
+        Frostbyte abre todos los días, así que "mañana" solo es cierto cuando la
+        jornada de hoy ya se acabó. Mientras no hayamos abierto hoy, el local
+        está a punto de abrir aunque la hora habitual ya haya pasado: quien
+        escribe a la 1:34 p. m. con la apertura a la 1:30 tiene que oír que
+        falta un momentito, no que vuelva mañana.
         """
         ahora = timezone.localtime()
         hora = self.opening_time.strftime("%I:%M %p").lstrip("0").lower()
         hora = hora.replace("am", "a. m.").replace("pm", "p. m.")
-        if ahora.time() < self.opening_time:
+        apertura = ahora.replace(
+            hour=self.opening_time.hour,
+            minute=self.opening_time.minute,
+            second=0,
+            microsecond=0,
+        )
+        if ahora < apertura:
             return f"hoy normalmente abrimos a las {hora}"
-        return f"mañana normalmente abrimos a las {hora}"
+        if self.ya_cerro_la_jornada(ahora, apertura):
+            return f"mañana normalmente abrimos a las {hora}"
+        return (
+            "estamos por abrir en cualquier momento: normalmente abrimos a las "
+            f"{hora} y hoy todavía no hemos abierto"
+        )
+
+    def ya_cerro_la_jornada(self, ahora, apertura):
+        """¿El local ya trabajó hoy y cerró, o todavía no ha abierto?
+
+        Lo dice el último cambio de estado: si nos cerraron después de la hora
+        de apertura de hoy, la jornada terminó. Si ese dato falta (nadie ha
+        tocado el interruptor), se cae a un margen prudente: pasadas cuatro
+        horas de la hora habitual sin abrir, hoy ya no se abre.
+        """
+        if self.status_changed_at is not None:
+            return timezone.localtime(self.status_changed_at) >= apertura
+        return ahora - apertura > timedelta(hours=4)
 
     @classmethod
     def load(cls):

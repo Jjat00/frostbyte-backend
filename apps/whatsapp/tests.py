@@ -648,17 +648,52 @@ class LocalCerradoTests(TestCase):
         self.assertIn("CERRADO", error)
         self.assertIn("no le ofrezcas encargar ni recoger", error)
 
-    def test_antes_de_abrir_dice_hoy_y_despues_manana(self):
+    def _hint_a_las(self, hora, minuto, cerrado_el=None):
+        """El aviso de reapertura tal como se leería a esa hora de hoy.
+
+        `cerrado_el` es el último cambio del interruptor del local (None = nadie
+        lo ha tocado desde que existe el dato).
+        """
         from apps.orders.models import StoreSettings
+        from django.utils import timezone as dj_timezone
 
         cfg = StoreSettings.load()
-        cfg.opening_time = datetime.time(23, 59)
+        cfg.status_changed_at = cerrado_el
         cfg.save()
-        self.assertIn("hoy normalmente abrimos", cfg.reopening_hint())
+        ahora = dj_timezone.localtime().replace(
+            hour=hora, minute=minuto, second=0, microsecond=0
+        )
+        with patch("django.utils.timezone.now", return_value=ahora):
+            return cfg.reopening_hint()
 
-        cfg.opening_time = datetime.time(0, 1)
-        cfg.save()
-        self.assertIn("mañana normalmente abrimos", cfg.reopening_hint())
+    def _hoy_a_las(self, hora, minuto):
+        from django.utils import timezone as dj_timezone
+
+        return dj_timezone.localtime().replace(
+            hour=hora, minute=minuto, second=0, microsecond=0
+        )
+
+    def test_antes_de_la_hora_habitual_dice_hoy(self):
+        anoche = self._hoy_a_las(13, 30) - datetime.timedelta(hours=15)
+        self.assertIn("hoy normalmente abrimos", self._hint_a_las(12, 0, anoche))
+
+    def test_pasada_la_hora_sin_abrir_dice_que_falta_poco_no_manana(self):
+        """Chat real 2026-09-03, 13:34: escribió cuatro minutos después de la
+        hora de apertura y el agente lo mandó a volver mañana. El local abre
+        todos los días: a esa hora está a punto de abrir."""
+        anoche = self._hoy_a_las(13, 30) - datetime.timedelta(hours=15)
+        hint = self._hint_a_las(13, 34, anoche)
+        self.assertIn("estamos por abrir", hint)
+        self.assertNotIn("mañana", hint)
+        self.assertNotIn("mañana", self._hint_a_las(14, 0, anoche))
+
+    def test_despues_de_cerrar_la_jornada_si_dice_manana(self):
+        cerraron_hoy = self._hoy_a_las(21, 42)
+        self.assertIn("mañana normalmente abrimos", self._hint_a_las(22, 10, cerraron_hoy))
+
+    def test_sin_dato_del_interruptor_no_promete_abrir_de_noche(self):
+        self.assertIn("estamos por abrir", self._hint_a_las(13, 34))
+        self.assertIn("mañana normalmente abrimos", self._hint_a_las(20, 0))
 
     def test_el_prompt_ordena_local_domicilio_recoger(self):
         from apps.whatsapp.agent import SYSTEM_PROMPT
