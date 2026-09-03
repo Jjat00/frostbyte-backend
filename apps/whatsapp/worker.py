@@ -28,7 +28,14 @@ from django.utils import timezone
 
 from . import kapso
 from . import media as wa_media
-from .models import ChatMessage, SentMessage, WebhookEvent, WhatsAppContact
+from .models import (
+    AgentSettings,
+    ChatMessage,
+    SentMessage,
+    StickerDraft,
+    WebhookEvent,
+    WhatsAppContact,
+)
 from .tools import normalize_phone
 
 logger = logging.getLogger(__name__)
@@ -50,6 +57,13 @@ _active = set()
 # Tope de respuestas descartadas seguidas: con un cliente que escribe sin parar
 # hay que contestar en algún momento aunque llegue otro mensaje justo después
 MAX_ABORTS = 2
+
+# Tope del archivo que el dueño manda para volver sticker. Un video de sticker
+# es un bucle de segundos; lo que pase de aquí no iba a caber igual.
+MAX_DRAFT_BYTES = 8 * 1024 * 1024
+
+# Cuánto espera un archivo a que le pongan nombre antes de darse por olvidado
+DRAFT_TTL = timedelta(hours=6)
 
 
 def _phone_lock(phone):
@@ -152,10 +166,23 @@ def extract_inbound_messages(payload):
                 "[El cliente envió una nota de voz que no se pudo transcribir. "
                 "Pídele amablemente que lo escriba.]"
             )
-        elif msg_type in ("video", "document", "sticker"):
-            caption = (message.get(msg_type) or {}).get("caption", "")
+        elif msg_type in ("video", "sticker"):
+            # Se descargan solo para el dueño (ver _resolve_media): son la
+            # materia prima de sus stickers. Para un cliente siguen siendo algo
+            # que el agente no puede ver.
+            payload_media = message.get(msg_type) or {}
+            caption = payload_media.get("caption", "")
+            if payload_media.get("id"):
+                media = {"kind": msg_type, "media_id": payload_media["id"], "caption": caption}
             text = (
                 f"[El cliente envió un(a) {msg_type} que no puedes ver"
+                + (f'; escribió: "{caption}"' if caption else "")
+                + ". Si esperabas un comprobante de pago, dile que el equipo lo verificará.]"
+            )
+        elif msg_type == "document":
+            caption = (message.get("document") or {}).get("caption", "")
+            text = (
+                "[El cliente envió un documento que no puedes ver"
                 + (f'; escribió: "{caption}"' if caption else "")
                 + ". Si esperabas un comprobante de pago, dile que el equipo lo verificará.]"
             )
@@ -254,14 +281,55 @@ def extract_outbound_messages(payload):
     return results
 
 
-def _resolve_media(msg, phone_number_id):
+def _keep_sticker_draft(contact, media, phone_number_id):
+    """Guarda el archivo que el dueño mandó, para poder volverlo sticker.
+
+    Se descarga aquí y no en la tool porque el download_url de Kapso caduca a
+    los pocos minutos: cuando el agente decida guardarlo, el enlace ya no
+    serviría. Nunca tumba el turno: no poder guardar un sticker no puede costar
+    el mensaje que venía con él.
+    """
+    try:
+        content, mime = wa_media.download_media(media["media_id"], phone_number_id)
+    except Exception:
+        logger.exception("No se pudo descargar el archivo del dueño %s", media.get("media_id"))
+        return None
+    if not content or len(content) > MAX_DRAFT_BYTES:
+        logger.warning("Archivo del dueño descartado: %s bytes", len(content or b""))
+        return None
+    try:
+        StickerDraft.keep(contact, media["kind"], content, mime)
+    except Exception:
+        logger.exception("No se pudo guardar el archivo pendiente del dueño")
+        return None
+    return mime
+
+
+def _resolve_media(msg, phone_number_id, contact=None):
     """Convierte el media de un mensaje en texto para el agente.
 
     Audios -> transcripción; imágenes -> descripción (con extracción de datos
     si es un comprobante). Si algo falla se usa el texto de respaldo.
+
+    Cuando escribe el dueño, lo que manda es además la materia prima de sus
+    stickers: se guarda el archivo entero antes de describirlo.
     """
     media = msg.get("media")
-    if not media or not phone_number_id or not settings.OPENAI_API_KEY:
+    if not media:
+        return msg["text"]
+
+    is_owner = contact is not None and AgentSettings.load().is_owner(contact.phone)
+    if is_owner and media["kind"] in ("image", "sticker", "video") and phone_number_id:
+        if _keep_sticker_draft(contact, media, phone_number_id):
+            caption = media.get("caption") or ""
+            if media["kind"] != "image":
+                # Un sticker o un video no se describen: no hay nada que leerle
+                # al dueño que él no esté viendo, y la visión cuesta
+                etiqueta = "un sticker" if media["kind"] == "sticker" else "un video"
+                text = f"[Te mandó {etiqueta}, listo para volverlo sticker.]"
+                return f'{text}\nJunto a él escribió: "{caption}"' if caption else text
+
+    if not phone_number_id or not settings.OPENAI_API_KEY:
         return msg["text"]
     try:
         if media["kind"] == "audio":
@@ -301,9 +369,9 @@ def _quote_prefix(quoted_wamid):
     return f'[El cliente responde citando {autor}: "{body}"]\n'
 
 
-def _message_text(msg, phone_number_id):
+def _message_text(msg, phone_number_id, contact=None):
     """Texto que lee el agente: media ya resuelta y la cita al frente."""
-    resolved = _resolve_media(msg, phone_number_id)
+    resolved = _resolve_media(msg, phone_number_id, contact)
     if msg.get("media") and resolved != msg["text"]:
         # lo que el agente leyó vale más que el texto de respaldo
         ChatMessage.enrich(msg.get("message_id") or msg.get("wamid"), resolved)
@@ -484,7 +552,7 @@ def _run_turn(phone, batch):
     # responde, solo deja lo que dijo el cliente en el hilo
     if contact.human_handoff or (contact.human_until and contact.human_until > timezone.now()):
         try:
-            text = "\n".join(_message_text(m, phone_number_id) for m in messages)
+            text = "\n".join(_message_text(m, phone_number_id, contact) for m in messages)
             with _phone_lock(phone):
                 record_messages(contact, [("user", text)])
         except Exception:
@@ -495,7 +563,7 @@ def _run_turn(phone, batch):
     with _phone_lock(phone):
         # Los audios/imágenes se resuelven aquí (descarga + OpenAI) para que el
         # 'escribiendo…' ya esté visible mientras tanto
-        text = "\n".join(_message_text(m, phone_number_id) for m in messages)
+        text = "\n".join(_message_text(m, phone_number_id, contact) for m in messages)
         # El último mensaje del lote es sobre el que se reacciona: es el que el
         # cliente tiene delante cuando llega la respuesta
         turn = run_turn(
@@ -611,6 +679,10 @@ def _handle_outbound(event, outbounds):
     # borra: es el único registro de los pedidos que el equipo cierra a mano.
     stale = timezone.now() - timedelta(days=7)
     SentMessage.objects.filter(created_at__lt=stale).delete()
+    # Un archivo que el dueño mandó y nunca llegó a guardar como sticker: pesa
+    # megas y ya no significa nada, porque la conversación donde iba a nombrarlo
+    # terminó hace rato
+    StickerDraft.objects.filter(created_at__lt=timezone.now() - DRAFT_TTL).delete()
 
     event.status = WebhookEvent.Status.PROCESSED
     event.error = ""

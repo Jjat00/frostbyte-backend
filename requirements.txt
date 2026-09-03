@@ -118,6 +118,8 @@ idna==3.11
     #   twisted
 imageio==2.37.3
     # via scikit-image
+imageio-ffmpeg==0.6.0
+    # via frostbyte-backend (pyproject.toml)
 incremental==24.11.0
     # via twisted
 jiter==0.12.0

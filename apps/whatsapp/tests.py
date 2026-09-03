@@ -26,6 +26,7 @@ from .models import (
     ChatMessage,
     SentMessage,
     Sticker,
+    StickerDraft,
     WebhookEvent,
     WhatsAppContact,
 )
@@ -1372,3 +1373,365 @@ class FormularioDeStickersTests(TestCase):
         actualizado = form.save()
         self.assertEqual(bytes(actualizado.data), original)
         self.assertEqual(actualizado.description, "descripción nueva")
+
+
+OWNER_PHONE = "573164277879"
+
+
+class ModoDuenoTests(TestCase):
+    """El dueño escribe desde su WhatsApp para configurar al agente y para probarlo.
+
+    Dos cosas a la vez: manda sus stickers y ajusta el tono, pero sigue siendo
+    un cliente más para todo lo que toca dinero.
+    """
+
+    def setUp(self):
+        self.owner = WhatsAppContact.objects.create(phone=OWNER_PHONE)
+        self.cliente = WhatsAppContact.objects.create(phone=PHONE)
+        self.turn = TurnContext(phone_number_id=PHONE_NUMBER_ID, message_id="wamid.1")
+
+    def _png(self, size=(300, 300)):
+        from io import BytesIO
+
+        from PIL import Image
+
+        buffer = BytesIO()
+        Image.new("RGBA", size, (0, 200, 255, 255)).save(buffer, format="PNG")
+        return buffer.getvalue()
+
+    def _tools(self, contact):
+        return {t.name: t for t in build_tools(contact, self.turn)}
+
+    # --- quién es el dueño ---
+
+    def test_el_dueno_se_reconoce_aunque_el_numero_llegue_sin_indicativo(self):
+        config = AgentSettings.load()
+        self.assertTrue(config.is_owner("573164277879"))
+        self.assertTrue(config.is_owner("3164277879"))
+        self.assertTrue(config.is_owner("+57 316 427 7879"))
+        self.assertFalse(config.is_owner(PHONE))
+        self.assertFalse(config.is_owner(""))
+
+    def test_quien_oculta_su_numero_nunca_es_el_dueno(self):
+        """Un BSUID no tiene dígitos que comparar: no puede heredar el permiso."""
+        config = AgentSettings.load()
+        config.owner_phones = "573164277879"
+        config.save()
+        self.assertFalse(config.is_owner("CO.2430294670795328"))
+
+    def test_solo_el_dueno_ve_las_tools_de_configuracion(self):
+        propias = {"guardar_sticker", "listar_stickers", "actualizar_sticker",
+                   "quitar_sticker", "ajustar_tono"}
+        self.assertTrue(propias <= set(self._tools(self.owner)))
+        self.assertFalse(propias & set(self._tools(self.cliente)))
+
+    def test_el_dueno_conserva_todas_las_tools_del_cliente(self):
+        """Le sirve para probar en real: sus pedidos son pedidos."""
+        for name in ("crear_pedido", "cotizar_pedido", "consultar_menu", "verificar_cobertura"):
+            self.assertIn(name, self._tools(self.owner))
+
+    def test_el_prompt_del_dueno_solo_sale_para_el(self):
+        suyo = build_system_prompt(self.owner, self.turn)
+        ajeno = build_system_prompt(self.cliente, self.turn)
+        self.assertIn("DUEÑO de Frostbyte", suyo)
+        self.assertIn("pedidos DE VERDAD", suyo, "debe seguir tomándole pedidos")
+        self.assertNotIn("DUEÑO de Frostbyte", ajeno)
+        self.assertNotIn("{", suyo, "quedó un placeholder sin reemplazar")
+
+    def test_sin_numeros_configurados_no_hay_dueno(self):
+        config = AgentSettings.load()
+        config.owner_phones = ""
+        config.save()
+        self.assertFalse(config.is_owner(OWNER_PHONE))
+        self.assertNotIn("guardar_sticker", self._tools(self.owner))
+
+    # --- guardar un sticker desde el chat ---
+
+    def test_sin_archivo_pendiente_no_inventa_un_sticker(self):
+        salida = self._tools(self.owner)["guardar_sticker"].invoke(
+            {"nombre": "granizado feliz", "cuando_usarlo": "para saludar"}
+        )
+        self.assertIn("No tienes ningún archivo", salida)
+        self.assertEqual(Sticker.objects.count(), 0)
+
+    def test_una_imagen_del_dueno_se_vuelve_sticker_con_su_momento(self):
+        StickerDraft.keep(self.owner, StickerDraft.Kind.IMAGE, self._png(), "image/png")
+        salida = self._tools(self.owner)["guardar_sticker"].invoke(
+            {"nombre": "granizado feliz", "cuando_usarlo": "para saludar al cliente"}
+        )
+        sticker = Sticker.objects.get(label="granizado feliz")
+        self.assertEqual(sticker.description, "para saludar al cliente")
+        self.assertTrue(bytes(sticker.data).startswith(b"RIFF"), "debió quedar en WebP")
+        self.assertIn("guardado", salida)
+        self.assertFalse(
+            StickerDraft.objects.filter(contact=self.owner).exists(),
+            "el archivo pendiente se consume al guardarlo",
+        )
+
+    def test_guardar_con_un_nombre_que_ya_existe_reemplaza_en_vez_de_duplicar(self):
+        StickerDraft.keep(self.owner, StickerDraft.Kind.IMAGE, self._png(), "image/png")
+        tools = self._tools(self.owner)
+        tools["guardar_sticker"].invoke({"nombre": "saludo", "cuando_usarlo": "para saludar"})
+        StickerDraft.keep(self.owner, StickerDraft.Kind.IMAGE, self._png((400, 400)), "image/png")
+        salida = self._tools(self.owner)["guardar_sticker"].invoke(
+            {"nombre": "Saludo", "cuando_usarlo": "para arrancar la conversación"}
+        )
+        self.assertEqual(Sticker.objects.filter(label__iexact="saludo").count(), 1)
+        self.assertIn("reemplazado", salida)
+        self.assertEqual(Sticker.objects.get().description, "para arrancar la conversación")
+
+    def test_un_archivo_nuevo_reemplaza_al_pendiente_anterior(self):
+        """Quien manda la foto equivocada manda la buena; vale la última."""
+        StickerDraft.keep(self.owner, StickerDraft.Kind.IMAGE, b"vieja", "image/png")
+        StickerDraft.keep(self.owner, StickerDraft.Kind.STICKER, self._png(), "image/webp")
+        drafts = StickerDraft.objects.filter(contact=self.owner)
+        self.assertEqual(drafts.count(), 1)
+        self.assertEqual(drafts.first().kind, StickerDraft.Kind.STICKER)
+
+    def test_guardar_sin_nombre_o_sin_momento_pregunta_en_vez_de_guardar(self):
+        StickerDraft.keep(self.owner, StickerDraft.Kind.IMAGE, self._png(), "image/png")
+        salida = self._tools(self.owner)["guardar_sticker"].invoke(
+            {"nombre": "granizado", "cuando_usarlo": "  "}
+        )
+        self.assertIn("Faltan", salida)
+        self.assertEqual(Sticker.objects.count(), 0)
+        self.assertTrue(StickerDraft.objects.filter(contact=self.owner).exists())
+
+    def test_un_archivo_ilegible_no_deja_un_sticker_roto_en_el_banco(self):
+        StickerDraft.keep(self.owner, StickerDraft.Kind.IMAGE, b"esto no es una imagen")
+        salida = self._tools(self.owner)["guardar_sticker"].invoke(
+            {"nombre": "x", "cuando_usarlo": "para probar"}
+        )
+        self.assertIn("No se pudo convertir", salida)
+        self.assertEqual(Sticker.objects.count(), 0)
+
+    def test_el_prompt_avisa_del_archivo_pendiente(self):
+        self.assertNotIn("ARCHIVO PENDIENTE", build_system_prompt(self.owner, self.turn))
+        StickerDraft.keep(self.owner, StickerDraft.Kind.VIDEO, b"x", "video/mp4")
+        prompt = build_system_prompt(self.owner, self.turn)
+        self.assertIn("ARCHIVO PENDIENTE", prompt)
+        self.assertIn("un video", prompt)
+
+    # --- gestionar el banco ---
+
+    def test_listar_actualizar_y_quitar_stickers(self):
+        StickerDraft.keep(self.owner, StickerDraft.Kind.IMAGE, self._png(), "image/png")
+        tools = self._tools(self.owner)
+        tools["guardar_sticker"].invoke({"nombre": "saludo", "cuando_usarlo": "para saludar"})
+
+        self.assertIn("saludo", tools["listar_stickers"].invoke({}))
+
+        tools["actualizar_sticker"].invoke(
+            {"nombre": "saludo", "nuevo_nombre": "hola parce", "cuando_usarlo": "al empezar"}
+        )
+        sticker = Sticker.objects.get()
+        self.assertEqual((sticker.label, sticker.description), ("hola parce", "al empezar"))
+
+        tools["quitar_sticker"].invoke({"nombre": "hola parce"})
+        sticker.refresh_from_db()
+        self.assertFalse(sticker.is_active, "se desactiva, no se borra: es recuperable")
+        self.assertIn("[DESACTIVADO]", tools["listar_stickers"].invoke({}))
+
+    def test_actualizar_un_sticker_que_no_existe_no_revienta(self):
+        salida = self._tools(self.owner)["actualizar_sticker"].invoke({"nombre": "fantasma"})
+        self.assertIn("No existe", salida)
+
+    # --- el tono ---
+
+    def test_el_dueno_cambia_el_tono_y_queda_en_el_prompt_de_los_clientes(self):
+        self._tools(self.owner)["ajustar_tono"].invoke(
+            {"instrucciones": "Trata a todos de usted."}
+        )
+        self.assertEqual(AgentSettings.load().tone, "Trata a todos de usted.")
+        self.assertIn("Trata a todos de usted.", build_system_prompt(self.cliente, self.turn))
+
+    def test_el_tono_vacio_devuelve_al_agente_a_su_estilo_normal(self):
+        config = AgentSettings.load()
+        config.tone = "Trata a todos de usted."
+        config.save()
+        salida = self._tools(self.owner)["ajustar_tono"].invoke({"instrucciones": ""})
+        self.assertEqual(AgentSettings.load().tone, "")
+        self.assertIn("restablecido", salida)
+
+    def test_configurar_al_agente_marca_el_turno_como_irreversible(self):
+        """Rehacer el turno no desharía el sticker guardado ni el tono cambiado."""
+        from .agent import MUTATING_TOOLS
+
+        for name in ("guardar_sticker", "actualizar_sticker", "quitar_sticker", "ajustar_tono"):
+            self.assertIn(name, MUTATING_TOOLS)
+
+
+class MediaDelDuenoTests(TestCase):
+    """El sticker o el video del dueño se descargan; los del cliente no."""
+
+    def setUp(self):
+        self.owner = WhatsAppContact.objects.create(phone=OWNER_PHONE)
+        self.cliente = WhatsAppContact.objects.create(phone=PHONE)
+
+    def _msg(self, kind="sticker", caption=""):
+        return {
+            "text": f"[El cliente envió un(a) {kind} que no puedes ver.]",
+            "media": {"kind": kind, "media_id": "mid.1", "caption": caption},
+            "message_id": "wamid.1",
+        }
+
+    def test_el_sticker_del_dueno_se_guarda_y_no_se_gasta_vision_en_el(self):
+        from .worker import _resolve_media
+
+        with patch("apps.whatsapp.media.download_media", return_value=(b"webp", "image/webp")), \
+             patch("apps.whatsapp.media.describe_image") as vision:
+            texto = _resolve_media(self._msg(), PHONE_NUMBER_ID, self.owner)
+        vision.assert_not_called()
+        self.assertIn("listo para volverlo sticker", texto)
+        draft = StickerDraft.objects.get(contact=self.owner)
+        self.assertEqual((draft.kind, bytes(draft.data)), ("sticker", b"webp"))
+
+    def test_el_caption_del_dueno_llega_al_agente(self):
+        from .worker import _resolve_media
+
+        with patch("apps.whatsapp.media.download_media", return_value=(b"webp", "image/webp")):
+            texto = _resolve_media(self._msg(caption="guárdalo para saludar"), PHONE_NUMBER_ID, self.owner)
+        self.assertIn("guárdalo para saludar", texto)
+
+    def test_la_imagen_del_dueno_se_guarda_y_ademas_se_describe(self):
+        """Puede ser un sticker por hacer o un comprobante: hacen falta las dos cosas."""
+        from .worker import _resolve_media
+
+        with patch("apps.whatsapp.media.download_media", return_value=(b"png", "image/png")), \
+             patch("apps.whatsapp.media.describe_image", return_value="un granizado azul"):
+            texto = _resolve_media({**self._msg("image")}, PHONE_NUMBER_ID, self.owner)
+        self.assertIn("un granizado azul", texto)
+        self.assertTrue(StickerDraft.objects.filter(contact=self.owner).exists())
+
+    def test_el_sticker_de_un_cliente_no_se_descarga(self):
+        from .worker import _resolve_media
+
+        with patch("apps.whatsapp.media.download_media") as download:
+            texto = _resolve_media(self._msg(), PHONE_NUMBER_ID, self.cliente)
+        download.assert_not_called()
+        self.assertEqual(StickerDraft.objects.count(), 0)
+        self.assertIn("no puedes ver", texto)
+
+    def test_si_la_descarga_falla_el_mensaje_sigue_llegando(self):
+        """No poder guardar un sticker no puede costar el mensaje que venía con él."""
+        from .worker import _resolve_media
+
+        with patch("apps.whatsapp.media.download_media", side_effect=RuntimeError("boom")):
+            texto = _resolve_media(self._msg(), PHONE_NUMBER_ID, self.owner)
+        self.assertEqual(StickerDraft.objects.count(), 0)
+        self.assertIn("no puedes ver", texto)
+
+    def test_un_archivo_gigante_se_descarta(self):
+        from .worker import MAX_DRAFT_BYTES, _resolve_media
+
+        grande = b"x" * (MAX_DRAFT_BYTES + 1)
+        with patch("apps.whatsapp.media.download_media", return_value=(grande, "video/mp4")):
+            _resolve_media(self._msg("video"), PHONE_NUMBER_ID, self.owner)
+        self.assertEqual(StickerDraft.objects.count(), 0)
+
+    def test_el_webhook_de_un_sticker_trae_su_media_id(self):
+        """Sin esto no hay nada que descargar después."""
+        from .worker import extract_inbound_messages
+
+        payload = {
+            "type": "whatsapp.message.received",
+            "data": [
+                {
+                    "phone_number_id": PHONE_NUMBER_ID,
+                    "conversation": {"phone_number": OWNER_PHONE},
+                    "message": {
+                        "id": "wamid.9",
+                        "from": OWNER_PHONE,
+                        "type": "sticker",
+                        "sticker": {"id": "mid.9"},
+                        "kapso": {"direction": "inbound"},
+                    },
+                }
+            ],
+        }
+        mensajes = extract_inbound_messages(payload)
+        self.assertEqual(mensajes[0]["media"], {"kind": "sticker", "media_id": "mid.9", "caption": ""})
+
+
+class VideoASlickerTests(TestCase):
+    """La conversión de video necesita ffmpeg; sin él hay que decirlo, no fallar raro."""
+
+    def test_sin_ffmpeg_el_error_le_dice_al_dueno_qué_hacer(self):
+        with patch("apps.whatsapp.stickers._ffmpeg_binary", return_value=None):
+            with self.assertRaises(StickerError) as error:
+                from .stickers import from_video
+
+                from_video(b"video")
+        self.assertIn("imagen o el GIF", str(error.exception))
+
+    def test_un_video_de_verdad_sale_como_sticker_animado(self):
+        """Se genera con el propio ffmpeg y se convierte, de punta a punta."""
+        import subprocess
+        from io import BytesIO
+
+        from PIL import Image
+
+        from .stickers import MAX_ANIMATED_BYTES, _ffmpeg_binary, from_video
+
+        binary = _ffmpeg_binary()
+        if not binary:
+            self.skipTest("no hay ffmpeg en este entorno")
+        hecho = subprocess.run(
+            [binary, "-nostdin", "-y", "-f", "lavfi", "-i", "testsrc=size=320x240:rate=10:duration=2",
+             "-pix_fmt", "yuv420p", "-f", "mp4", "-movflags", "frag_keyframe+empty_moov", "pipe:1"],
+            capture_output=True,
+            timeout=60,
+        )
+        self.assertEqual(hecho.returncode, 0, hecho.stderr[-300:])
+
+        data, animated = from_video(hecho.stdout)
+        self.assertTrue(animated, "un video de 2 s debe quedar animado")
+        self.assertLessEqual(len(data), MAX_ANIMATED_BYTES)
+        with Image.open(BytesIO(data)) as out:
+            self.assertEqual(out.size, (512, 512))
+            self.assertEqual(out.format, "WEBP")
+            self.assertGreater(out.n_frames, 1)
+
+    def test_el_video_entra_al_banco_por_la_tool_del_dueno(self):
+        import subprocess
+
+        from .stickers import _ffmpeg_binary
+
+        binary = _ffmpeg_binary()
+        if not binary:
+            self.skipTest("no hay ffmpeg en este entorno")
+        owner = WhatsAppContact.objects.create(phone=OWNER_PHONE)
+        hecho = subprocess.run(
+            [binary, "-nostdin", "-y", "-f", "lavfi", "-i", "testsrc=size=320x240:rate=10:duration=1",
+             "-pix_fmt", "yuv420p", "-f", "mp4", "-movflags", "frag_keyframe+empty_moov", "pipe:1"],
+            capture_output=True,
+            timeout=60,
+        )
+        StickerDraft.keep(owner, StickerDraft.Kind.VIDEO, hecho.stdout, "video/mp4")
+        turn = TurnContext(phone_number_id=PHONE_NUMBER_ID)
+        tool = next(t for t in build_tools(owner, turn) if t.name == "guardar_sticker")
+        salida = tool.invoke({"nombre": "bailecito", "cuando_usarlo": "para celebrar"})
+        self.assertIn("guardado", salida)
+        self.assertTrue(Sticker.objects.get(label="bailecito").is_animated)
+
+
+class LimpiezaDeArchivosPendientesTests(TestCase):
+    """Un archivo que nadie llegó a nombrar no se queda ocupando megas para siempre."""
+
+    def test_los_archivos_viejos_se_borran_y_los_de_hoy_no(self):
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        from .worker import DRAFT_TTL
+
+        owner = WhatsAppContact.objects.create(phone=OWNER_PHONE)
+        otro = WhatsAppContact.objects.create(phone=PHONE)
+        viejo = StickerDraft.keep(owner, StickerDraft.Kind.IMAGE, b"x")
+        StickerDraft.objects.filter(pk=viejo.pk).update(
+            created_at=timezone.now() - DRAFT_TTL - timedelta(minutes=1)
+        )
+        StickerDraft.keep(otro, StickerDraft.Kind.IMAGE, b"y")
+
+        StickerDraft.objects.filter(created_at__lt=timezone.now() - DRAFT_TTL).delete()
+        self.assertEqual([d.contact_id for d in StickerDraft.objects.all()], [otro.pk])

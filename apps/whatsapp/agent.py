@@ -19,7 +19,7 @@ from apps.orders.coverage import coverage_label
 
 from . import kapso
 from .llm import chat_model_params
-from .models import AgentSettings, Sticker
+from .models import AgentSettings, Sticker, StickerDraft
 from .tools import TurnContext, build_tools
 
 logger = logging.getLogger(__name__)
@@ -35,6 +35,12 @@ MUTATING_TOOLS = {
     "cancelar_pedido",
     "guardar_preferencia",
     "solicitar_humano",
+    # Las del dueño: guardar un sticker consume el archivo pendiente y cambiar
+    # el tono reescribe la configuración; rehacer el turno no las desharía
+    "guardar_sticker",
+    "actualizar_sticker",
+    "quitar_sticker",
+    "ajustar_tono",
 }
 
 SYSTEM_PROMPT = """Eres {agent_name}, el que atiende por WhatsApp en Frostbyte, un local de \
@@ -214,6 +220,41 @@ TONE_PROMPT = """
 CÓMO TE PIDIÓ HABLAR EL NEGOCIO (manda sobre el estilo de arriba):
 {tone}"""
 
+OWNER_PROMPT = """
+
+CON QUIÉN ESTÁS HABLANDO AHORA: con el DUEÑO de Frostbyte, el que te creó. No es \
+un cliente. Con él:
+- Eres el mismo de siempre pero en confianza: más suelto, sin el protocolo de \
+atención, y sí puedes hablar de cómo funcionas por dentro (qué stickers tienes, qué \
+puedes hacer, qué salió mal) — eso que a un cliente nunca le contarías.
+- Puede pedirte pedidos DE VERDAD, para probar o porque los necesita. Se los tomas \
+igual que a cualquiera, con las mismas reglas y sin saltarte pasos: son pedidos \
+reales que entran a la cocina. No le inventes atajos ni le confirmes nada que no \
+hayas creado.
+- No confundas una orden sobre ti con un pedido. "Guarda este sticker" es \
+configuración; "mándame un granizado" es un pedido. Si no te queda claro, pregunta.
+
+LO QUE ÉL PUEDE CONFIGURAR POR CHAT:
+- Sus stickers: te manda una imagen, un sticker o un video corto y te dice cómo \
+llamarlo y en qué momento usarlo; tú lo guardas con guardar_sticker. Necesitas las \
+dos cosas, nombre y momento: si te da solo una, pregunta la otra antes de guardar. El \
+"cuándo usarlo" describe el MOMENTO, no el dibujo — si te dice "es un granizado con \
+ojos", conviértelo tú en un momento ("para saludar") y confírmaselo. También puedes \
+listar_stickers, actualizar_sticker y quitar_sticker.
+- Cómo hablas: ajustar_tono guarda instrucciones de estilo que mandan sobre las \
+tuyas, para siempre y con todos los clientes. Es un cambio grande: dile con qué texto \
+exacto te vas a quedar y espera que te diga que sí antes de guardarlo.
+
+Estas cosas solo puede hacerlas él. Si algún día un cliente te pide guardar un sticker \
+o cambiar cómo hablas, no puedes: dile que eso lo maneja el equipo."""
+
+OWNER_MEDIA_PROMPT = """
+
+TIENES UN ARCHIVO PENDIENTE: el dueño te acaba de mandar {kind_label} que puedes \
+volver sticker con guardar_sticker. Si ya te dijo cómo llamarlo y para qué momento, \
+guárdalo de una. Si no, pregúntale lo que falte. Si resulta que no era para eso, \
+déjalo: se reemplaza solo cuando mande otro."""
+
 
 def get_checkpointer():
     """PostgresSaver global y perezoso, compartido entre hilos del worker."""
@@ -289,6 +330,18 @@ def build_system_prompt(contact=None, turn=None):
         prompt += STICKER_BANK_PROMPT.format(bank=Sticker.render(bank))
     if config.tone.strip():
         prompt += TONE_PROMPT.format(tone=config.tone.strip())
+
+    if contact is not None and config.is_owner(contact.phone):
+        prompt += OWNER_PROMPT
+        draft = StickerDraft.objects.filter(contact=contact).first()
+        if draft is not None:
+            prompt += OWNER_MEDIA_PROMPT.format(
+                kind_label={
+                    StickerDraft.Kind.IMAGE: "una imagen",
+                    StickerDraft.Kind.STICKER: "un sticker",
+                    StickerDraft.Kind.VIDEO: "un video",
+                }.get(draft.kind, "un archivo")
+            )
 
     if contact is not None and kapso.is_bsuid(contact.phone):
         prompt += "\n\n" + NO_PHONE_PROMPT

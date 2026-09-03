@@ -1,3 +1,5 @@
+import re
+
 from django.db import models
 
 
@@ -288,6 +290,17 @@ class AgentSettings(models.Model):
         verbose_name="Nombre del agente",
         help_text="Con este nombre se presenta ante el cliente.",
     )
+    owner_phones = models.CharField(
+        max_length=200,
+        default="573164277879",
+        blank=True,
+        verbose_name="Números del dueño",
+        help_text=(
+            "Separados por coma, con indicativo (573001234567). Desde estos números el "
+            "agente reconoce al dueño: lo trata distinto y le deja gestionar sus stickers "
+            "y su tono por chat. Sigue tomándole pedidos de verdad."
+        ),
+    )
     tone = models.TextField(
         blank=True,
         verbose_name="Tono y personalidad",
@@ -331,6 +344,29 @@ class AgentSettings(models.Model):
         """Devuelve la única instancia de configuración, creándola si no existe."""
         obj, _ = cls.objects.get_or_create(pk=1)
         return obj
+
+    def owner_numbers(self):
+        """Los números del dueño, ya en dígitos."""
+        return {
+            re.sub(r"\D", "", part)
+            for part in (self.owner_phones or "").split(",")
+            if re.sub(r"\D", "", part)
+        }
+
+    def is_owner(self, phone):
+        """True si quien escribe es el dueño.
+
+        Compara por los últimos 10 dígitos: el mismo celular llega unas veces
+        con indicativo y otras sin él, y un número colombiano queda
+        identificado por su celular. Un BSUID nunca es dueño —no tiene dígitos
+        que comparar—, así que quien oculta su número no hereda el permiso.
+        """
+        from . import kapso
+
+        digits = re.sub(r"\D", "", str(phone or ""))
+        if not digits or len(digits) < 10 or kapso.is_bsuid(phone):
+            return False
+        return any(number[-10:] == digits[-10:] for number in self.owner_numbers())
 
 
 class Sticker(models.Model):
@@ -396,3 +432,46 @@ class Sticker(models.Model):
         if not stickers:
             return ""
         return "\n".join(f"- {s.label}: {s.description}" for s in stickers)
+
+
+class StickerDraft(models.Model):
+    """El último archivo que el dueño mandó por chat, esperando nombre.
+
+    Convertirlo en sticker necesita dos cosas que llegan por separado: el
+    archivo y el momento en que hay que usarlo. Aquí se guarda el archivo tal
+    como llegó (sin normalizar todavía, porque puede acabar descartado)
+    mientras el agente pregunta lo demás.
+
+    Uno por contacto: mandar otro archivo reemplaza el anterior, que es lo que
+    espera cualquiera que se equivocó de foto y manda la buena.
+    """
+
+    class Kind(models.TextChoices):
+        IMAGE = "image", "Imagen"
+        STICKER = "sticker", "Sticker"
+        VIDEO = "video", "Video"
+
+    contact = models.OneToOneField(
+        "WhatsAppContact",
+        on_delete=models.CASCADE,
+        related_name="sticker_draft",
+        verbose_name="Contacto",
+    )
+    kind = models.CharField(max_length=10, choices=Kind.choices, verbose_name="Tipo")
+    data = models.BinaryField(verbose_name="Archivo original", editable=False)
+    mime = models.CharField(max_length=80, blank=True, verbose_name="Tipo MIME")
+    created_at = models.DateTimeField(auto_now=True, verbose_name="Recibido")
+
+    class Meta:
+        verbose_name = "Archivo pendiente de volverse sticker"
+        verbose_name_plural = "Archivos pendientes de volverse sticker"
+
+    def __str__(self):
+        return f"{self.contact.phone} · {self.get_kind_display()}"
+
+    @classmethod
+    def keep(cls, contact, kind, data, mime=""):
+        """Guarda (o reemplaza) el archivo pendiente de este contacto."""
+        return cls.objects.update_or_create(
+            contact=contact, defaults={"kind": kind, "data": data, "mime": mime}
+        )[0]

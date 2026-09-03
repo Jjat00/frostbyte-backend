@@ -144,6 +144,18 @@ class AgentSettingsAdmin(admin.ModelAdmin):
     fieldsets = (
         ("Identidad", {"fields": ("agent_name", "tone")}),
         (
+            "El dueño",
+            {
+                "fields": ("owner_phones",),
+                "description": (
+                    "Desde estos números el agente reconoce al dueño: lo trata en confianza "
+                    "y le deja gestionar sus stickers y su tono por chat (mandándole una "
+                    "imagen, un sticker o un video y diciéndole cuándo usarlo). Le sigue "
+                    "tomando pedidos de verdad, con las mismas reglas que a cualquiera."
+                ),
+            },
+        ),
+        (
             "Qué puede mandar",
             {
                 "fields": (

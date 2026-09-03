@@ -20,7 +20,8 @@ from apps.orders.models import Order, OrderItem, StoreSettings
 from apps.products.models import Category, Product, ProductVariant
 
 from . import kapso
-from .models import AgentSettings, Sticker
+from . import stickers as stickers_media
+from .models import AgentSettings, Sticker, StickerDraft
 
 
 def normalize_phone(phone):
@@ -1033,6 +1034,137 @@ def build_tools(contact, turn=None):
         turn.answered = True
         return "Reacción puesta. No la menciones ni la describas."
 
+    @tool
+    def guardar_sticker(nombre: str, cuando_usarlo: str) -> str:
+        """Convierte en sticker el ÚLTIMO archivo que te mandó el dueño (imagen,
+        sticker o video corto) y lo guarda en el banco. Solo para el dueño.
+
+        Args:
+            nombre: nombre corto para pedirlo después, ej. "granizado feliz"
+            cuando_usarlo: el MOMENTO en que hay que mandarlo, no lo que se ve
+                en el dibujo. Ej. "para celebrar que el pedido quedó listo".
+        """
+        draft = StickerDraft.objects.filter(contact=contact).first()
+        if draft is None:
+            return (
+                "No tienes ningún archivo pendiente. Pídele que te mande primero la "
+                "imagen, el sticker o el video, y luego lo guardas."
+            )
+        nombre = (nombre or "").strip()
+        cuando_usarlo = (cuando_usarlo or "").strip()
+        if not nombre or not cuando_usarlo:
+            return "Faltan el nombre o el cuándo usarlo. Pregúntaselos antes de guardar."
+        existente = next(
+            (s for s in Sticker.objects.all() if _normalize(s.label) == _normalize(nombre)), None
+        )
+        try:
+            data, animated = stickers_media.from_upload(bytes(draft.data), draft.kind)
+        except stickers_media.StickerError as exc:
+            return f"No se pudo convertir: {exc}"
+
+        campos = {
+            "description": cuando_usarlo[:200],
+            "data": data,
+            "byte_size": len(data),
+            "is_animated": animated,
+            "is_active": True,
+        }
+        if existente:
+            # Mismo nombre = lo está reemplazando; el banco no admite duplicados
+            for campo, valor in campos.items():
+                setattr(existente, campo, valor)
+            existente.save()
+            sticker = existente
+            verbo = "reemplazado"
+        else:
+            sticker = Sticker.objects.create(label=nombre[:60], **campos)
+            verbo = "guardado"
+        draft.delete()
+        aviso = ""
+        if draft.kind == "video" and not animated:
+            aviso = " El video no cabía animado, así que quedó como imagen fija."
+        return (
+            f"Sticker '{sticker.label}' {verbo} ({sticker.byte_size // 1024} KB"
+            f"{', animado' if animated else ''}). Ya lo puedes mandar en ese momento."
+            f"{aviso} Confírmaselo en una línea."
+        )
+
+    @tool
+    def listar_stickers() -> str:
+        """Los stickers del banco con su nombre, su momento y si están activos.
+        Solo para el dueño.
+        """
+        todos = list(Sticker.objects.all())
+        if not todos:
+            return "El banco está vacío: todavía no tienes ningún sticker."
+        lineas = [
+            f"- {s.label}: {s.description}"
+            + ("" if s.is_active else " [DESACTIVADO]")
+            + (f" · enviado {s.sent_count} veces" if s.sent_count else "")
+            for s in todos
+        ]
+        return "\n".join(lineas)
+
+    @tool
+    def actualizar_sticker(nombre: str, nuevo_nombre: str = "", cuando_usarlo: str = "") -> str:
+        """Cambia el nombre o el momento de uso de un sticker que ya existe.
+        Solo para el dueño.
+
+        Args:
+            nombre: el sticker a cambiar, por su nombre actual
+            nuevo_nombre: opcional, cómo se debe llamar de ahora en adelante
+            cuando_usarlo: opcional, el momento nuevo en que hay que mandarlo
+        """
+        sticker = next(
+            (s for s in Sticker.objects.all() if _normalize(s.label) == _normalize(nombre)), None
+        )
+        if sticker is None:
+            return f"No existe un sticker llamado '{nombre}'. Míralos con listar_stickers."
+        if nuevo_nombre.strip():
+            sticker.label = nuevo_nombre.strip()[:60]
+        if cuando_usarlo.strip():
+            sticker.description = cuando_usarlo.strip()[:200]
+        sticker.save()
+        return f"Listo: '{sticker.label}' ahora se usa {sticker.description}."
+
+    @tool
+    def quitar_sticker(nombre: str) -> str:
+        """Saca un sticker del banco: deja de existir para ti. Solo para el dueño.
+        No lo borra del todo (se puede recuperar desde el panel de administración).
+
+        Args:
+            nombre: el sticker a quitar
+        """
+        sticker = next(
+            (s for s in Sticker.objects.all() if _normalize(s.label) == _normalize(nombre)), None
+        )
+        if sticker is None:
+            return f"No existe un sticker llamado '{nombre}'. Míralos con listar_stickers."
+        sticker.is_active = False
+        sticker.save(update_fields=["is_active", "updated_at"])
+        return f"'{sticker.label}' quitado del banco: ya no lo vas a mandar."
+
+    @tool
+    def ajustar_tono(instrucciones: str) -> str:
+        """Cambia CÓMO hablas con los clientes, de forma permanente. Solo para
+        el dueño, y solo cuando te lo pide explícitamente.
+
+        Lo que guardes aquí manda sobre tu estilo por defecto y se aplica desde
+        la siguiente conversación. Escribe el texto COMPLETO que debe quedar, no
+        solo lo nuevo: reemplaza lo anterior. Antes de guardar, dile al dueño con
+        qué texto te vas a quedar y espera su visto bueno. Deja el campo vacío
+        para volver a tu tono normal.
+
+        Args:
+            instrucciones: las reglas de estilo completas, o "" para volver al tono por defecto
+        """
+        config = AgentSettings.load()
+        config.tone = (instrucciones or "").strip()[:2000]
+        config.save(update_fields=["tone", "updated_at"])
+        if not config.tone:
+            return "Tono restablecido: vuelves a hablar como de costumbre."
+        return f"Tono guardado. De ahora en adelante: {config.tone}"
+
     tools = [
         consultar_estado_tienda,
         consultar_menu,
@@ -1061,4 +1193,15 @@ def build_tools(contact, turn=None):
             tools.append(enviar_botones)
         if config.reactions_enabled and turn.message_id:
             tools.append(reaccionar)
+    # El dueño configura al agente por chat. Estas tools tocan cómo habla y qué
+    # manda, nunca el dinero: los pedidos, los precios y los estados se siguen
+    # gestionando con las mismas tools que para cualquier cliente.
+    if config.is_owner(contact.phone):
+        tools += [
+            guardar_sticker,
+            listar_stickers,
+            actualizar_sticker,
+            quitar_sticker,
+            ajustar_tono,
+        ]
     return tools

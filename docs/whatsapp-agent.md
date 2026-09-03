@@ -328,6 +328,68 @@ Banco sugerido para arrancar (nombre — cuándo usarlo):
 | copa brindando | para celebrar un pedido grande o una ocasión especial |
 | esperando | cuando el cliente pregunta por un pedido que aún está en cocina |
 
+## El dueño configura al agente por chat
+
+Los números de **Configuración del agente → Números del dueño** (`AgentSettings.owner_phones`,
+por defecto el 316 427 7879) reciben trato aparte: el agente sabe que habla con
+quien lo creó, se suelta, puede contarle cómo funciona por dentro y le acepta
+órdenes de configuración. **Le sigue tomando pedidos de verdad**, con las mismas
+reglas y sin atajos, que es lo que le permite probarlo en real.
+
+El reconocimiento compara los **últimos 10 dígitos** (el mismo celular llega
+unas veces con indicativo y otras sin él). Un contacto identificado por BSUID
+—alguien que oculta su número— nunca es dueño: no hay dígitos que comparar, así
+que el permiso no se puede heredar ocultando el número.
+
+Cinco tools que solo existen para él: `guardar_sticker`, `listar_stickers`,
+`actualizar_sticker`, `quitar_sticker` y `ajustar_tono`. Ninguna toca dinero:
+los pedidos, los precios y los estados siguen gestionándose con las mismas
+tools que para cualquier cliente. Las cuatro que escriben están en
+`MUTATING_TOOLS`, así que un turno que configuró algo ya no se descarta.
+
+### Mandarle un sticker por WhatsApp
+
+1. El dueño manda una **imagen, un sticker o un video corto** (con o sin
+   caption). El worker lo descarga y lo guarda como `StickerDraft` —uno por
+   contacto, el nuevo reemplaza al anterior— y le avisa al agente en el prompt
+   que tiene un archivo pendiente.
+2. El dueño dice cómo llamarlo y en qué momento usarlo. Con las dos cosas, el
+   agente llama `guardar_sticker`, que normaliza el archivo y lo mete al banco;
+   guardar con un nombre que ya existe **reemplaza** ese sticker.
+
+La descarga ocurre al recibir el mensaje y no dentro de la tool porque el
+`download_url` de Kapso caduca a los pocos minutos: cuando el agente decidiera
+guardarlo, el enlace ya no serviría. Nunca tumba el turno — no poder guardar un
+sticker no puede costar el mensaje que venía con él. Tope de 8 MB y los
+borradores sin usar se limpian a las 6 horas (`DRAFT_TTL`).
+
+Un **sticker o un video del dueño no se pasan por visión** (no hay nada que
+leerle que él no esté viendo, y cuesta). Una **imagen sí** se describe además de
+guardarse: puede ser un sticker por hacer o un comprobante de pago. Para
+cualquier otro contacto, stickers y videos siguen siendo "algo que no puedes
+ver": el banco es curado por el negocio, no capturado de los chats.
+
+### Videos → stickers animados
+
+`stickers.from_video()` recorta a **3 segundos a 12 fps**, saca los cuadros con
+ffmpeg y los ensambla con el mismo código que los GIF, para que un sticker
+animado se vea igual venga de donde venga. Si no cabe en 500 KB pierde frames
+antes que calidad, y en el peor caso queda el primer cuadro como sticker fijo
+(el agente se lo dice).
+
+ffmpeg se busca primero en el sistema y si no está se usa el binario que trae
+**`imageio-ffmpeg`** (dependencia nueva): Railway construye con nixpacks + pip,
+así que el paquete de Python evita depender de la imagen del build. Sin ninguno
+de los dos, el error le pide al dueño mandar la imagen o el GIF.
+
+### Cambiar el tono desde el chat
+
+`ajustar_tono` escribe `AgentSettings.tone`, el mismo campo del admin: manda
+sobre el estilo por defecto y aplica **a todos los clientes** desde la siguiente
+conversación. El prompt le exige al agente decir con qué texto exacto se va a
+quedar y esperar el visto bueno antes de guardar; con el texto vacío se vuelve
+al tono normal.
+
 ## Límites conocidos (v1)
 
 - La cola de mensajes vive en memoria del proceso: un redeploy justo dentro de
@@ -352,8 +414,12 @@ Banco sugerido para arrancar (nombre — cuándo usarlo):
   Meta (no implementado; en la práctica el flujo de pedido siempre cae dentro).
 - El handoff no notifica al staff activamente: se ve en el inbox de Kapso y en
   el admin de Django.
-- El banco de stickers nace vacío: hasta que alguien suba el primero, el agente
-  no ve la tool ni la sección del prompt, y responde solo con texto.
+- El banco de stickers nace vacío: hasta que alguien suba el primero (por el
+  admin o mandándoselo por WhatsApp), el agente no ve la tool ni la sección del
+  prompt, y responde solo con texto.
+- Ser dueño se decide por el número de WhatsApp, sin segundo factor: quien
+  controle esa línea puede cambiar el tono y los stickers del agente. Por eso
+  esas tools no tocan pedidos, precios ni estados.
 - Los stickers que manda el **cliente** siguen sin procesarse (llegan como
   "algo que no puedes ver"). El banco es curado por el negocio a propósito:
   reenviar lo que llega de un chat sería publicar contenido sin revisar.

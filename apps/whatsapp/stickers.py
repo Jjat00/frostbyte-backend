@@ -68,13 +68,12 @@ def _frames_of(image):
     return frames, durations
 
 
-def _encode_animated(image):
+def _encode_frames(frames, durations):
     """WebP animado dentro del límite, soltando frames antes que calidad.
 
     Bajar la calidad de una animación la ensucia entera; quitar uno de cada dos
     frames solo la hace un poco menos fluida, que se nota mucho menos.
     """
-    frames, durations = _frames_of(image)
     for skip in (1, 2, 3):
         kept = frames[::skip]
         kept_durations = [sum(durations[i : i + skip]) for i in range(0, len(durations), skip)]
@@ -97,6 +96,11 @@ def _encode_animated(image):
     # quieto sirve, y quien lo subió puede reemplazarlo si no le gusta.
     logger.warning("Animación demasiado pesada; se guarda solo el primer frame")
     return _encode_static(frames[0]), False
+
+
+def _encode_animated(image):
+    """WebP animado a partir de un GIF o WebP animado ya abierto por Pillow."""
+    return _encode_frames(*_frames_of(image))
 
 
 def normalize(raw):
@@ -127,3 +131,90 @@ def has_transparency(raw):
     except Exception:
         pass
     return False
+
+
+# Un sticker animado es un bucle corto: más de esto no cabe en 500 KB con una
+# calidad decente, y tampoco se ve como un sticker.
+VIDEO_MAX_SECONDS = 3
+VIDEO_FPS = 12
+
+
+def _ffmpeg_binary():
+    """Ruta a ffmpeg: el del sistema, o el binario que trae imageio-ffmpeg.
+
+    En local suele estar instalado; en Railway (nixpacks + pip) no, así que el
+    paquete de Python lleva el suyo y evita depender de la imagen del build.
+    """
+    from shutil import which
+
+    found = which("ffmpeg")
+    if found:
+        return found
+    try:
+        from imageio_ffmpeg import get_ffmpeg_exe
+
+        return get_ffmpeg_exe()
+    except Exception:
+        return None
+
+
+def from_video(raw):
+    """Convierte un video corto en un sticker animado.
+
+    ffmpeg solo saca los cuadros; el ensamblado y el ajuste al límite de peso
+    los hace el mismo código que los GIF, para que un sticker animado se vea
+    igual venga de donde venga.
+    """
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    binary = _ffmpeg_binary()
+    if not binary:
+        raise StickerError(
+            "No hay ffmpeg disponible para leer el video. Manda la imagen o el GIF."
+        )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        folder = Path(tmp)
+        source = folder / "input"
+        source.write_bytes(raw)
+        try:
+            subprocess.run(
+                [
+                    binary, "-nostdin", "-y",
+                    "-i", str(source),
+                    "-t", str(VIDEO_MAX_SECONDS),
+                    "-vf", f"fps={VIDEO_FPS}",
+                    "-vsync", "0",
+                    str(folder / "frame%04d.png"),
+                ],
+                capture_output=True,
+                timeout=60,
+                check=True,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise StickerError("El video tardó demasiado en procesarse.") from exc
+        except subprocess.CalledProcessError as exc:
+            detail = (exc.stderr or b"").decode(errors="replace").strip().splitlines()
+            logger.warning("ffmpeg falló: %s", detail[-1] if detail else "sin detalle")
+            raise StickerError("No se pudo leer el video. Prueba con otro o con un GIF.") from exc
+
+        files = sorted(folder.glob("frame*.png"))
+        if not files:
+            raise StickerError("El video no tenía cuadros que convertir.")
+        frames = []
+        for path in files:
+            with Image.open(path) as frame:
+                frames.append(_fit_square(frame))
+
+    if len(frames) == 1:
+        return _encode_static(frames[0]), False
+    return _encode_frames(frames, [int(1000 / VIDEO_FPS)] * len(frames))
+
+
+def from_upload(raw, kind="image"):
+    """Convierte a sticker lo que llegó, sea imagen, GIF, sticker o video."""
+    if kind == "video":
+        return from_video(raw)
+    return normalize(raw)
