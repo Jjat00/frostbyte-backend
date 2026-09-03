@@ -241,3 +241,50 @@ def send_buttons(phone_number_id, to, body, buttons):
         },
     }
     return _post_message(phone_number_id, payload)
+
+
+def send_sticker(phone_number_id, to, link):
+    """Envía un sticker desde una URL pública (WebP; ver stickers.normalize)."""
+    return _post_message(
+        phone_number_id,
+        {
+            "messaging_product": "whatsapp",
+            **destination(to),
+            "type": "sticker",
+            "sticker": {"link": link},
+        },
+    )
+
+
+def send_image(phone_number_id, to, link, caption=""):
+    """Envía una imagen desde una URL pública, con pie de foto opcional."""
+    image = {"link": link}
+    if caption:
+        image["caption"] = caption[:1024]
+    return _post_message(
+        phone_number_id,
+        {
+            "messaging_product": "whatsapp",
+            **destination(to),
+            "type": "image",
+            "image": image,
+        },
+    )
+
+
+def send_reaction(phone_number_id, to, message_id, emoji):
+    """Reacciona con un emoji a un mensaje del cliente.
+
+    No genera un mensaje nuevo en el chat (ni notificación aparte), así que no
+    se registra en SentMessage: un evento saliente sin wamid propio no puede
+    confundirse con una intervención humana.
+    """
+    return _post_message(
+        phone_number_id,
+        {
+            "messaging_product": "whatsapp",
+            **destination(to),
+            "type": "reaction",
+            "reaction": {"message_id": message_id, "emoji": emoji},
+        },
+    )

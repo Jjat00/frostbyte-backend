@@ -18,22 +18,29 @@ logger = logging.getLogger(__name__)
 
 _SKIP = object()
 
+# Estos avisos los manda el sistema, pero el cliente los lee como si los
+# escribiera el agente: van en la misma voz. El número del pedido y la línea de
+# pago son el dato, así que se dicen igual de claro que en el chat.
 STATUS_MESSAGES = {
-    Order.Status.PREPARING: "👨‍🍳 ¡Tu pedido {order_number} ya está en preparación!",
-    Order.Status.READY: (
-        "🛵 ¡Tu pedido {order_number} va en camino! {payment_line}"
+    Order.Status.PREPARING: "👨‍🍳 ¡Listo parce! Tu pedido {order_number} ya está en la cocina.",
+    Order.Status.READY: "🛵 ¡Salió! Tu pedido {order_number} ya va en camino. {payment_line}",
+    Order.Status.DELIVERED: (
+        "✅ Pedido {order_number} entregado. ¡Que lo disfrutes y gracias por pedir en Frostbyte! 💙"
     ),
-    Order.Status.DELIVERED: "✅ Pedido {order_number} entregado. ¡Gracias por pedir en Frostbyte! 💙",
-    Order.Status.CANCELLED: "❌ Tu pedido {order_number} fue cancelado. Escríbenos si tienes alguna duda.",
+    Order.Status.CANCELLED: (
+        "Tu pedido {order_number} quedó cancelado. Cualquier cosa nos escribes y lo solucionamos."
+    ),
 }
 
 # Un pedido para recoger no sale a ninguna parte: "listo" significa que el
 # cliente ya puede pasar por él, y "entregado" que se lo llevó.
 PICKUP_MESSAGES = {
     Order.Status.READY: (
-        "🛍️ ¡Tu pedido {order_number} ya está listo! Puedes pasar por él cuando quieras. {payment_line}"
+        "🛍️ ¡Ya está listo tu pedido {order_number}! Pasa por él cuando quieras. {payment_line}"
     ),
-    Order.Status.DELIVERED: "✅ Pedido {order_number} entregado. ¡Gracias por pedir en Frostbyte! 💙",
+    Order.Status.DELIVERED: (
+        "✅ Pedido {order_number} entregado. ¡Que lo disfrutes y gracias por pedir en Frostbyte! 💙"
+    ),
 }
 
 
@@ -83,13 +90,13 @@ def _notify_status_change(sender, instance, created, **kwargs):
         return
 
     if instance.payment_method == Order.PaymentMethod.CASH:
-        payment_line = "Ten listo el pago en efectivo, por favor."
+        payment_line = "Ten listico el efectivo, porfa."
     elif instance.is_paid:
-        payment_line = "Tu pago ya está confirmado."
+        payment_line = "Tu pago ya quedó confirmado."
     elif instance.order_type == Order.OrderType.PICKUP and not instance.payment_method:
         payment_line = "Pagas al recogerlo."
     else:
-        payment_line = "Recuerda enviar el comprobante si aún no has pagado."
+        payment_line = "Si todavía no has pagado, mándanos el comprobante."
 
     message = template.format(order_number=instance.order_number, payment_line=payment_line)
     phone = instance.customer_phone

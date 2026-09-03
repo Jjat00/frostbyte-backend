@@ -1,7 +1,12 @@
-from django.contrib import admin
+from base64 import b64encode
+
+from django import forms
+from django.contrib import admin, messages
+from django.urls import reverse
 from django.utils.html import format_html, format_html_join
 
-from .models import ChatMessage, SentMessage, WebhookEvent, WhatsAppContact
+from .models import AgentSettings, ChatMessage, SentMessage, Sticker, WebhookEvent, WhatsAppContact
+from .stickers import StickerError, has_transparency, normalize
 from apps.search import PlainSearchAdminMixin
 
 
@@ -124,3 +129,154 @@ class WebhookEventAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
 
     def has_add_permission(self, request):
         return False
+
+
+@admin.register(AgentSettings)
+class AgentSettingsAdmin(admin.ModelAdmin):
+    """El panel de Frosty: quién es y qué puede hacer, sin tocar código.
+
+    Aquí va lo que es preferencia del negocio. Las reglas del pedido (cobertura,
+    pagos, cómo se cotiza) NO se configuran: son lógica con tests detrás, y
+    dejarlas editables convertiría un descuido de redacción en un pedido mal
+    tomado.
+    """
+
+    fieldsets = (
+        ("Identidad", {"fields": ("agent_name", "tone")}),
+        (
+            "Qué puede mandar",
+            {
+                "fields": (
+                    "stickers_enabled",
+                    "reactions_enabled",
+                    "product_photos_enabled",
+                    "quick_replies_enabled",
+                ),
+                "description": (
+                    "Cada interruptor quita a la vez la herramienta y la parte del prompt "
+                    "que la explica, así que apagarlo no deja al agente prometiendo algo "
+                    "que ya no puede hacer."
+                ),
+            },
+        ),
+        ("Banco de stickers", {"fields": ("stickers_link",)}),
+    )
+    readonly_fields = ("stickers_link",)
+
+    @admin.display(description="Stickers")
+    def stickers_link(self, obj):
+        total = Sticker.objects.filter(is_active=True).count()
+        return format_html(
+            '<a href="{}">Gestionar los stickers</a> — {} activo(s) ahora mismo.',
+            reverse("admin:whatsapp_sticker_changelist"),
+            total,
+        )
+
+    def has_add_permission(self, request):
+        # Fila única: se entra por "Cambiar", nunca por "Añadir"
+        return not AgentSettings.objects.exists()
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    def changelist_view(self, request, extra_context=None):
+        """Entra directo a la configuración: una lista de un solo elemento es un clic de más."""
+        from django.shortcuts import redirect
+
+        config = AgentSettings.load()
+        return redirect("admin:whatsapp_agentsettings_change", config.pk)
+
+
+class StickerForm(forms.ModelForm):
+    """Sube cualquier imagen y la convierte en un sticker válido.
+
+    WhatsApp rechaza el mensaje entero si el WebP no cumple sus medidas, y la
+    persona que llena el banco no tiene por qué saber eso: sube el PNG que
+    tenga y la conversión pasa aquí.
+    """
+
+    archivo = forms.FileField(
+        required=False,
+        label="Imagen",
+        help_text=(
+            "PNG, JPG, WebP o GIF. Se convierte sola a 512x512 WebP. "
+            "Para que se vea como un sticker de verdad y no como una foto pegada, "
+            "usa una imagen con FONDO TRANSPARENTE (PNG o WebP)."
+        ),
+    )
+
+    class Meta:
+        model = Sticker
+        fields = ("label", "description", "is_active", "display_order")
+
+    def clean(self):
+        cleaned = super().clean()
+        upload = cleaned.get("archivo")
+        if not upload:
+            if not self.instance.pk:
+                raise forms.ValidationError("Sube la imagen del sticker.")
+            return cleaned
+        raw = upload.read()
+        try:
+            data, animated = normalize(raw)
+        except StickerError as exc:
+            raise forms.ValidationError(str(exc)) from exc
+        cleaned["_data"] = data
+        cleaned["_animated"] = animated
+        # Aviso, no error: bloquear la subida por esto sería peor que dejarla
+        # pasar diciendo cómo va a verse. Lo emite el admin al guardar.
+        self.flat_background = not has_transparency(raw)
+        return cleaned
+
+    def _post_clean(self):
+        super()._post_clean()
+        data = self.cleaned_data.get("_data")
+        if data:
+            self.instance.data = data
+            self.instance.byte_size = len(data)
+            self.instance.is_animated = self.cleaned_data.get("_animated", False)
+
+
+@admin.register(Sticker)
+class StickerAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
+    form = StickerForm
+    list_display = ("vista", "label", "description", "peso", "is_active", "sent_count", "display_order")
+    list_editable = ("is_active", "display_order")
+    search_fields = ("label", "description")
+    list_filter = ("is_active", "is_animated")
+
+    def save_model(self, request, obj, form, change):
+        super().save_model(request, obj, form, change)
+        if getattr(form, "flat_background", False):
+            messages.warning(
+                request,
+                f"«{obj.label}» se guardó, pero la imagen no tiene fondo transparente: en el "
+                "chat se verá como un cuadro sobre el fondo, no como un sticker. Si quieres "
+                "arreglarlo, súbela otra vez en PNG con transparencia.",
+            )
+
+    @admin.display(description="Sticker")
+    def vista(self, obj):
+        """Previsualización desde los propios bytes.
+
+        No se enlaza la URL pública porque en local apunta al backend de
+        producción, donde este sticker no existe, y porque un sticker
+        desactivado no se sirve —justo el que hay que poder mirar aquí—.
+        """
+        if not obj.pk or not obj.data:
+            return "—"
+        source = f"data:image/webp;base64,{b64encode(bytes(obj.data)).decode()}"
+        # Fondo a cuadros: sin él no se distingue un sticker con transparencia
+        # de uno con fondo blanco, que es justo lo que hay que poder ver aquí
+        return format_html(
+            '<div style="width:64px;height:64px;background-image:linear-gradient(45deg,#ccc 25%,'
+            "transparent 25%),linear-gradient(-45deg,#ccc 25%,transparent 25%),linear-gradient("
+            "45deg,transparent 75%,#ccc 75%),linear-gradient(-45deg,transparent 75%,#ccc 75%);"
+            'background-size:12px 12px;background-position:0 0,0 6px,6px -6px,-6px 0">'
+            '<img src="{}" style="width:64px;height:64px;object-fit:contain"></div>',
+            source,
+        )
+
+    @admin.display(description="Peso")
+    def peso(self, obj):
+        return f"{obj.byte_size / 1024:.0f} KB" if obj.byte_size else "—"

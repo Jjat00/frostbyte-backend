@@ -245,6 +245,89 @@ Para probar el webhook con Kapso real en local se necesita un túnel
 - Todo el procesado ocurre en `apps/whatsapp/media.py` + `worker.py`, con el
   indicador "escribiendo…" ya activo.
 
+## Personalidad y módulo de configuración
+
+El agente se llama **Frosty** y habla como un parcero del pueblo: corto,
+chistoso y directo, tuteando y con muletillas de Nariño. El humor tiene un
+techo escrito en el prompt: al llegar a cifras, dirección y confirmación el
+dato va limpio, y si el cliente está molesto o reclamando el chiste se acaba.
+El resto del prompt (reglas de oro, flujo del pedido, cobertura, pagos) no
+cambió.
+
+Lo configurable vive en el admin de Django, en **WhatsApp → Configuración del
+agente** (modelo `AgentSettings`, fila única):
+
+| Campo | Para qué |
+| --- | --- |
+| Nombre del agente | Con qué nombre se presenta (por defecto `Frosty`). |
+| Tono y personalidad | Texto libre que se añade al final del prompt y manda sobre el estilo por defecto (ej. "trata al cliente de usted", "sin emojis"). |
+| Puede mandar stickers / reaccionar / fotos / botones | Cuatro interruptores. |
+
+Cada interruptor quita **a la vez** la tool y el trozo de prompt que la
+explica (`build_tools` y `build_system_prompt` leen la misma configuración):
+describirle al modelo algo que no puede llamar produce promesas que el turno no
+cumple, y el cliente lo lee como que el bot está roto.
+
+Las reglas del pedido **no** son configurables a propósito: tienen tests
+detrás, y volverlas editables convertiría un descuido de redacción en un pedido
+mal tomado.
+
+### Lo que puede mandar además de texto
+
+| Tool | Cuándo la usa |
+| --- | --- |
+| `enviar_sticker` | Saludo, pedido creado, agradecimiento y malas noticias. Nunca armando el pedido. |
+| `enviar_foto_producto` | El cliente pregunta cómo es algo: manda la foto real (`Product.image_url`). |
+| `enviar_botones` | Solo respuestas cerradas: confirmar el pedido y elegir el pago. Lo que toque el cliente vuelve como texto (`interactive.button_reply`, ya soportado). |
+| `reaccionar` | Emoji sobre el mensaje del cliente. No genera mensaje ni notificación. |
+
+Estas tools escriben en WhatsApp en el momento en que el modelo las llama, no
+al final del turno, y eso deja dos cosas distintas en `TurnContext`:
+
+- **`posted`** — quedó un mensaje en el chat (sticker, foto, botones). El turno
+  ya no se puede descartar y rehacer, igual que uno que tocó la base de datos.
+- **`answered`** — el turno ya respondió, aunque no haya sido un mensaje. Una
+  reacción sola cuenta: sin esto, un "mil gracias" contestado con ❤️ recibía
+  además un "Perdón, ¿me lo repites?" (visto en prueba el 03/09).
+
+Cuando el turno respondió sin texto, el worker no manda nada.
+
+### El banco de stickers
+
+Se gestiona en **WhatsApp → Stickers**. Cada sticker tiene un nombre y un
+**"cuándo usarlo"**, que es lo único que el agente lee para elegirlo: describe
+el momento, no el dibujo ("para celebrar que el pedido quedó listo", no "un
+vaso azul con ojos"). Los activos se renderizan en el prompt.
+
+- Se sube **cualquier imagen** (PNG, JPG, WebP, GIF): `stickers.normalize()` la
+  convierte a WebP 512x512 dentro del límite de Meta (100 KB fijo, 500 KB
+  animado), rellenando con transparencia en vez de deformarla. Una animación
+  que no entra pierde frames antes que calidad; si aun así no cabe, se guarda
+  el primer frame.
+- **Usa imágenes con fondo transparente**. Sin él se ve un cuadro pegado sobre
+  el fondo del chat, no un sticker. El admin lo avisa al guardar, pero no lo
+  bloquea.
+- Los bytes se guardan **en la base de datos**, no en disco: el sistema de
+  archivos de Railway se borra en cada despliegue. WhatsApp los descarga de
+  `GET /api/v1/whatsapp/stickers/<id>.webp`, público y sin autenticación
+  porque quien lo pide son los servidores de Meta.
+- Esa URL se arma con `BACKEND_PUBLIC_URL`: en local apunta a producción, así
+  que **los stickers solo se pueden probar de verdad contra el backend
+  desplegado**.
+
+Banco sugerido para arrancar (nombre — cuándo usarlo):
+
+| Nombre | Cuándo usarlo |
+| --- | --- |
+| granizado feliz | para saludar o arrancar la conversación con buena energía |
+| pulgar arriba | para confirmar algo que ya quedó claro o cerrar un acuerdo |
+| moto en camino | cuando el pedido acaba de salir para donde el cliente |
+| corazón frío | cuando el cliente agradece o dice algo lindo del local |
+| carita triste | cuando algo no se pudo: fuera de zona, agotado, local cerrado |
+| chef listo | cuando el pedido para recoger ya está listo |
+| copa brindando | para celebrar un pedido grande o una ocasión especial |
+| esperando | cuando el cliente pregunta por un pedido que aún está en cocina |
+
 ## Límites conocidos (v1)
 
 - La cola de mensajes vive en memoria del proceso: un redeploy justo dentro de
@@ -269,3 +352,8 @@ Para probar el webhook con Kapso real en local se necesita un túnel
   Meta (no implementado; en la práctica el flujo de pedido siempre cae dentro).
 - El handoff no notifica al staff activamente: se ve en el inbox de Kapso y en
   el admin de Django.
+- El banco de stickers nace vacío: hasta que alguien suba el primero, el agente
+  no ve la tool ni la sección del prompt, y responde solo con texto.
+- Los stickers que manda el **cliente** siguen sin procesarse (llegan como
+  "algo que no puedes ver"). El banco es curado por el negocio a propósito:
+  reenviar lo que llega de un chat sería publicar contenido sin revisar.

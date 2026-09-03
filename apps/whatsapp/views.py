@@ -5,12 +5,15 @@ import logging
 
 from django.conf import settings
 from django.db import IntegrityError
+from django.http import HttpResponse
+from django.shortcuts import get_object_or_404
+from django.views.decorators.http import require_GET
 from rest_framework import status
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .models import WebhookEvent
+from .models import Sticker, WebhookEvent
 from .worker import enqueue_event
 
 logger = logging.getLogger(__name__)
@@ -67,3 +70,18 @@ class KapsoWebhookView(APIView):
         if created:
             enqueue_event(event.pk)
         return Response({"ok": True})
+
+
+@require_GET
+def sticker_file(request, pk):
+    """Sirve un sticker del banco para que WhatsApp lo descargue.
+
+    Es público a propósito: Meta busca el archivo desde sus servidores con un
+    GET anónimo, así que una URL protegida haría fallar el envío. Lo único que
+    hay detrás es un dibujo del negocio.
+    """
+    sticker = get_object_or_404(Sticker, pk=pk, is_active=True)
+    response = HttpResponse(bytes(sticker.data), content_type="image/webp")
+    # Meta cachea el archivo por sticker; un sticker no cambia sin cambiar de id
+    response["Cache-Control"] = "public, max-age=86400"
+    return response

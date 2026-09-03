@@ -16,11 +16,19 @@ from django.test import (
     override_settings,
 )
 
-from .agent import AgentTurn, build_system_prompt
-from .tools import build_tools
+from .agent import AgentTurn, _for_whatsapp, build_system_prompt
+from .stickers import StickerError, has_transparency, normalize
+from .tools import TurnContext, build_tools
 from apps.orders.models import Order
 
-from .models import ChatMessage, SentMessage, WebhookEvent, WhatsAppContact
+from .models import (
+    AgentSettings,
+    ChatMessage,
+    SentMessage,
+    Sticker,
+    WebhookEvent,
+    WhatsAppContact,
+)
 from .worker import _active, _pending, _process_event_safe
 
 PHONE = "573001112233"
@@ -111,7 +119,7 @@ class WorkerAgrupadoTests(TransactionTestCase):
     def fake_turn(self, reply="ok", mutated=False, delay=0.0, on_call=None):
         """Doble del LLM: registra el texto que recibió y tarda `delay`."""
 
-        def _run(contact, text):
+        def _run(contact, text, phone_number_id="", message_id=""):
             self.turns.append(text)
             if on_call:
                 on_call()
@@ -687,7 +695,7 @@ class ArchivoDeConversacionTests(TestCase):
         from apps.whatsapp.signals import PICKUP_MESSAGES
         from apps.orders.models import Order
 
-        self.assertIn("pasar por él", PICKUP_MESSAGES[Order.Status.READY])
+        self.assertIn("pasa por él", PICKUP_MESSAGES[Order.Status.READY].lower())
         self.assertNotIn("va en camino", PICKUP_MESSAGES[Order.Status.READY])
 
 
@@ -1010,3 +1018,357 @@ class ParametrosDelModeloTests(TestCase):
         self.assertTrue(is_reasoning_model("gpt-5.6-terra"))
         self.assertFalse(is_reasoning_model("gpt-5-chat-latest"))
         self.assertFalse(is_reasoning_model("gpt-4o-mini"))
+
+
+class PersonalidadYStickersTests(TestCase):
+    """El módulo de configuración de Frosty y lo que puede mandar al chat.
+
+    La regla que se protege aquí es una sola: el prompt y las tools tienen que
+    ir juntos. Contarle al modelo que puede mandar stickers y no darle la tool
+    (o al revés) es lo que produce promesas que el turno no cumple.
+    """
+
+    def setUp(self):
+        self.contact = WhatsAppContact.objects.create(phone=PHONE)
+
+    def _sticker(self, label="granizado feliz", **kwargs):
+        return Sticker.objects.create(
+            label=label,
+            description=kwargs.pop("description", "para saludar al cliente"),
+            data=b"webp-falso",
+            byte_size=10,
+            **kwargs,
+        )
+
+    def test_sin_contexto_de_turno_no_hay_tools_de_envio(self):
+        """Las pruebas por shell no tienen por dónde mandar nada."""
+        names = {t.name for t in build_tools(self.contact)}
+        self.assertNotIn("enviar_sticker", names)
+        self.assertNotIn("reaccionar", names)
+        self.assertIn("crear_pedido", names, "las tools de siempre siguen ahí")
+
+    def test_el_banco_vacio_no_ofrece_la_tool_ni_aparece_en_el_prompt(self):
+        turn = TurnContext(phone_number_id=PHONE_NUMBER_ID, message_id="wamid.1")
+        names = {t.name for t in build_tools(self.contact, turn)}
+        self.assertNotIn("enviar_sticker", names)
+        self.assertNotIn("BANCO DE STICKERS", build_system_prompt(self.contact, turn))
+
+    def test_el_banco_lleno_llega_al_prompt_con_su_cuando_usarlo(self):
+        self._sticker(description="para celebrar que el pedido quedó listo")
+        turn = TurnContext(phone_number_id=PHONE_NUMBER_ID, message_id="wamid.1")
+        prompt = build_system_prompt(self.contact, turn)
+        self.assertIn("granizado feliz", prompt)
+        self.assertIn("para celebrar que el pedido quedó listo", prompt)
+        self.assertIn("enviar_sticker", {t.name for t in build_tools(self.contact, turn)})
+
+    def test_el_sticker_inactivo_no_existe_para_el_agente(self):
+        self._sticker(is_active=False)
+        turn = TurnContext(phone_number_id=PHONE_NUMBER_ID)
+        self.assertNotIn("granizado feliz", build_system_prompt(self.contact, turn))
+
+    def test_apagar_una_capacidad_la_quita_del_prompt_y_de_las_tools(self):
+        self._sticker()
+        config = AgentSettings.load()
+        config.stickers_enabled = False
+        config.reactions_enabled = False
+        config.save()
+        turn = TurnContext(phone_number_id=PHONE_NUMBER_ID, message_id="wamid.1")
+        prompt = build_system_prompt(self.contact, turn)
+        names = {t.name for t in build_tools(self.contact, turn)}
+        self.assertNotIn("enviar_sticker", names)
+        self.assertNotIn("reaccionar", names)
+        self.assertNotIn("granizado feliz", prompt)
+        self.assertNotIn("enviar_sticker", prompt)
+        self.assertIn("enviar_foto_producto", names, "lo demás sigue encendido")
+
+    def test_sin_message_id_no_puede_reaccionar(self):
+        """Una notificación de estado no responde a ningún mensaje del cliente."""
+        turn = TurnContext(phone_number_id=PHONE_NUMBER_ID, message_id="")
+        self.assertNotIn("reaccionar", {t.name for t in build_tools(self.contact, turn)})
+
+    def test_el_nombre_y_el_tono_configurados_mandan_en_el_prompt(self):
+        config = AgentSettings.load()
+        config.agent_name = "Cubito"
+        config.tone = "Trata al cliente de usted."
+        config.save()
+        prompt = build_system_prompt(self.contact)
+        self.assertIn("Cubito", prompt)
+        self.assertIn("Trata al cliente de usted.", prompt)
+        self.assertNotIn("{", prompt, "quedó un placeholder sin reemplazar")
+
+    def test_mandar_un_sticker_marca_el_turno_como_irreversible(self):
+        """Lo que el cliente ya vio no se puede deshacer descartando el turno."""
+        self._sticker()
+        turn = TurnContext(phone_number_id=PHONE_NUMBER_ID)
+        tool = next(t for t in build_tools(self.contact, turn) if t.name == "enviar_sticker")
+        with patch("apps.whatsapp.kapso.send_sticker", return_value={"ok": True}) as send:
+            salida = tool.invoke({"nombre": "granizado feliz"})
+        self.assertTrue(turn.posted, "el cliente ya lo vio: el turno no se puede rehacer")
+        self.assertIn("enviado", salida.lower())
+        self.assertEqual(send.call_args.args[1], PHONE)
+        self.assertEqual(Sticker.objects.get(label="granizado feliz").sent_count, 1)
+
+    def test_pedir_un_sticker_inventado_devuelve_los_que_existen(self):
+        """El modelo inventa nombres; darle la lista cuesta menos que un turno perdido."""
+        self._sticker()
+        turn = TurnContext(phone_number_id=PHONE_NUMBER_ID)
+        tool = next(t for t in build_tools(self.contact, turn) if t.name == "enviar_sticker")
+        with patch("apps.whatsapp.kapso.send_sticker") as send:
+            salida = tool.invoke({"nombre": "gato bailando"})
+        send.assert_not_called()
+        self.assertFalse(turn.posted)
+        self.assertIn("granizado feliz", salida)
+
+    def test_el_sticker_se_encuentra_aunque_el_modelo_cambie_tildes_o_mayusculas(self):
+        self._sticker(label="corazón frío")
+        turn = TurnContext(phone_number_id=PHONE_NUMBER_ID)
+        tool = next(t for t in build_tools(self.contact, turn) if t.name == "enviar_sticker")
+        with patch("apps.whatsapp.kapso.send_sticker", return_value={"ok": True}):
+            salida = tool.invoke({"nombre": "Corazon Frio"})
+        self.assertTrue(turn.posted)
+        self.assertIn("enviado", salida.lower())
+
+    def test_si_kapso_falla_el_turno_sigue_siendo_de_texto(self):
+        self._sticker()
+        turn = TurnContext(phone_number_id=PHONE_NUMBER_ID)
+        tool = next(t for t in build_tools(self.contact, turn) if t.name == "enviar_sticker")
+        with patch("apps.whatsapp.kapso.send_sticker", return_value=None):
+            salida = tool.invoke({"nombre": "granizado feliz"})
+        self.assertFalse(turn.posted, "no se envió nada: el turno se puede rehacer")
+        self.assertFalse(turn.answered, "sigue debiendo una respuesta de texto")
+        self.assertIn("texto", salida.lower())
+
+    def test_los_botones_rechazan_opciones_que_whatsapp_no_acepta(self):
+        turn = TurnContext(phone_number_id=PHONE_NUMBER_ID)
+        tool = next(t for t in build_tools(self.contact, turn) if t.name == "enviar_botones")
+        with patch("apps.whatsapp.kapso.send_buttons") as send:
+            una = tool.invoke({"texto": "¿Confirmas?", "opciones": ["Sí"]})
+            larga = tool.invoke(
+                {"texto": "¿Confirmas?", "opciones": ["Sí, confírmame el pedido ya", "No"]}
+            )
+        send.assert_not_called()
+        self.assertIn("dos opciones", una)
+        self.assertIn("20 caracteres", larga)
+
+    def test_los_botones_se_mandan_con_ids_propios(self):
+        turn = TurnContext(phone_number_id=PHONE_NUMBER_ID)
+        tool = next(t for t in build_tools(self.contact, turn) if t.name == "enviar_botones")
+        with patch("apps.whatsapp.kapso.send_buttons", return_value={"ok": True}) as send:
+            tool.invoke({"texto": "¿Cómo pagas?", "opciones": ["Efectivo", "Nequi"]})
+        self.assertTrue(turn.posted)
+        self.assertEqual(
+            send.call_args.args[3], [("btn_0", "Efectivo"), ("btn_1", "Nequi")]
+        )
+
+    def test_la_reaccion_responde_pero_no_deja_mensaje(self):
+        """Prueba real 03/09: un "mil gracias" contestado con ❤️ recibía además
+        "Perdón, ¿me lo repites?", porque la reacción no contaba como respuesta.
+
+        Son dos cosas distintas: no pone mensaje en el chat (el turno se puede
+        rehacer) pero sí responde (no hace falta texto de relleno).
+        """
+        turn = TurnContext(phone_number_id=PHONE_NUMBER_ID, message_id="wamid.7")
+        tool = next(t for t in build_tools(self.contact, turn) if t.name == "reaccionar")
+        with patch("apps.whatsapp.kapso.send_reaction", return_value={"ok": True}) as send:
+            tool.invoke({"emoji": "❤️"})
+        self.assertFalse(turn.posted, "una reacción no es un mensaje")
+        self.assertTrue(turn.answered, "pero sí es una respuesta: no se pide repetir")
+        self.assertEqual(send.call_args.args[2:], ("wamid.7", "❤️"))
+
+    def test_un_turno_que_solo_reacciona_no_manda_texto_de_relleno(self):
+        turn = TurnContext(phone_number_id=PHONE_NUMBER_ID, message_id="wamid.7")
+        tool = next(t for t in build_tools(self.contact, turn) if t.name == "reaccionar")
+        with patch("apps.whatsapp.kapso.send_reaction", return_value={"ok": True}):
+            tool.invoke({"emoji": "❤️"})
+        self.assertEqual(_for_whatsapp("", already_answered=turn.answered), "")
+
+    def test_la_foto_de_un_producto_sin_imagen_no_se_inventa(self):
+        from apps.products.models import Business, Category, Product
+
+        business, _ = Business.objects.get_or_create(name="Frostbyte", defaults={"slug": "frostbyte"})
+        category = Category.objects.create(name="Granizados", slug="granizados", business=business)
+        Product.objects.create(
+            name="Granizado de mango", slug="granizado-mango", category=category, image_url=""
+        )
+        turn = TurnContext(phone_number_id=PHONE_NUMBER_ID)
+        tool = next(t for t in build_tools(self.contact, turn) if t.name == "enviar_foto_producto")
+        with patch("apps.whatsapp.kapso.send_image") as send:
+            salida = tool.invoke({"producto_slug": "granizado-mango"})
+        send.assert_not_called()
+        self.assertFalse(turn.posted)
+        self.assertIn("no tiene foto", salida)
+
+
+class RespuestaVaciaTests(TestCase):
+    """Cuando el turno ya puso algo en el chat, callarse es la respuesta correcta."""
+
+    def test_sin_texto_y_sin_envio_previo_se_pide_repetir(self):
+        self.assertEqual(_for_whatsapp("  "), "Perdón, ¿me lo repites?")
+
+    def test_sin_texto_despues_de_responder_no_se_manda_nada(self):
+        self.assertEqual(_for_whatsapp("", already_answered=True), "")
+
+    def test_el_texto_normal_no_cambia(self):
+        self.assertEqual(_for_whatsapp("Listo parce", already_answered=True), "Listo parce")
+
+
+class ConversionDeStickersTests(TestCase):
+    """Lo que sube una persona desde el admin tiene que salir válido para WhatsApp."""
+
+    def _png(self, size=(300, 200), color=(255, 0, 0, 255)):
+        from io import BytesIO
+
+        from PIL import Image
+
+        buffer = BytesIO()
+        Image.new("RGBA", size, color).save(buffer, format="PNG")
+        return buffer.getvalue()
+
+    def test_una_imagen_cualquiera_sale_de_512x512(self):
+        from io import BytesIO
+
+        from PIL import Image
+
+        data, animated = normalize(self._png())
+        self.assertFalse(animated)
+        self.assertLessEqual(len(data), 100 * 1024, "WhatsApp rechaza los fijos de más de 100 KB")
+        with Image.open(BytesIO(data)) as out:
+            self.assertEqual(out.size, (512, 512))
+            self.assertEqual(out.format, "WEBP")
+
+    def test_no_se_deforma_lo_que_no_era_cuadrado(self):
+        """El sobrante se rellena transparente en vez de estirar el dibujo."""
+        from io import BytesIO
+
+        from PIL import Image
+
+        data, _ = normalize(self._png(size=(400, 100)))
+        with Image.open(BytesIO(data)) as out:
+            alpha = out.convert("RGBA").getchannel("A")
+        self.assertEqual(alpha.getpixel((256, 10)), 0, "arriba debió quedar transparente")
+
+    def test_un_archivo_que_no_es_imagen_da_un_error_legible(self):
+        with self.assertRaises(StickerError):
+            normalize(b"esto no es una imagen")
+
+    def test_se_detecta_si_falta_la_transparencia(self):
+        from io import BytesIO
+
+        from PIL import Image
+
+        buffer = BytesIO()
+        Image.new("RGB", (300, 300), (255, 255, 255)).save(buffer, format="PNG")
+        self.assertFalse(has_transparency(buffer.getvalue()))
+        self.assertTrue(has_transparency(self._png(color=(255, 0, 0, 0))))
+
+
+class EndpointDeStickersTests(TestCase):
+    """WhatsApp descarga el archivo con un GET anónimo desde los servidores de Meta."""
+
+    def setUp(self):
+        self.sticker = Sticker.objects.create(
+            label="pulgar arriba", description="para confirmar", data=b"RIFF-webp-falso", byte_size=15
+        )
+
+    def test_se_sirve_sin_autenticacion_y_como_webp(self):
+        response = self.client.get(f"/api/v1/whatsapp/stickers/{self.sticker.pk}.webp")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "image/webp")
+        self.assertEqual(response.content, b"RIFF-webp-falso")
+
+    def test_un_sticker_desactivado_deja_de_servirse(self):
+        Sticker.objects.filter(pk=self.sticker.pk).update(is_active=False)
+        response = self.client.get(f"/api/v1/whatsapp/stickers/{self.sticker.pk}.webp")
+        self.assertEqual(response.status_code, 404)
+
+    def test_la_url_del_modelo_es_la_que_resuelve_el_router(self):
+        """Si dejan de coincidir, WhatsApp recibe un 404 y no manda el sticker."""
+        from django.urls import reverse
+
+        self.assertTrue(
+            self.sticker.url.endswith(reverse("whatsapp-sticker", args=[self.sticker.pk]))
+        )
+
+
+class FormularioDeStickersTests(TestCase):
+    """Subir un sticker desde el admin: es el camino real de quien llena el banco."""
+
+    def _upload(self, size=(300, 200), mode="RGBA", color=(255, 0, 0, 255), fmt="PNG"):
+        from io import BytesIO
+
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        from PIL import Image
+
+        buffer = BytesIO()
+        Image.new(mode, size, color[: 3 if mode == "RGB" else 4]).save(buffer, format=fmt)
+        return SimpleUploadedFile("sticker.png", buffer.getvalue(), content_type="image/png")
+
+    def _form(self, **overrides):
+        from .admin import StickerForm
+
+        data = {
+            "label": "granizado feliz",
+            "description": "para saludar al cliente",
+            "is_active": True,
+            "display_order": 0,
+        }
+        data.update(overrides.pop("data", {}))
+        return StickerForm(data=data, files={"archivo": overrides.pop("archivo", self._upload())})
+
+    def test_un_png_cualquiera_queda_guardado_como_webp_valido(self):
+        form = self._form()
+        self.assertTrue(form.is_valid(), form.errors)
+        sticker = form.save()
+        self.assertTrue(bytes(sticker.data).startswith(b"RIFF"), "no salió un WebP")
+        self.assertEqual(sticker.byte_size, len(bytes(sticker.data)))
+        self.assertLessEqual(sticker.byte_size, 100 * 1024)
+
+    def test_sin_imagen_no_se_crea_el_sticker(self):
+        from .admin import StickerForm
+
+        form = StickerForm(
+            data={"label": "x", "description": "y", "is_active": True, "display_order": 0},
+            files={},
+        )
+        self.assertFalse(form.is_valid())
+
+    def test_el_fondo_opaco_avisa_pero_no_bloquea(self):
+        """Un sticker sin transparencia se ve como un cuadro, pero a veces se quiere igual."""
+        form = self._form(archivo=self._upload(mode="RGB", color=(255, 255, 255)))
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertTrue(form.flat_background, "debió marcar el aviso para el admin")
+
+    def test_un_archivo_roto_da_un_error_de_formulario_y_no_revienta(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        from .admin import StickerForm
+
+        form = StickerForm(
+            data={"label": "x", "description": "y", "is_active": True, "display_order": 0},
+            files={"archivo": SimpleUploadedFile("x.png", b"no soy una imagen")},
+        )
+        self.assertFalse(form.is_valid())
+        self.assertIn("No se pudo leer la imagen", str(form.errors))
+
+    def test_editar_el_texto_sin_resubir_conserva_la_imagen(self):
+        from .admin import StickerForm
+
+        sticker = self._form()
+        self.assertTrue(sticker.is_valid(), sticker.errors)
+        guardado = sticker.save()
+        original = bytes(guardado.data)
+
+        form = StickerForm(
+            data={
+                "label": "granizado feliz",
+                "description": "descripción nueva",
+                "is_active": True,
+                "display_order": 3,
+            },
+            files={},
+            instance=guardado,
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        actualizado = form.save()
+        self.assertEqual(bytes(actualizado.data), original)
+        self.assertEqual(actualizado.description, "descripción nueva")

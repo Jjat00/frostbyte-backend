@@ -271,3 +271,128 @@ class WebhookEvent(models.Model):
 
     def __str__(self):
         return f"{self.event_type or 'evento'} · {self.contact_phone} · {self.get_status_display()}"
+
+
+class AgentSettings(models.Model):
+    """Configuración de Frosty, el agente de WhatsApp (singleton).
+
+    La casa de todo lo que se pueda cambiar del agente sin redeploy: cómo se
+    llama, cómo habla y qué cosas puede mandar además de texto. El prompt base
+    (reglas del pedido, cobertura, pagos) NO vive aquí a propósito: eso es
+    lógica de negocio probada por tests, no una preferencia.
+    """
+
+    agent_name = models.CharField(
+        max_length=40,
+        default="Frosty",
+        verbose_name="Nombre del agente",
+        help_text="Con este nombre se presenta ante el cliente.",
+    )
+    tone = models.TextField(
+        blank=True,
+        verbose_name="Tono y personalidad",
+        help_text=(
+            "Instrucciones extra sobre CÓMO habla (no sobre qué hace). Se añaden al "
+            "final del prompt, así que mandan sobre el estilo por defecto. "
+            "Ej.: 'Trata al cliente de usted' o 'sin emojis'. Vacío = el tono por defecto."
+        ),
+    )
+    stickers_enabled = models.BooleanField(
+        default=True,
+        verbose_name="Puede mandar stickers",
+        help_text="Si se apaga, el agente no ve el banco de stickers y nunca manda uno.",
+    )
+    reactions_enabled = models.BooleanField(
+        default=True,
+        verbose_name="Puede reaccionar con emoji",
+        help_text="Reacciones de WhatsApp sobre el mensaje del cliente (❤️, 😂, 👀).",
+    )
+    product_photos_enabled = models.BooleanField(
+        default=True,
+        verbose_name="Puede mandar fotos de productos",
+        help_text="Manda la foto real del producto cuando el cliente pregunta cómo es.",
+    )
+    quick_replies_enabled = models.BooleanField(
+        default=True,
+        verbose_name="Puede mandar botones",
+        help_text="Botones de respuesta rápida (máx. 3) para confirmar el pedido o elegir pago.",
+    )
+    updated_at = models.DateTimeField(auto_now=True, verbose_name="Actualizado")
+
+    class Meta:
+        verbose_name = "Configuración del agente"
+        verbose_name_plural = "Configuración del agente"
+
+    def __str__(self):
+        return f"Configuración de {self.agent_name}"
+
+    @classmethod
+    def load(cls):
+        """Devuelve la única instancia de configuración, creándola si no existe."""
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
+
+
+class Sticker(models.Model):
+    """Un sticker del banco que el agente puede mandar.
+
+    Los bytes viven en la base de datos y no en el disco a propósito: el
+    sistema de archivos de Railway se borra en cada despliegue, así que un
+    sticker guardado como archivo desaparecería sin avisar. El agente no puede
+    "ver" el banco cuando responde, así que elige por la descripción: ahí está
+    escrito PARA QUÉ sirve cada uno, no qué se dibuja en él.
+    """
+
+    label = models.CharField(
+        max_length=60,
+        unique=True,
+        verbose_name="Nombre",
+        help_text="Corto y en minúsculas, como lo pediría alguien: 'granizado feliz', 'pulgar arriba'.",
+    )
+    description = models.CharField(
+        max_length=200,
+        verbose_name="Cuándo usarlo",
+        help_text=(
+            "Lo único que el agente lee para elegirlo. Describe el MOMENTO, no el dibujo: "
+            "'para celebrar que el pedido quedó listo', no 'un vaso azul con ojos'."
+        ),
+    )
+    data = models.BinaryField(verbose_name="Archivo WebP", editable=False)
+    byte_size = models.PositiveIntegerField(default=0, verbose_name="Tamaño (bytes)")
+    is_animated = models.BooleanField(default=False, verbose_name="Animado")
+    is_active = models.BooleanField(
+        default=True,
+        verbose_name="Activo",
+        help_text="Los inactivos no se le muestran al agente.",
+    )
+    display_order = models.PositiveIntegerField(default=0, verbose_name="Orden")
+    sent_count = models.PositiveIntegerField(default=0, verbose_name="Veces enviado")
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="Creado")
+    updated_at = models.DateTimeField(auto_now=True, verbose_name="Actualizado")
+
+    class Meta:
+        verbose_name = "Sticker"
+        verbose_name_plural = "Stickers"
+        ordering = ["display_order", "label"]
+
+    def __str__(self):
+        return self.label
+
+    @property
+    def url(self):
+        """URL pública que WhatsApp usa para descargarlo (ver views.sticker_file)."""
+        from django.conf import settings
+
+        return f"{settings.BACKEND_PUBLIC_URL.rstrip('/')}/api/v1/whatsapp/stickers/{self.pk}.webp"
+
+    @classmethod
+    def catalog(cls):
+        """Los stickers que el agente puede usar ahora mismo."""
+        return list(cls.objects.filter(is_active=True))
+
+    @classmethod
+    def render(cls, stickers):
+        """El banco tal como lo lee el agente dentro del prompt."""
+        if not stickers:
+            return ""
+        return "\n".join(f"- {s.label}: {s.description}" for s in stickers)

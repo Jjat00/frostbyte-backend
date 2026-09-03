@@ -10,7 +10,7 @@ import unicodedata
 from decimal import Decimal
 from difflib import SequenceMatcher
 
-from django.db import transaction
+from django.db import models, transaction
 from django.utils import timezone
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
@@ -20,6 +20,7 @@ from apps.orders.models import Order, OrderItem, StoreSettings
 from apps.products.models import Category, Product, ProductVariant
 
 from . import kapso
+from .models import AgentSettings, Sticker
 
 
 def normalize_phone(phone):
@@ -169,8 +170,38 @@ class ItemPedido(BaseModel):
     notas: str = Field("", description="Personalizaciones elegidas y aclaraciones de este item (ej. 'sin cebolla, salsa extra')")
 
 
-def build_tools(contact):
-    """Construye las tools ligadas a un WhatsAppContact concreto."""
+class TurnContext:
+    """Lo que las tools necesitan para poner algo en el chat durante el turno.
+
+    Las tools de envío (sticker, foto, botones, reacción) escriben en WhatsApp
+    en el momento en que el modelo las llama, no al final del turno. Eso deja
+    dos cosas distintas que hay que saber después, y confundirlas se nota:
+
+    `posted`: quedó un mensaje en el chat del cliente, así que el turno ya no
+    se puede descartar y rehacer.
+    `answered`: el turno ya respondió algo, aunque no haya sido un mensaje. Una
+    reacción sola es una respuesta completa —el prompt se lo permite—, y sin
+    esto un "gracias" contestado con un ❤️ recibía además un "¿me lo repites?".
+    """
+
+    def __init__(self, phone_number_id="", message_id=""):
+        self.phone_number_id = phone_number_id
+        self.message_id = message_id
+        self.posted = False
+        self.answered = False
+
+    @property
+    def can_send(self):
+        return bool(self.phone_number_id)
+
+
+def build_tools(contact, turn=None):
+    """Construye las tools ligadas a un WhatsAppContact concreto.
+
+    `turn` es el TurnContext del turno en curso; sin él (pruebas por shell) las
+    tools que mandan cosas al chat no se le ofrecen al modelo.
+    """
+    config = AgentSettings.load()
 
     @tool
     def consultar_estado_tienda() -> str:
@@ -894,7 +925,115 @@ def build_tools(contact):
             "conversación. Despídete indicando que una persona le escribirá pronto."
         )
 
-    return [
+    @tool
+    def enviar_sticker(nombre: str) -> str:
+        """Manda uno de los stickers del banco al chat. Elige por el "cuándo
+        usarlo" de la lista que tienes en tus instrucciones, no por su nombre.
+        Después de mandarlo escribe como mucho una línea corta, o nada.
+
+        Args:
+            nombre: el nombre exacto del sticker, tal como aparece en tu lista
+        """
+        wanted = _normalize(nombre)
+        catalog = Sticker.catalog()
+        sticker = next((s for s in catalog if _normalize(s.label) == wanted), None)
+        if sticker is None:
+            # El modelo se inventa nombres cuando la lista no le cuadra; darle
+            # los que existen es más barato que un turno perdido
+            names = ", ".join(s.label for s in catalog) or "ninguno"
+            return f"No existe el sticker '{nombre}'. Los que hay son: {names}."
+        result = kapso.send_sticker(turn.phone_number_id, contact.phone, sticker.url)
+        if result is None:
+            return "No se pudo mandar el sticker. Sigue con texto y no lo menciones."
+        turn.posted = True
+        turn.answered = True
+        Sticker.objects.filter(pk=sticker.pk).update(sent_count=models.F("sent_count") + 1)
+        return "Sticker enviado. El cliente ya lo vio: no lo describas."
+
+    @tool
+    def enviar_foto_producto(producto_slug: str) -> str:
+        """Manda al chat la foto real de un producto. Úsala cuando el cliente
+        pregunte cómo es algo o pida verlo, en vez de describírselo.
+
+        Args:
+            producto_slug: slug del producto, tal como sale de consultar_menu o buscar_producto
+        """
+        product = Product.objects.filter(slug=producto_slug, is_active=True).first()
+        if product is None:
+            return (
+                f"No hay producto activo con slug '{producto_slug}'. "
+                "Búscalo con buscar_producto para tener el slug correcto."
+            )
+        if not product.image_url:
+            return (
+                f"{product.name} no tiene foto cargada. Descríbeselo con lo que sepas "
+                "del menú y pásale el enlace de la carta si quiere verlo."
+            )
+        result = kapso.send_image(turn.phone_number_id, contact.phone, product.image_url)
+        if result is None:
+            return "No se pudo mandar la foto. Sigue con texto y no la menciones."
+        turn.posted = True
+        turn.answered = True
+        return f"Foto de {product.name} enviada. El cliente ya la vio: no la describas."
+
+    @tool
+    def enviar_botones(texto: str, opciones: list[str]) -> str:
+        """Manda un mensaje con botones para que el cliente toque en vez de
+        escribir. Úsala SOLO donde la respuesta es cerrada: confirmar el pedido
+        (Sí / Cambiar algo / Cancelar) o elegir el pago (Efectivo / Nequi).
+        Lo que toque te llega como si lo hubiera escrito.
+
+        NO la uses para preguntas abiertas (qué quiere pedir, su dirección, el
+        sabor): ahí los botones dejan fuera respuestas válidas.
+
+        Args:
+            texto: la pregunta completa, con el resumen o el total si aplica
+            opciones: entre 2 y 3 respuestas, de máximo 20 caracteres cada una
+        """
+        choices = [str(o).strip() for o in opciones if str(o).strip()][:3]
+        if len(choices) < 2:
+            return "Los botones necesitan al menos dos opciones. Pregúntalo con texto normal."
+        if any(len(c) > 20 for c in choices):
+            return (
+                "Alguna opción pasa de 20 caracteres y WhatsApp la rechaza. "
+                "Acórtalas y vuelve a intentar."
+            )
+        buttons = [(f"btn_{i}", c) for i, c in enumerate(choices)]
+        result = kapso.send_buttons(turn.phone_number_id, contact.phone, texto, buttons)
+        if result is None:
+            return "No se pudieron mandar los botones. Haz la misma pregunta con texto normal."
+        turn.posted = True
+        turn.answered = True
+        return (
+            "Botones enviados con esa pregunta. YA ESTÁ DICHA: no la repitas en texto, "
+            "responde vacío y espera a que el cliente toque una."
+        )
+
+    @tool
+    def reaccionar(emoji: str) -> str:
+        """Reacciona con un emoji al último mensaje del cliente, como haría una
+        persona. No manda mensaje ni lo notifica: es solo el gesto.
+
+        Reacciona cuando el mensaje trae algo que registrar (gracias, un
+        chiste, una buena noticia, algo que salió mal), no a una pregunta
+        normal ni a un dato del pedido: un bot que reacciona a todo es ruido.
+        Una reacción por turno.
+
+        Args:
+            emoji: un solo emoji (❤️, 😂, 🔥, 👀, 🙌, 😢)
+        """
+        emoji = (emoji or "").strip()
+        if not emoji:
+            return "Falta el emoji."
+        result = kapso.send_reaction(
+            turn.phone_number_id, contact.phone, turn.message_id, emoji
+        )
+        if result is None:
+            return "No se pudo reaccionar. Sigue normal y no lo menciones."
+        turn.answered = True
+        return "Reacción puesta. No la menciones ni la describas."
+
+    tools = [
         consultar_estado_tienda,
         consultar_menu,
         consultar_producto,
@@ -909,3 +1048,17 @@ def build_tools(contact):
         verificar_cobertura,
         solicitar_humano,
     ]
+    # Las tools que escriben en el chat necesitan por dónde mandarlo. Una tool
+    # apagada se retira de la lista además de salir del prompt: describirle al
+    # modelo algo que no puede llamar solo produce promesas que el turno no
+    # cumple, y el cliente lo lee como que el bot está roto.
+    if turn is not None and turn.can_send:
+        if config.stickers_enabled and Sticker.catalog():
+            tools.append(enviar_sticker)
+        if config.product_photos_enabled:
+            tools.append(enviar_foto_producto)
+        if config.quick_replies_enabled:
+            tools.append(enviar_botones)
+        if config.reactions_enabled and turn.message_id:
+            tools.append(reaccionar)
+    return tools

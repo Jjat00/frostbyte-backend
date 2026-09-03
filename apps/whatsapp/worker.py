@@ -496,7 +496,14 @@ def _run_turn(phone, batch):
         # Los audios/imágenes se resuelven aquí (descarga + OpenAI) para que el
         # 'escribiendo…' ya esté visible mientras tanto
         text = "\n".join(_message_text(m, phone_number_id) for m in messages)
-        turn = run_turn(contact, text)
+        # El último mensaje del lote es sobre el que se reacciona: es el que el
+        # cliente tiene delante cuando llega la respuesta
+        turn = run_turn(
+            contact,
+            text,
+            phone_number_id=phone_number_id,
+            message_id=(messages[-1].get("message_id") or "") if messages else "",
+        )
 
         # ¿Escribió mientras el agente pensaba? Entonces esta respuesta ya nació
         # incompleta: se descarta y el lote vuelve a la cola para rehacerse
@@ -506,7 +513,10 @@ def _run_turn(phone, batch):
             _requeue(phone, batch)
             return
 
-    kapso.send_text(phone_number_id, contact.phone, turn.reply)
+    # Un turno que solo mandó un sticker o unos botones no lleva texto detrás:
+    # el mensaje ya está en el chat y añadir uno vacío sería un segundo mensaje
+    if turn.reply:
+        kapso.send_text(phone_number_id, contact.phone, turn.reply)
     _close_events(batch["event_ids"], WebhookEvent.Status.PROCESSED)
 
 
