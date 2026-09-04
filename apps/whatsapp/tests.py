@@ -19,8 +19,10 @@ from django.test import (
 from django.utils import timezone
 
 from . import mood
-from .agent import AgentTurn, _for_whatsapp, build_system_prompt
+from . import worker
+from .agent import AgentTurn, _for_whatsapp, _split_messages, build_system_prompt
 from .mood import StickerUrge
+from . import stickers as wa_stickers
 from .stickers import StickerError, has_transparency, normalize
 from .tools import TurnContext, build_tools
 from apps.orders.models import Order
@@ -132,7 +134,9 @@ class WorkerAgrupadoTests(TransactionTestCase):
                 on_call()
             if delay:
                 time.sleep(delay)
-            return AgentTurn(reply=reply, message_ids=("m1", "m2"), mutated=mutated)
+            return AgentTurn(
+                replies=(reply,) if reply else (), message_ids=("m1", "m2"), mutated=mutated
+            )
 
         return _run
 
@@ -1187,17 +1191,60 @@ class PersonalidadYStickersTests(TestCase):
         self.assertIn("Trata al cliente de usted.", prompt)
         self.assertNotIn("{", prompt, "quedó un placeholder sin reemplazar")
 
-    def test_mandar_un_sticker_marca_el_turno_como_irreversible(self):
-        """Lo que el cliente ya vio no se puede deshacer descartando el turno."""
+    def test_la_voz_se_recuerda_al_final_del_prompt_con_una_muestra(self):
+        """Entre QUIÉN ERES y el mensaje hay páginas de reglas: sin recordatorio se pierde."""
+        AgentTone.seed_catalog()
+        prompt = build_system_prompt(self.contact)
+        persona = AgentSettings.load().persona()
+        self.assertEqual(prompt.count(persona), 2, "la personalidad se dice al empezar y al final")
+        self.assertIn("TU VOZ", prompt)
+        self.assertIn(AgentTone.objects.get(key="parcero").sample, prompt)
+        self.assertLess(
+            prompt.index("CÓMO ESCRIBES"), prompt.index("TU VOZ"), "el recordatorio va de últimas"
+        )
+
+    def test_un_tono_sin_frase_de_muestra_no_deja_hueco_en_el_prompt(self):
+        AgentTone.objects.create(key="mudo", name="Mudo", persona="QUIÉN ERES: alguien.", sample="")
+        config = AgentSettings.load()
+        config.tone_preset = "mudo"
+        config.save()
+        prompt = build_system_prompt(self.contact)
+        self.assertNotIn("Así suena un saludo tuyo", prompt)
+
+    def test_el_sticker_queda_pendiente_y_sale_detras_del_texto(self):
+        """El modelo elige el sticker antes de escribir: mandarlo ya lo pondría delante."""
         self._sticker()
         turn = TurnContext(phone_number_id=PHONE_NUMBER_ID)
         tool = next(t for t in build_tools(self.contact, turn) if t.name == "enviar_sticker")
-        with patch("apps.whatsapp.kapso.send_sticker", return_value={"ok": True}) as send:
+        with patch("apps.whatsapp.kapso.send_sticker") as send:
             salida = tool.invoke({"nombre": "granizado feliz"})
-        self.assertTrue(turn.posted, "el cliente ya lo vio: el turno no se puede rehacer")
-        self.assertIn("enviado", salida.lower())
+        send.assert_not_called()
+        self.assertEqual(turn.sticker.label, "granizado feliz")
+        self.assertTrue(turn.answered)
+        self.assertFalse(turn.posted, "todavía no ha salido nada: el turno se puede rehacer")
+        self.assertIn("detrás de tu mensaje", salida)
+        self.assertEqual(Sticker.objects.get(label="granizado feliz").sent_count, 0)
+
+    def test_el_sticker_se_entrega_despues_del_texto_y_se_apunta(self):
+        """La memoria corta cuenta lo que el cliente vio, no lo que el modelo pidió."""
+        sticker = self._sticker()
+        with patch("apps.whatsapp.kapso.send_sticker", return_value={"ok": True}) as send:
+            self.assertTrue(wa_stickers.deliver(self.contact, sticker, PHONE_NUMBER_ID))
         self.assertEqual(send.call_args.args[1], PHONE)
         self.assertEqual(Sticker.objects.get(label="granizado feliz").sent_count, 1)
+        self.contact.refresh_from_db()
+        self.assertEqual(
+            [label for label, _ in self.contact.stickers_today()], ["granizado feliz"]
+        )
+
+    def test_si_kapso_rechaza_el_sticker_no_cuenta_como_enviado(self):
+        """Un sticker que no llegó no puede gastar el cupo del día ni el enfriamiento."""
+        sticker = self._sticker()
+        with patch("apps.whatsapp.kapso.send_sticker", return_value=None):
+            self.assertFalse(wa_stickers.deliver(self.contact, sticker, PHONE_NUMBER_ID))
+        self.contact.refresh_from_db()
+        self.assertEqual(self.contact.stickers_today(), [])
+        self.assertEqual(Sticker.objects.get(label="granizado feliz").sent_count, 0)
 
     def test_pedir_un_sticker_inventado_devuelve_los_que_existen(self):
         """El modelo inventa nombres; darle la lista cuesta menos que un turno perdido."""
@@ -1207,39 +1254,15 @@ class PersonalidadYStickersTests(TestCase):
         with patch("apps.whatsapp.kapso.send_sticker") as send:
             salida = tool.invoke({"nombre": "gato bailando"})
         send.assert_not_called()
-        self.assertFalse(turn.posted)
+        self.assertIsNone(turn.sticker)
         self.assertIn("granizado feliz", salida)
 
     def test_el_sticker_se_encuentra_aunque_el_modelo_cambie_tildes_o_mayusculas(self):
         self._sticker(label="corazón frío")
         turn = TurnContext(phone_number_id=PHONE_NUMBER_ID)
         tool = next(t for t in build_tools(self.contact, turn) if t.name == "enviar_sticker")
-        with patch("apps.whatsapp.kapso.send_sticker", return_value={"ok": True}):
-            salida = tool.invoke({"nombre": "Corazon Frio"})
-        self.assertTrue(turn.posted)
-        self.assertIn("enviado", salida.lower())
-
-    def test_si_kapso_falla_el_turno_sigue_siendo_de_texto(self):
-        self._sticker()
-        turn = TurnContext(phone_number_id=PHONE_NUMBER_ID)
-        tool = next(t for t in build_tools(self.contact, turn) if t.name == "enviar_sticker")
-        with patch("apps.whatsapp.kapso.send_sticker", return_value=None):
-            salida = tool.invoke({"nombre": "granizado feliz"})
-        self.assertFalse(turn.posted, "no se envió nada: el turno se puede rehacer")
-        self.assertFalse(turn.answered, "sigue debiendo una respuesta de texto")
-        self.assertIn("texto", salida.lower())
-
-    def test_el_sticker_enviado_queda_en_la_memoria_del_contacto(self):
-        """Sin esta memoria el siguiente turno no sabe qué mandó ni cuándo."""
-        self._sticker()
-        turn = TurnContext(phone_number_id=PHONE_NUMBER_ID)
-        tool = next(t for t in build_tools(self.contact, turn) if t.name == "enviar_sticker")
-        with patch("apps.whatsapp.kapso.send_sticker", return_value={"ok": True}):
-            tool.invoke({"nombre": "granizado feliz"})
-        self.contact.refresh_from_db()
-        self.assertEqual(
-            [label for label, _ in self.contact.stickers_today()], ["granizado feliz"]
-        )
+        tool.invoke({"nombre": "Corazon Frio"})
+        self.assertEqual(turn.sticker.label, "corazón frío")
 
     def test_el_turno_sin_sticker_no_manda_aunque_el_modelo_lo_pida(self):
         """El 'a veces no' es del sistema: si dependiera del prompt sería un 'casi nunca no'."""
@@ -1251,7 +1274,7 @@ class PersonalidadYStickersTests(TestCase):
         with patch("apps.whatsapp.kapso.send_sticker") as send:
             salida = tool.invoke({"nombre": "granizado feliz"})
         send.assert_not_called()
-        self.assertFalse(turn.posted)
+        self.assertIsNone(turn.sticker)
         self.assertIn("texto", salida.lower())
         self.assertEqual(self.contact.stickers_today(), [])
 
@@ -1350,6 +1373,69 @@ class RespuestaVaciaTests(TestCase):
 
     def test_el_texto_normal_no_cambia(self):
         self.assertEqual(_for_whatsapp("Listo parce", already_answered=True), "Listo parce")
+
+
+class MensajesSeguidosTests(TestCase):
+    """Una persona manda lo que contesta y lo que pregunta en dos mensajes."""
+
+    def test_un_mensaje_normal_sigue_siendo_uno(self):
+        self.assertEqual(_split_messages("Listo parce, ¿algo más?"), ("Listo parce, ¿algo más?",))
+
+    def test_la_linea_de_guiones_parte_la_respuesta_en_dos(self):
+        self.assertEqual(
+            _split_messages("Uf, esa está buena.\n---\n¿Personal o para 2?"),
+            ("Uf, esa está buena.", "¿Personal o para 2?"),
+        )
+
+    def test_pasarse_de_dos_no_empapela_el_chat(self):
+        """El tope vive aquí: en el prompt sería una sugerencia."""
+        self.assertEqual(
+            _split_messages("Uno\n---\nDos\n---\nTres\n---\nCuatro"),
+            ("Uno", "Dos\nTres\nCuatro"),
+        )
+
+    def test_sin_texto_no_hay_mensajes(self):
+        self.assertEqual(_split_messages(""), ())
+
+
+class EntregaDelTurnoTests(TestCase):
+    """El orden en que sale lo del turno: primero el texto, el sticker de remate."""
+
+    def setUp(self):
+        self.contact = WhatsAppContact.objects.create(phone=PHONE)
+        self.sticker = Sticker.objects.create(
+            label="perro feliz", description="para celebrar", data=b"webp", byte_size=4
+        )
+
+    def _deliver(self, turn):
+        orden = []
+        with patch("apps.whatsapp.worker.MESSAGE_GAP_SECONDS", 0), patch(
+            "apps.whatsapp.kapso.send_text",
+            side_effect=lambda pid, to, text: orden.append(("texto", text)),
+        ), patch(
+            "apps.whatsapp.kapso.send_sticker",
+            side_effect=lambda pid, to, url: orden.append(("sticker", url)) or {"ok": True},
+        ):
+            worker._deliver(self.contact, PHONE_NUMBER_ID, turn)
+        return orden
+
+    def test_el_sticker_sale_despues_del_texto(self):
+        turn = AgentTurn(
+            replies=("Listo, ya queda.",),
+            message_ids=(),
+            mutated=False,
+            sticker=self.sticker,
+        )
+        orden = self._deliver(turn)
+        self.assertEqual([kind for kind, _ in orden], ["texto", "sticker"])
+
+    def test_los_dos_mensajes_salen_en_orden(self):
+        turn = AgentTurn(replies=("Uno", "Dos"), message_ids=(), mutated=False)
+        self.assertEqual(self._deliver(turn), [("texto", "Uno"), ("texto", "Dos")])
+
+    def test_un_turno_de_solo_sticker_no_manda_texto_vacio(self):
+        turn = AgentTurn(replies=(), message_ids=(), mutated=False, sticker=self.sticker)
+        self.assertEqual([kind for kind, _ in self._deliver(turn)], ["sticker"])
 
 
 class PulsoDeStickersTests(TestCase):

@@ -6,8 +6,10 @@ crea la base— y el suelo al que se vuelve cuando alguien edita uno de fábrica
 y se arrepiente; a partir del arranque el catálogo vive en la tabla `AgentTone`
 y se edita desde el panel, porque cómo habla el negocio es del negocio.
 
-El `sample` no lo lee nunca el modelo: es para que quien elige desde el panel
-vea de qué está hablando sin tener que leerse las instrucciones.
+El `sample` sirve para dos cosas: que quien elige desde el panel vea de qué
+está hablando sin leerse las instrucciones, y que el modelo tenga una frase
+suya de muestra al final del prompt. Un ejemplo corto le calibra el registro
+mejor que un párrafo describiéndoselo.
 """
 
 DEFAULT_TONE = "parcero"

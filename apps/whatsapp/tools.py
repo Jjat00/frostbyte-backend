@@ -10,7 +10,7 @@ import unicodedata
 from decimal import Decimal
 from difflib import SequenceMatcher
 
-from django.db import models, transaction
+from django.db import transaction
 from django.utils import timezone
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
@@ -186,6 +186,10 @@ class TurnContext:
     `sticker_urge`: si este turno puede llevar sticker (ver mood.py). Se tira
     una vez y lo leen los dos lados, el prompt y la tool. En None —pruebas por
     shell— no hay dado y la tool manda lo que le pidan.
+    `sticker`: el que el modelo eligió, esperando a que salga el texto. No se
+    manda dentro de la tool a propósito: una persona escribe y REMATA con el
+    sticker, y el modelo solo escribe su mensaje después de llamar a las tools.
+    Mandándolo en el momento llegaba siempre delante, que es justo al revés.
     """
 
     def __init__(self, phone_number_id="", message_id="", sticker_urge=None):
@@ -194,6 +198,7 @@ class TurnContext:
         self.posted = False
         self.answered = False
         self.sticker_urge = sticker_urge
+        self.sticker = None
 
     @property
     def can_send(self):
@@ -265,7 +270,7 @@ def build_tools(contact, turn=None):
         for category in categories:
             products = (
                 Product.objects.filter(category=category, is_active=True, is_coming_soon=False)
-                .prefetch_related("variants", "modifier_links")
+                .prefetch_related("variants", "modifier_links__group")
                 .order_by("name")
             )
             product_lines = []
@@ -274,7 +279,9 @@ def build_tools(contact, turn=None):
                 if not variants:
                     continue
                 prices = "; ".join(f"{v.name} {_cop(v.price)} [variante_id={v.id}]" for v in variants)
-                configurable = any(pm.is_active for pm in product.modifier_links.all())
+                configurable = any(
+                    pm.is_active and pm.group.is_active for pm in product.modifier_links.all()
+                )
                 extra = f" (personalizable, slug='{product.slug}')" if configurable else ""
                 product_lines.append(f"  - {product.name}: {prices}{extra}")
             if product_lines:
@@ -353,7 +360,7 @@ def build_tools(contact, turn=None):
                 category__business__is_active=True,
             )
             .select_related("category", "category__business")
-            .prefetch_related("variants", "modifier_links")
+            .prefetch_related("variants", "modifier_links__group")
         )
         scored = []
         for product in products:
@@ -421,7 +428,9 @@ def build_tools(contact, turn=None):
                 prices = "; ".join(
                     f"{v.name} {_cop(v.price)} [variante_id={v.id}]" for v in variants
                 )
-                configurable = any(pm.is_active for pm in product.modifier_links.all())
+                configurable = any(
+                    pm.is_active and pm.group.is_active for pm in product.modifier_links.all()
+                )
                 extra = f" (personalizable, slug='{product.slug}')" if configurable else ""
                 lines.append(f"  - {product.name}: {prices}{extra}")
         sobrantes = len(scored) - _MAX_RESULTADOS
@@ -937,9 +946,10 @@ def build_tools(contact, turn=None):
 
     @tool
     def enviar_sticker(nombre: str) -> str:
-        """Manda uno de los stickers del banco al chat. Elige por el "cuándo
-        usarlo" de la lista que tienes en tus instrucciones, no por su nombre.
-        Después de mandarlo escribe como mucho una línea corta, o nada.
+        """Elige el sticker con el que rematas este turno: sale DETRÁS del
+        mensaje que escribas, como cuando uno escribe algo y remata con un
+        sticker. Elige por el "cuándo usarlo" de la lista que tienes en tus
+        instrucciones, no por su nombre. Después sigue escribiendo normal.
 
         Args:
             nombre: el nombre exacto del sticker, tal como aparece en tu lista
@@ -960,14 +970,15 @@ def build_tools(contact, turn=None):
             # los que existen es más barato que un turno perdido
             names = ", ".join(s.label for s in catalog) or "ninguno"
             return f"No existe el sticker '{nombre}'. Los que hay son: {names}."
-        result = kapso.send_sticker(turn.phone_number_id, contact.phone, sticker.url)
-        if result is None:
-            return "No se pudo mandar el sticker. Sigue con texto y no lo menciones."
-        turn.posted = True
+        # Queda apuntado y lo manda el worker cuando el texto ya salió (ver
+        # stickers.deliver): así el orden es el de una persona y, si el turno
+        # acaba descartándose, el cliente no se queda con un sticker suelto.
+        turn.sticker = sticker
         turn.answered = True
-        Sticker.objects.filter(pk=sticker.pk).update(sent_count=models.F("sent_count") + 1)
-        contact.remember_sticker(sticker.label)
-        return "Sticker enviado. El cliente ya lo vio: no lo describas."
+        return (
+            f"Listo: el sticker «{sticker.label}» sale justo detrás de tu mensaje. "
+            "Escribe lo que ibas a decir y no lo menciones ni lo describas."
+        )
 
     @tool
     def enviar_foto_producto(producto_slug: str) -> str:

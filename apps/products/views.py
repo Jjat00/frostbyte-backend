@@ -104,7 +104,9 @@ class ProductViewSet(viewsets.ModelViewSet):
     queryset = Product.objects.all().select_related(
         "category", "business").prefetch_related("variants").annotate(
         _is_configurable=Exists(
-            ProductModifierGroup.objects.filter(product=OuterRef("pk"), is_active=True)
+            ProductModifierGroup.objects.filter(
+                product=OuterRef("pk"), is_active=True, group__is_active=True
+            )
         ))
     permission_classes = [IsAdminOrReadOnly]
     lookup_field = "slug"
@@ -155,7 +157,12 @@ class ProductViewSet(viewsets.ModelViewSet):
             )
             active_links = Prefetch(
                 "modifier_links",
-                queryset=ProductModifierGroup.objects.filter(is_active=True)
+                # Un grupo apagado no sale por ningún canal: apagarlo es cómo se
+                # retira del menú algo que ya no se ofrece (las salsas mientras
+                # no haya forma de decir cuáles hay hoy).
+                queryset=ProductModifierGroup.objects.filter(
+                    is_active=True, group__is_active=True
+                )
                 .select_related("group")
                 .prefetch_related(active_options)
                 .order_by("display_order"),

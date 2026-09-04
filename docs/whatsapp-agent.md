@@ -254,6 +254,15 @@ dato va limpio, y si el cliente está molesto o reclamando el chiste se acaba.
 El resto del prompt (reglas de oro, flujo del pedido, cobertura, pagos) no
 cambió.
 
+**La voz se recuerda al final.** El bloque QUIÉN ERES abre el prompt y detrás
+vienen páginas de reglas operativas; el modelo salía cumpliendo las reglas y
+hablando como un formulario ("¿Qué deseas pedir?", chat del 03/09). Por eso el
+prompt cierra —después de todo lo demás, antes de lo que cambia cada turno— con
+un bloque **TU VOZ** que repite la personalidad y añade la **frase de muestra**
+del tono (`AgentTone.sample`, que hasta ahora solo se veía en el panel): un
+ejemplo corto calibra el registro mejor que otro párrafo describiéndolo. Los
+ajustes de estilo del negocio van después, porque mandan sobre la personalidad.
+
 Lo configurable vive en dos sitios que leen la misma fila (`AgentSettings`,
 singleton): el módulo **Agente de WhatsApp** del panel (`/agente-whatsapp`,
 solo admin) y **WhatsApp → Configuración del agente** en el admin de Django. El
@@ -296,21 +305,41 @@ apunta al backend de producción, donde el sticker recién subido no existe.
 
 | Tool | Cuándo la usa |
 | --- | --- |
-| `enviar_sticker` | Saludo, pedido creado, agradecimiento y malas noticias. Nunca armando el pedido. |
+| `enviar_sticker` | Un gesto, cuando el momento lo pide y el dado del turno lo permite (ver *El pulso*). No sale en el momento: queda apuntado y el worker lo manda **detrás** del texto. |
 | `enviar_foto_producto` | El cliente pregunta cómo es algo: manda la foto real (`Product.image_url`). |
 | `enviar_botones` | Solo respuestas cerradas: confirmar el pedido y elegir el pago. Lo que toque el cliente vuelve como texto (`interactive.button_reply`, ya soportado). |
 | `reaccionar` | Emoji sobre el mensaje del cliente. No genera mensaje ni notificación. |
 
-Estas tools escriben en WhatsApp en el momento en que el modelo las llama, no
-al final del turno, y eso deja dos cosas distintas en `TurnContext`:
+La foto y los botones escriben en WhatsApp en el momento en que el modelo las
+llama, no al final del turno, y eso deja dos cosas distintas en `TurnContext`:
 
-- **`posted`** — quedó un mensaje en el chat (sticker, foto, botones). El turno
-  ya no se puede descartar y rehacer, igual que uno que tocó la base de datos.
+- **`posted`** — quedó un mensaje en el chat (foto, botones). El turno ya no se
+  puede descartar y rehacer, igual que uno que tocó la base de datos.
 - **`answered`** — el turno ya respondió, aunque no haya sido un mensaje. Una
   reacción sola cuenta: sin esto, un "mil gracias" contestado con ❤️ recibía
   además un "Perdón, ¿me lo repites?" (visto en prueba el 03/09).
 
 Cuando el turno respondió sin texto, el worker no manda nada.
+
+### Varios mensajes en un turno
+
+Una persona por WhatsApp manda lo que contesta y lo que pregunta en dos
+mensajes, y remata con el sticker; el agente mandaba siempre uno solo y con el
+sticker por delante. `worker._deliver` entrega el turno en ese orden:
+
+1. **El texto**, en uno o dos mensajes. El modelo los separa con una línea que
+   tenga solo `---` y `agent._split_messages` la parte. El tope de dos vive en
+   el código (`MAX_REPLIES`): en el prompt sería una sugerencia, y lo que pase
+   de ahí se pega al último mensaje en vez de empapelar el chat.
+2. **El sticker**, si eligió uno. `enviar_sticker` ya no lo manda: lo apunta en
+   `turn.sticker` y `stickers.deliver()` lo entrega cuando el texto ya salió
+   —el modelo llama a las tools *antes* de escribir, así que mandarlo ahí lo
+   ponía siempre delante—. Ahí mismo se suma `sent_count` y se apunta en la
+   memoria corta del contacto: un sticker que Kapso rechaza no gasta el cupo
+   del día ni el enfriamiento.
+
+Entre mensaje y mensaje hay `MESSAGE_GAP_SECONDS`: pegados en el mismo segundo
+se leen como una ráfaga de bot.
 
 ### El banco de stickers
 

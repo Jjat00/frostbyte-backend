@@ -358,7 +358,11 @@ class AgentTone(models.Model):
         max_length=200,
         blank=True,
         verbose_name="Frase de ejemplo",
-        help_text="Cómo sonaría un saludo suyo. Tampoco la lee el agente: es para el panel.",
+        help_text=(
+            "Cómo sonaría un saludo suyo. Se ve en el panel y además se la damos al "
+            "agente: una frase de muestra le calibra el registro mejor que un párrafo "
+            "describiéndoselo."
+        ),
     )
     persona = models.TextField(
         verbose_name="Personalidad",
@@ -410,6 +414,18 @@ class AgentTone(models.Model):
         if tone and tone.persona.strip():
             return tone.persona.strip()
         return seed_persona(key)
+
+    @classmethod
+    def sample_for(cls, key):
+        """La frase de muestra del tono elegido, o vacío si no tiene.
+
+        Cae en cascada como persona_for, pero sin suelo: un tono puede no
+        tener muestra y el prompt se apaña sin ella.
+        """
+        tone = cls.objects.filter(key=key).first() or cls.objects.first()
+        if tone and tone.sample.strip():
+            return tone.sample.strip()
+        return (seed_tone(key) or {}).get("sample", "")
 
     @property
     def seed(self):
@@ -529,6 +545,10 @@ class AgentSettings(models.Model):
     def persona(self):
         """El bloque QUIEN ERES que le toca segun el tono elegido."""
         return AgentTone.persona_for(self.tone_preset)
+
+    def sample(self):
+        """Una frase de muestra del tono elegido, para el prompt."""
+        return AgentTone.sample_for(self.tone_preset)
 
     @property
     def tone_catalog(self):

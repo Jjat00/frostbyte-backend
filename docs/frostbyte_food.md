@@ -31,6 +31,14 @@ Ejemplo salchipapa: variantes `Personal`/`2 personas`/`3 personas` (precio base)
 grupos `Carnes` (elige 2-3), `Salsas` (elige 2-3 de 8), `Bebida` (0-1). El precio
 final = precio de la variante + suma de `price_delta` de las opciones elegidas.
 
+**Un grupo apagado (`ModifierGroup.is_active=False`) no existe para nadie**: ni
+en la carta, ni en el detalle del producto, ni para el agente de WhatsApp. Es
+cómo se retira del menú una opción que ya no se ofrece sin borrar el histórico
+de los pedidos que la usaron. Así están desde el 04/09 `Salsas` (mientras no
+haya forma de decir cuáles hay hoy) y `Presentación de la carne` (la carne va
+en una sola presentación). Para volver a ofrecerlas basta con reactivar el
+grupo: sus opciones y sus asociaciones a productos siguen ahí.
+
 ## Endpoints nuevos / cambios
 
 - `GET/POST /api/v1/businesses/` — CRUD de negocios (lectura pública, escritura admin).

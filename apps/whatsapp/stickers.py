@@ -1,4 +1,6 @@
-"""Convierte cualquier imagen en un sticker que WhatsApp acepte.
+"""Los stickers de Frosty: cómo se fabrican y cómo se entregan.
+
+Convierte cualquier imagen en un sticker que WhatsApp acepte.
 
 WhatsApp no manda un sticker: manda un WebP con requisitos estrictos (512x512
 exactos, 100 KB si es fijo y 500 KB si es animado) y rechaza el mensaje entero
@@ -218,3 +220,26 @@ def from_upload(raw, kind="image"):
     if kind == "video":
         return from_video(raw)
     return normalize(raw)
+
+
+def deliver(contact, sticker, phone_number_id):
+    """Manda al chat un sticker del banco y lo apunta en la memoria corta.
+
+    El envío vive aquí y no en la tool que lo elige porque el sticker sale
+    DESPUÉS del texto del turno (ver tools.TurnContext): quien lo manda es el
+    worker, cuando el mensaje ya está en el chat. Apuntarlo antes de que salga
+    de verdad falsearía el pulso —el enfriamiento y el tope del día se cuentan
+    sobre stickers que el cliente vio (ver mood.py)—, así que las dos cosas
+    ocurren juntas y solo si Kapso lo aceptó.
+    """
+    from django.db.models import F
+
+    from . import kapso
+    from .models import Sticker
+
+    if kapso.send_sticker(phone_number_id, contact.phone, sticker.url) is None:
+        logger.warning("No se pudo entregar el sticker %s a %s", sticker.label, contact.phone)
+        return False
+    Sticker.objects.filter(pk=sticker.pk).update(sent_count=F("sent_count") + 1)
+    contact.remember_sticker(sticker.label)
+    return True

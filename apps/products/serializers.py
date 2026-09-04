@@ -258,7 +258,7 @@ class ProductSerializer(serializers.ModelSerializer):
         links = getattr(obj, "active_modifier_links", None)
         if links is None:
             links = list(
-                obj.modifier_links.filter(is_active=True)
+                obj.modifier_links.filter(is_active=True, group__is_active=True)
                 .select_related("group")
                 .order_by("display_order")
             )
@@ -325,7 +325,7 @@ class ProductListSerializer(serializers.ModelSerializer):
         cached = getattr(obj, "_is_configurable", None)
         if cached is not None:
             return cached
-        return obj.modifier_links.filter(is_active=True).exists()
+        return obj.modifier_links.filter(is_active=True, group__is_active=True).exists()
 
 
 class CategorySerializer(serializers.ModelSerializer):

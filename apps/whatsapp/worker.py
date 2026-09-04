@@ -28,6 +28,7 @@ from django.utils import timezone
 
 from . import kapso
 from . import media as wa_media
+from . import stickers
 from .models import (
     AgentSettings,
     ChatMessage,
@@ -57,6 +58,11 @@ _active = set()
 # Tope de respuestas descartadas seguidas: con un cliente que escribe sin parar
 # hay que contestar en algún momento aunque llegue otro mensaje justo después
 MAX_ABORTS = 2
+
+# Pausa entre los mensajes de un mismo turno (dos textos, o el texto y el
+# sticker que lo remata). Sin ella llegan pegados en el mismo segundo y se leen
+# como una ráfaga de bot; con ella se leen como alguien que sigue escribiendo.
+MESSAGE_GAP_SECONDS = 0.9
 
 # Tope del archivo que el dueño manda para volver sticker. Un video de sticker
 # es un bucle de segundos; lo que pase de aquí no iba a caber igual.
@@ -586,11 +592,28 @@ def _run_turn(phone, batch):
             _requeue(phone, batch)
             return
 
-    # Un turno que solo mandó un sticker o unos botones no lleva texto detrás:
-    # el mensaje ya está en el chat y añadir uno vacío sería un segundo mensaje
-    if turn.reply:
-        kapso.send_text(phone_number_id, contact.phone, turn.reply)
+    # Un turno que solo mandó una foto o unos botones no lleva texto detrás: el
+    # mensaje ya está en el chat y añadir uno vacío sería un segundo mensaje
+    _deliver(contact, phone_number_id, turn)
     _close_events(batch["event_ids"], WebhookEvent.Status.PROCESSED)
+
+
+def _deliver(contact, phone_number_id, turn):
+    """Manda lo que el turno tenga que decir, en el orden de una persona.
+
+    Primero el texto (uno o dos mensajes, ver agent._split_messages) y de
+    último el sticker, que es el remate y no el saludo: el modelo elige el
+    sticker mientras llama a las tools, o sea ANTES de escribir, así que
+    mandarlo en ese momento lo ponía siempre delante del mensaje.
+    """
+    for index, chunk in enumerate(turn.replies):
+        if index:
+            time.sleep(MESSAGE_GAP_SECONDS)
+        kapso.send_text(phone_number_id, contact.phone, chunk)
+    if turn.sticker is not None:
+        if turn.replies:
+            time.sleep(MESSAGE_GAP_SECONDS)
+        stickers.deliver(contact, turn.sticker, phone_number_id)
 
 
 def _process_event_safe(event_id):

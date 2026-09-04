@@ -165,6 +165,13 @@ CÓMO ESCRIBES (esto se nota más que cualquier otra cosa):
 - CORTO. Una o dos líneas por mensaje, como escribe una persona por WhatsApp. Un párrafo ya es \
 demasiado. La única excepción es el resumen del pedido y listar una categoría del menú, que \
 llevan sus líneas necesarias.
+- Corto NO es seco: lo de aquí abajo es el largo, la voz la pone QUIÉN ERES, también en las \
+preguntas del pedido. "¿Qué deseas pedir?" o "¿La quieres personal o para 2?" son de \
+formulario: la misma pregunta, dicha como la dirías tú, es la que hace que el cliente sienta \
+que le escribe alguien.
+- Puedes mandar DOS mensajes seguidos cuando de verdad son dos cosas (lo que contestas y lo \
+que preguntas): sepáralos con una línea que tenga solo --- y salen como dos mensajes. Uno \
+solo es lo normal; tres nunca. El resumen del pedido va siempre en uno.
 - Nada de cháchara: no repitas lo que el cliente acaba de decir, no anuncies lo que vas a \
 hacer ("permíteme reviso"), no expliques por qué preguntas algo, no cierres cada mensaje con \
 "¿algo más?" ni con un resumen de lo que ya se dijo. Contesta lo que preguntó y ya.
@@ -185,7 +192,9 @@ LO QUE PUEDES MANDAR ADEMÁS DE TEXTO:
 - Cuando una de estas tools ya puso algo en el chat, escribe UNA línea corta o ninguna. Nunca \
 describas lo que acabas de mandar: el cliente lo está viendo."""
 
-STICKER_ABILITY = """- enviar_sticker manda uno del banco de abajo. Es un gesto, no un \
+STICKER_ABILITY = """- enviar_sticker elige uno del banco de abajo y lo manda DETRÁS de tu \
+mensaje, como cuando uno escribe algo y remata con un sticker (llámala y sigue escribiendo \
+normal: el cliente recibe primero tu texto y enseguida el sticker). Es un gesto, no un \
 recurso de atención: va donde tú pondrías uno escribiéndole a alguien —hay algo que \
 celebrar, agradecer o lamentar, el cliente hace un chiste, se cierra un trato, se despiden, \
 o simplemente le va a sacar una sonrisa—, y eso puede pasar en cualquier momento de la \
@@ -222,6 +231,17 @@ STICKER_URGE_PROMPT = """
 
 STICKERS EN ESTE TURNO (nota interna: no la menciones nunca, y jamás le digas al cliente que \
 no puedes mandar stickers): {note}"""
+
+VOICE_PROMPT = """
+
+TU VOZ (lo último que revisas antes de mandar cada mensaje): todo lo de arriba dice QUÉ \
+preguntas, en qué orden y con qué largo; cómo suena cada frase lo pones tú. Un mensaje \
+correcto que habría escrito cualquier bot está mal escrito. Reléelo antes de mandarlo: si no \
+suena a ti, dilo otra vez con tus palabras. Eres:
+{persona}"""
+
+VOICE_SAMPLE_PROMPT = """
+Así suena un saludo tuyo: «{sample}»"""
 
 NOW_PROMPT = """
 
@@ -349,6 +369,15 @@ def build_system_prompt(contact=None, turn=None):
         prompt += SENDING_PROMPT.format(abilities="\n".join(abilities))
     if bank:
         prompt += STICKER_BANK_PROMPT.format(bank=Sticker.render(bank))
+    # El recordatorio de la voz va al final de lo estable: entre QUIÉN ERES y
+    # aquí hay páginas de reglas operativas, y lo que queda cerca del mensaje
+    # es lo que el modelo aplica. Los ajustes del negocio van después porque
+    # mandan sobre la personalidad, no al revés.
+    prompt += VOICE_PROMPT.format(persona=config.persona())
+    # Una frase de muestra afina el registro más que otro párrafo explicándolo
+    sample = config.sample()
+    if sample:
+        prompt += VOICE_SAMPLE_PROMPT.format(sample=sample)
     if config.tone.strip():
         prompt += TONE_PROMPT.format(tone=config.tone.strip())
 
@@ -450,19 +479,46 @@ def _for_whatsapp(reply, already_answered=False):
     return "" if already_answered else "Perdón, ¿me lo repites?"
 
 
+# Una línea de guiones sola: como el modelo pide mandar dos mensajes seguidos.
+SPLIT_PATTERN = re.compile(r"^[ \t]*-{3,}[ \t]*$", re.MULTILINE)
+MAX_REPLIES = 2
+
+
+def _split_messages(reply):
+    """Los mensajes que el modelo quiso mandar, en orden.
+
+    Una persona por WhatsApp manda lo que contesta y lo que pregunta en dos
+    mensajes, no en un párrafo. El tope está aquí y no solo en el prompt: sin
+    él, un modelo que se entusiasma con el separador convierte una respuesta
+    en cinco notificaciones seguidas. Lo que pase del tope se pega al último.
+    """
+    if not reply:
+        return ()
+    parts = [part.strip() for part in SPLIT_PATTERN.split(reply)]
+    parts = [part for part in parts if part]
+    if len(parts) <= MAX_REPLIES:
+        return tuple(parts)
+    return tuple(parts[: MAX_REPLIES - 1] + ["\n".join(parts[MAX_REPLIES - 1 :])])
+
+
 class AgentTurn(NamedTuple):
     """Resultado de un turno, con lo necesario para poder descartarlo.
 
+    replies: los mensajes de texto a mandar, en orden. Casi siempre uno; el
+    modelo puede partir su respuesta en dos cuando de verdad son dos cosas.
     message_ids: todo lo que el turno añadió al hilo (mensaje del cliente,
     llamadas a tools y respuesta), para borrarlo con discard_turn.
     mutated: el turno tocó la base de datos (creó/modificó/canceló un pedido,
     guardó una preferencia o pidió un humano), así que descartarlo dejaría al
     agente sin memoria de algo que YA pasó: hay que enviarlo sí o sí.
+    sticker: el que remata el turno, si el modelo eligió uno. Lo manda el
+    worker después del texto (ver stickers.deliver).
     """
 
-    reply: str
+    replies: tuple
     message_ids: tuple
     mutated: bool
+    sticker: object = None
 
 
 def run_turn(contact, user_text, phone_number_id="", message_id="", customer_sticker=False):
@@ -510,13 +566,16 @@ def run_turn(contact, user_text, phone_number_id="", message_id="", customer_sti
         for message in added
         for call in (getattr(message, "tool_calls", None) or [])
     )
-    # Un sticker o unos botones ya están en el teléfono del cliente: el turno
-    # es tan irreversible como uno que tocó la base de datos, así que tampoco
-    # se puede descartar y rehacer
+    # Una foto o unos botones ya están en el teléfono del cliente: el turno es
+    # tan irreversible como uno que tocó la base de datos, así que tampoco se
+    # puede descartar y rehacer. El sticker no cuenta: todavía no ha salido.
     return AgentTurn(
-        reply=_for_whatsapp(messages[-1].content, already_answered=turn_ctx.answered),
+        replies=_split_messages(
+            _for_whatsapp(messages[-1].content, already_answered=turn_ctx.answered)
+        ),
         message_ids=tuple(m.id for m in added),
         mutated=mutated or turn_ctx.posted,
+        sticker=turn_ctx.sticker,
     )
 
 
@@ -541,4 +600,4 @@ def discard_turn(contact, message_ids):
 
 def run_agent(contact, user_text):
     """Corre un turno y devuelve solo el texto (pruebas manuales por shell)."""
-    return run_turn(contact, user_text).reply
+    return "\n".join(run_turn(contact, user_text).replies)
