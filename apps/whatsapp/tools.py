@@ -946,10 +946,10 @@ def build_tools(contact, turn=None):
 
     @tool
     def enviar_sticker(nombre: str) -> str:
-        """Elige el sticker con el que rematas este turno: sale DETRÁS del
-        mensaje que escribas, como cuando uno escribe algo y remata con un
-        sticker. Elige por el "cuándo usarlo" de la lista que tienes en tus
-        instrucciones, no por su nombre. Después sigue escribiendo normal.
+        """Elige el sticker con el que rematas este turno: sale al final, detrás
+        del texto que escribas. Puede ir solo, sin texto, cuando el gesto era
+        toda tu respuesta. Elige por el "cuándo usarlo" de la lista que tienes
+        en tus instrucciones, no por su nombre.
 
         Args:
             nombre: el nombre exacto del sticker, tal como aparece en tu lista
@@ -976,8 +976,9 @@ def build_tools(contact, turn=None):
         turn.sticker = sticker
         turn.answered = True
         return (
-            f"Listo: el sticker «{sticker.label}» sale justo detrás de tu mensaje. "
-            "Escribe lo que ibas a decir y no lo menciones ni lo describas."
+            f"Listo: el sticker «{sticker.label}» sale al final de este turno. Si el gesto "
+            "era toda tu respuesta, no escribas nada más y ya está; si aún te falta decir "
+            "algo, escríbelo y saldrá antes del sticker. No lo menciones ni lo describas."
         )
 
     @tool

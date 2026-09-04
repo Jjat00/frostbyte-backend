@@ -305,7 +305,7 @@ apunta al backend de producción, donde el sticker recién subido no existe.
 
 | Tool | Cuándo la usa |
 | --- | --- |
-| `enviar_sticker` | Un gesto, cuando el momento lo pide y el dado del turno lo permite (ver *El pulso*). No sale en el momento: queda apuntado y el worker lo manda **detrás** del texto. |
+| `enviar_sticker` | Un gesto, cuando el momento lo pide y el dado del turno lo permite (ver *El pulso*). No sale en el momento: queda apuntado y el worker lo manda al final del turno, detrás del texto **si lo hay** — puede ir solo. |
 | `enviar_foto_producto` | El cliente pregunta cómo es algo: manda la foto real (`Product.image_url`). |
 | `enviar_botones` | Solo respuestas cerradas: confirmar el pedido y elegir el pago. Lo que toque el cliente vuelve como texto (`interactive.button_reply`, ya soportado). |
 | `reaccionar` | Emoji sobre el mensaje del cliente. No genera mensaje ni notificación. |
@@ -337,6 +337,12 @@ sticker por delante. `worker._deliver` entrega el turno en ese orden:
    ponía siempre delante—. Ahí mismo se suma `sent_count` y se apunta en la
    memoria corta del contacto: un sticker que Kapso rechaza no gasta el cupo
    del día ni el enfriamiento.
+
+**El texto no es obligatorio**: el turno puede ser solo el sticker, y el prompt
+lo dice con sus casos (el cliente mandó uno, hizo un chiste, se despidió, dio
+las gracias). Eso ya lo permitía `answered`, que es lo que evita el "Perdón,
+¿me lo repites?" cuando el modelo calla a propósito; lo que faltaba era que el
+prompt no le pidiera escribir siempre algo detrás.
 
 Entre mensaje y mensaje hay `MESSAGE_GAP_SECONDS`: pegados en el mismo segundo
 se leen como una ráfaga de bot.

@@ -1222,7 +1222,7 @@ class PersonalidadYStickersTests(TestCase):
         self.assertEqual(turn.sticker.label, "granizado feliz")
         self.assertTrue(turn.answered)
         self.assertFalse(turn.posted, "todavía no ha salido nada: el turno se puede rehacer")
-        self.assertIn("detrás de tu mensaje", salida)
+        self.assertIn("al final de este turno", salida)
         self.assertEqual(Sticker.objects.get(label="granizado feliz").sent_count, 0)
 
     def test_el_sticker_se_entrega_despues_del_texto_y_se_apunta(self):
@@ -1434,6 +1434,7 @@ class EntregaDelTurnoTests(TestCase):
         self.assertEqual(self._deliver(turn), [("texto", "Uno"), ("texto", "Dos")])
 
     def test_un_turno_de_solo_sticker_no_manda_texto_vacio(self):
+        """El gesto puede ser la respuesta entera: sin texto no se inventa ninguno."""
         turn = AgentTurn(replies=(), message_ids=(), mutated=False, sticker=self.sticker)
         self.assertEqual([kind for kind, _ in self._deliver(turn)], ["sticker"])
 

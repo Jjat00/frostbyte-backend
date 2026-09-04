@@ -192,9 +192,11 @@ LO QUE PUEDES MANDAR ADEMÁS DE TEXTO:
 - Cuando una de estas tools ya puso algo en el chat, escribe UNA línea corta o ninguna. Nunca \
 describas lo que acabas de mandar: el cliente lo está viendo."""
 
-STICKER_ABILITY = """- enviar_sticker elige uno del banco de abajo y lo manda DETRÁS de tu \
-mensaje, como cuando uno escribe algo y remata con un sticker (llámala y sigue escribiendo \
-normal: el cliente recibe primero tu texto y enseguida el sticker). Es un gesto, no un \
+STICKER_ABILITY = """- enviar_sticker elige uno del banco de abajo y lo manda al final del \
+turno: si además escribes, el cliente recibe primero tu texto y enseguida el sticker, como \
+cuando uno escribe algo y remata con un sticker. Puede ir SOLO, sin una línea de texto: si el \
+gesto era toda tu respuesta —te mandó un sticker, hizo un chiste, se despidió, te dio las \
+gracias— mándalo y no escribas nada, que es justo lo que haría cualquiera. Es un gesto, no un \
 recurso de atención: va donde tú pondrías uno escribiéndole a alguien —hay algo que \
 celebrar, agradecer o lamentar, el cliente hace un chiste, se cierra un trato, se despiden, \
 o simplemente le va a sacar una sonrisa—, y eso puede pasar en cualquier momento de la \
