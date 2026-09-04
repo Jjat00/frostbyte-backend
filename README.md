@@ -142,6 +142,14 @@ Frostbyte incluye múltiples capacidades de IA usando **OpenAI API**, distribuid
 - **Tracking de cuota**: Cada llamada a la API suma su costo (100 para `search.list`, 1 para `videos.list`). Endpoint `/quota-status` expone el consumo del día. Reseteo diario a medianoche Pacífico (03:00 Colombia)
 - **MusicSettings**: Singleton `{ source: 'spotify' | 'youtube' }` expuesto en `/music-settings/` (GET público, PATCH admin). El admin toggle desde el panel cambia qué componente ven los clientes
 
+#### Estadísticas de música (`/music-stats/`)
+- **Qué responde**: géneros, comparativa entre pisos, hora de la noche, día de la semana, tops de canciones y artistas, y evolución de géneros mes a mes. Solo staff autenticado. Parámetros: `days` (o `all`), `start`/`end` en ISO y `floor`
+- **La noche, no la fecha**: lo pedido antes de las 6 a. m. cuenta para la noche anterior (`stats.OPERATING_DAY_CUTOFF_HOUR`), si no cada noche aparecería partida en dos
+- **Los géneros NO vienen de Spotify**: la API devuelve `genres: []` para todos los artistas de esta aplicación y los endpoints por lotes responden 403. El género lo pone el modelo de lenguaje una sola vez por artista y se cachea en `ArtistGenre` (taxonomía cerrada en `apps/music/genres.py`)
+  - `manage.py classify_artist_genres` clasifica solo los artistas que faltan (`--force` para rehacer; nunca pisa lo corregido a mano en el admin)
+  - `manage.py load_artist_genres` carga los ~1.000 ya clasificados desde `fixtures/artist_genres.json` sin gastar llamadas; `--dump` regenera el archivo tras clasificar artistas nuevos
+- **Front**: `/musica/estadisticas` (pestaña del panel de música)
+
 ### Juegos (`/apps/games/`)
 - "Duelo Frostbyte" - Juego de reacción multijugador
 - WebSocket con Django Channels

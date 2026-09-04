@@ -1,5 +1,8 @@
 import logging
 import os
+from datetime import date, timedelta
+
+from django.utils import timezone
 
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
@@ -8,6 +11,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.views import APIView
 
 from .models import SongRequest, MusicSettings, FLOOR_CHOICES, DEFAULT_FLOOR
+from .stats import build_stats
 from .consumers import broadcast_music_update
 from .serializers import (
     SongRequestSerializer,
@@ -519,3 +523,44 @@ class MusicSettingsView(APIView):
         broadcast_music_update()
         return Response(serializer.data)
 
+
+
+class MusicStatsView(APIView):
+    """Estadísticas de lo que la gente pide: géneros, pisos, horas y tops.
+
+    Solo para el equipo. El rango llega como `days` (los últimos N días de
+    operación) o como `start`/`end` en formato ISO; sin parámetros devuelve la
+    historia completa, que es lo interesante cuando se compara un piso con el
+    otro. `floor` acota a un piso.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        start, end = self._range(request)
+        floor = _parse_floor(request.query_params.get("floor"), default=None)
+        return Response(build_stats(start=start, end=end, floor=floor))
+
+    def _range(self, request):
+        params = request.query_params
+        if params.get("start") or params.get("end"):
+            return self._parse_date(params.get("start")), self._parse_date(params.get("end"))
+
+        days = params.get("days")
+        if not days or days == "all":
+            return None, None
+        try:
+            days = int(days)
+        except (TypeError, ValueError):
+            return None, None
+        hoy = timezone.localdate()
+        return hoy - timedelta(days=max(days, 1) - 1), hoy
+
+    @staticmethod
+    def _parse_date(value):
+        if not value:
+            return None
+        try:
+            return date.fromisoformat(value)
+        except ValueError:
+            return None

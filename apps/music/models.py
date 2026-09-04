@@ -1,6 +1,10 @@
 from django.db import models
 from django.utils import timezone
 
+from apps.search import normalize_text
+
+from .genres import GENRE_CHOICES
+
 # Pisos con sonido propio. Cada piso tiene su propia cuenta de Spotify.
 FLOOR_CHOICES = [(2, "Piso 2"), (3, "Piso 3")]
 DEFAULT_FLOOR = 2
@@ -163,3 +167,78 @@ class SongRequest(models.Model):
         self.status = self.Status.CANCELLED
         self.save(update_fields=["status", "updated_at"])
 
+
+
+def primary_artist(artist_name):
+    """El artista principal de una canción.
+
+    Spotify entrega los colaboradores en un solo campo ("Feid, Granuja"), y el
+    género de la canción es el del primero: el featuring no cambia de cajón a
+    un corrido. Devuelve el nombre tal cual lo escribió Spotify, ya recortado.
+    """
+    if not artist_name:
+        return ""
+    for separador in (",", " feat.", " ft.", " x ", " & "):
+        if separador in artist_name:
+            artist_name = artist_name.split(separador)[0]
+    return artist_name.strip()
+
+
+class ArtistGenre(models.Model):
+    """El género de un artista, clasificado una sola vez y cacheado.
+
+    No viene de Spotify: la API dejó de exponer `genres` para esta aplicación
+    (ver `apps/music/genres.py`). Lo pone el modelo de lenguaje con el comando
+    `classify_artist_genres`, y cualquier error se corrige a mano desde el
+    admin — `source` distingue una cosa de la otra para que una reclasificación
+    no pise lo corregido por una persona.
+    """
+
+    class Source(models.TextChoices):
+        AI = "ai", "Clasificado por IA"
+        MANUAL = "manual", "Corregido a mano"
+
+    artist_key = models.CharField(
+        max_length=200,
+        unique=True,
+        verbose_name="Clave del artista",
+        help_text="Nombre normalizado (sin tildes ni mayúsculas) usado para cruzar con las canciones",
+    )
+    artist_name = models.CharField(
+        max_length=200,
+        verbose_name="Artista",
+        help_text="Nombre tal como lo devuelve Spotify",
+    )
+    genre = models.CharField(
+        max_length=30,
+        choices=GENRE_CHOICES,
+        verbose_name="Género",
+    )
+    source = models.CharField(
+        max_length=10,
+        choices=Source.choices,
+        default=Source.AI,
+        verbose_name="Origen",
+    )
+    model_used = models.CharField(
+        max_length=60,
+        blank=True,
+        verbose_name="Modelo",
+        help_text="Modelo de lenguaje que hizo la clasificación",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Género de artista"
+        verbose_name_plural = "Géneros de artistas"
+        ordering = ["artist_name"]
+        indexes = [models.Index(fields=["genre"])]
+
+    def __str__(self):
+        return f"{self.artist_name} → {self.get_genre_display()}"
+
+    @staticmethod
+    def key_for(artist_name):
+        """La clave con la que se cruza un `SongRequest` con su género."""
+        return normalize_text(primary_artist(artist_name))

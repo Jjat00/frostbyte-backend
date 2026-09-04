@@ -368,6 +368,9 @@ WHATSAPP_AGENT_REASONING_EFFORT = os.getenv('WHATSAPP_AGENT_REASONING_EFFORT', '
 # y decidir. Un comprobante de pago sí se lee con visión buena: los montos.
 WHATSAPP_VISION_MODEL = os.getenv('WHATSAPP_VISION_MODEL', 'gpt-5.6-luna')
 WHATSAPP_TRANSCRIBE_MODEL = os.getenv('WHATSAPP_TRANSCRIBE_MODEL', 'gpt-4o-mini-transcribe')
+# Clasificar el género de un artista es trabajo mecánico y de una sola vez por
+# artista (el resultado se cachea en music.ArtistGenre): va con el modelo barato.
+MUSIC_GENRE_MODEL = os.getenv('MUSIC_GENRE_MODEL', 'gpt-5.6-luna')
 # Datos de pago por transferencia que el agente comparte (Nequi/cuenta/etc.)
 WHATSAPP_TRANSFER_INFO = os.getenv('WHATSAPP_TRANSFER_INFO', '')
 # Número al que el agente remite cuando no sabe algo (contacto directo del local)
