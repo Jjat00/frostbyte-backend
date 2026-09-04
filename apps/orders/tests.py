@@ -1,4 +1,6 @@
-"""Cobrar un pedido es lo que mas duele si sale a medias.
+"""Pruebas de pedidos: el cobro atomico y lo que le decimos al cliente.
+
+Cobrar un pedido es lo que mas duele si sale a medias.
 
 mark_paid escribe en dos sitios -los items y el pedido- y hasta ahora lo hacia
 suelto. Si el request moria en medio (un timeout, daphne matando la conexion:
@@ -16,7 +18,7 @@ from django.urls import reverse
 
 from apps.accounts.models import User
 from apps.business.models import Business
-from apps.orders.models import Order, OrderItem
+from apps.orders.models import Order, OrderItem, StoreSettings
 from apps.products.models import Category, Product, ProductVariant
 
 
@@ -124,3 +126,22 @@ class MarkPaidTests(TestCase):
             OrderItem.objects.get(pk=self.items[0].pk).paid_at, first,
             "el reintento piso la hora de pago original",
         )
+
+
+class DemoraEstimadaTests(TestCase):
+    """Cuánto nos demoramos, en palabras: una estimación, nunca una promesa."""
+
+    def test_el_rango_se_dice_de_menor_a_mayor(self):
+        cfg = StoreSettings.load()
+        cfg.eta_min_minutes, cfg.eta_max_minutes = 10, 20
+        self.assertEqual(cfg.eta_label(), "de 10 a 20 minutos")
+
+    def test_los_extremos_iguales_dan_un_solo_numero(self):
+        cfg = StoreSettings.load()
+        cfg.eta_min_minutes = cfg.eta_max_minutes = 15
+        self.assertEqual(cfg.eta_label(), "unos 15 minutos")
+
+    def test_invertirlos_por_error_no_produce_un_rango_al_reves(self):
+        cfg = StoreSettings.load()
+        cfg.eta_min_minutes, cfg.eta_max_minutes = 30, 15
+        self.assertEqual(cfg.eta_label(), "de 15 a 30 minutos")

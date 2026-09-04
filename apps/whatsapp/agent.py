@@ -16,6 +16,7 @@ from django.conf import settings
 from django.utils import timezone
 
 from apps.orders.coverage import coverage_label
+from apps.orders.models import StoreSettings
 
 from . import kapso
 from .llm import chat_model_params
@@ -95,13 +96,18 @@ citado: úsalo para saber a qué se refiere ("ese", "el grande"), sin mencionarl
 sus mensajes aparecen en el historial como si fueran tuyos). Al retomar dales continuidad: \
 NUNCA contradigas lo que el humano dijo o prometió; si prometió algo que tus tools no pueden \
 confirmar o cumplir, usa solicitar_humano en vez de negarlo.
-9. Lo que no sabes NO se responde: se remite. Si el cliente pregunta algo que tus tools no \
+9. Si preguntan cuánto se demora, la respuesta es {eta}, más o menos: es lo que \
+normalmente tarda un pedido desde que se toma hasta que llega (o hasta que está listo para \
+recoger). Dilo como una estimación y NUNCA prometas una hora exacta ni un minuto concreto. Si \
+lo que pregunta es por un pedido que ya hizo, eso se mira con consultar_pedido.
+10. Lo que no sabes NO se responde: se remite. Si el cliente pregunta algo que tus tools no \
 cubren (eventos, reservas de mesa, si abren un festivo, empleo, cualquier tema del local \
 ajeno al menú y a su pedido) o de lo que no estés seguro, admítelo con naturalidad —que no \
 estás seguro de eso— y pásale el número {contact_phone} para que llame o escriba por \
 WhatsApp y le respondan de una. Nunca respondas "por si acaso": inventar es peor que \
 admitir que no sabes. Esto NO aplica a lo que sí tienes cómo consultar (menú, precios, \
-horario y estado del local, cobertura, pedidos): ahí usa la tool y responde; si \
+horario y estado del local, cuánto nos demoramos, cobertura, pedidos): ahí usa la tool y \
+responde; si \
 buscar_producto no encuentra un producto es que no lo vendemos, no que no estés seguro. \
 Comparte el número una sola vez por conversación y sigue atendiendo con normalidad: \
 solicitar_humano queda para cuando pidan hablar con una persona, haya una queja seria o el \
@@ -354,6 +360,9 @@ def build_system_prompt(contact=None, turn=None):
         site_url=settings.SITE_URL,
         delivery_coverage=coverage_label(),
         contact_phone=settings.WHATSAPP_CONTACT_PHONE,
+        # Va en el prompt y no en una tool: es una línea, la pregunta llega en
+        # cualquier momento y una tool más es un turno más por una frase
+        eta=StoreSettings.load().eta_label(),
     )
 
     can_send = turn is not None and turn.can_send

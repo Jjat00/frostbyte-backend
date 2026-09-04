@@ -170,6 +170,19 @@ class StoreSettingsAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
                 "emergencias. Con la zona vacía manda el radio."
             ),
         }),
+        ("Atención al cliente", {
+            "fields": (
+                "pickup_enabled",
+                "opening_time",
+                "eta_min_minutes",
+                "eta_max_minutes",
+            ),
+            "description": (
+                "Lo que el agente de WhatsApp le dice al cliente: si se puede pasar a "
+                "recoger, a qué hora abrimos normalmente y cuánto nos demoramos. La "
+                "demora es una estimación, no una promesa."
+            ),
+        }),
         ("Metadatos", {"fields": ("updated_at",)}),
     )
 

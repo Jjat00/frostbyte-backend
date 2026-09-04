@@ -747,6 +747,22 @@ class StoreSettings(models.Model):
             "con el local cerrado. NO abre ni cierra nada (eso sigue siendo manual)."
         ),
     )
+    eta_min_minutes = models.PositiveSmallIntegerField(
+        default=10,
+        validators=[MinValueValidator(1), MaxValueValidator(240)],
+        verbose_name="Demora mínima (minutos)",
+        help_text=(
+            "Lo que normalmente tarda un pedido desde que se toma. Es lo que el "
+            "agente de WhatsApp responde cuando preguntan cuánto se demora: una "
+            "estimación, nunca una promesa."
+        ),
+    )
+    eta_max_minutes = models.PositiveSmallIntegerField(
+        default=20,
+        validators=[MinValueValidator(1), MaxValueValidator(240)],
+        verbose_name="Demora máxima (minutos)",
+        help_text="El otro extremo del rango. Igual al mínimo = un solo número.",
+    )
     status_changed_at = models.DateTimeField(
         null=True,
         blank=True,
@@ -775,6 +791,18 @@ class StoreSettings(models.Model):
         # Fuerza singleton: siempre la misma fila
         self.pk = 1
         super().save(*args, **kwargs)
+
+    def eta_label(self):
+        """Cuánto nos demoramos, en palabras, para decírselo a un cliente.
+
+        Nunca promete una hora exacta: el local no tiene forma de saber cuánto
+        va a tardar este pedido en concreto y un minuto prometido es un minuto
+        reclamado. Con los dos extremos iguales sale un solo número.
+        """
+        bajo, alto = sorted((self.eta_min_minutes, self.eta_max_minutes))
+        if bajo == alto:
+            return f"unos {bajo} minutos"
+        return f"de {bajo} a {alto} minutos"
 
     def reopening_hint(self):
         """Cuándo volvemos a abrir, en palabras, para un cliente que escribe cerrados.

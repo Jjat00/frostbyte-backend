@@ -1191,6 +1191,19 @@ class PersonalidadYStickersTests(TestCase):
         self.assertIn("Trata al cliente de usted.", prompt)
         self.assertNotIn("{", prompt, "quedó un placeholder sin reemplazar")
 
+    def test_cuanto_nos_demoramos_sale_de_la_configuracion_de_la_tienda(self):
+        """La demora cambia con el local, no con un despliegue."""
+        from apps.orders.models import StoreSettings
+
+        self.assertIn("de 10 a 20 minutos", build_system_prompt(self.contact))
+        cfg = StoreSettings.load()
+        cfg.eta_min_minutes = 25
+        cfg.eta_max_minutes = 40
+        cfg.save()
+        prompt = build_system_prompt(self.contact)
+        self.assertIn("de 25 a 40 minutos", prompt)
+        self.assertNotIn("de 10 a 20 minutos", prompt)
+
     def test_la_voz_se_recuerda_al_final_del_prompt_con_una_muestra(self):
         """Entre QUIÉN ERES y el mensaje hay páginas de reglas: sin recordatorio se pierde."""
         AgentTone.seed_catalog()

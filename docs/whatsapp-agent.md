@@ -301,6 +301,23 @@ La miniatura viaja como data URI y no como enlace a `stickers/<id>.webp`: esa
 URL solo sirve los **activos** (justo los que no hay que revisar) y en local
 apunta al backend de producción, donde el sticker recién subido no existe.
 
+### Cuánto nos demoramos
+
+"¿Y en cuánto llega?" es de las primeras preguntas del cliente y el agente no
+tenía con qué responderla: caía en la regla de *lo que no sé lo remito* y le
+pasaba el número de contacto. Ahora sale de `StoreSettings.eta_min_minutes` /
+`eta_max_minutes` (10 y 20 por defecto, editables en el admin de Django junto
+al horario y al interruptor de recoger), que `eta_label()` convierte en "de 10
+a 20 minutos" —o "unos 15 minutos" si los dos extremos son iguales— y entra en
+la regla 9 del prompt.
+
+Va en el prompt y no en una tool: es una línea de texto, la pregunta llega en
+cualquier momento de la conversación y una tool más sería un turno más para
+decir una frase. El prompt se reconstruye en cada turno, así que cambiar el
+rango tiene efecto en el mensaje siguiente. La regla le prohíbe expresamente
+prometer una hora exacta: la estimación es del local, el minuto es del cliente
+que lo reclama.
+
 ### Lo que puede mandar además de texto
 
 | Tool | Cuándo la usa |
