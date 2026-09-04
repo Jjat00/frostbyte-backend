@@ -1,8 +1,7 @@
 """Procesamiento en background de los webhooks de Kapso.
 
 El webhook debe responder 200 en menos de 10 segundos, así que el turno del
-agente (que llama al LLM) corre en un ThreadPoolExecutor in-process, igual que
-el realtime loop de la Polla.
+agente (que llama al LLM) corre en un ThreadPoolExecutor in-process.
 
 Los mensajes NO se responden uno a uno: cada contacto tiene una cola y un solo
 loop que espera a que deje de escribir (ventana deslizante) antes de llamar al

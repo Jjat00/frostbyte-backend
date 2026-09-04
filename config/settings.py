@@ -69,7 +69,7 @@ INSTALLED_APPS = [
     'apps.impostor',
     'apps.recetarios',
     'apps.youtube',
-    'apps.polla',
+    'apps.polla',  # solo modelos: conserva los datos del Mundial 2026
     'apps.whatsapp',
     'apps.reservations',
 ]
@@ -132,7 +132,7 @@ CONN_HEALTH_CHECKS = True
 #                     una transaccion abierta y olvidada suelta sus locks sola
 #
 # Solo aplican al proceso web: los comandos de manage.py (migrate, seeds, el
-# cron de la polla) hacen consultas legitimamente largas y quedan exentos.
+# los seeds) hacen consultas legitimamente largas y quedan exentos.
 # Ojo: esto NO cubre un disco lento en el commit -el fsync del WAL no se puede
 # interrumpir desde el cliente-, cubre esperas por lock y consultas pesadas.
 _IS_MANAGEMENT_COMMAND = os.path.basename(sys.argv[0] or '') == 'manage.py'
@@ -344,34 +344,6 @@ SPOTIFY_REDIRECT_URI = os.getenv('SPOTIFY_REDIRECT_URI', 'http://localhost:8000/
 YOUTUBE_API_KEY = os.getenv('YOUTUBE_API_KEY', '')
 # Limite diario de unidades de cuota (free tier = 10000)
 YOUTUBE_QUOTA_LIMIT = int(os.getenv('YOUTUBE_QUOTA_LIMIT', '10000'))
-
-# Polla Mundialista — API-Football (api-sports.io)
-# Si se configura API_FOOTBALL_KEY, el comando polla_sync trae resultados y
-# posiciones en vivo. Sin la key, la Polla funciona con datos sembrados.
-API_FOOTBALL_KEY = os.getenv('API_FOOTBALL_KEY', '')
-API_FOOTBALL_LEAGUE_ID = int(os.getenv('API_FOOTBALL_LEAGUE_ID', '1'))  # 1 = FIFA World Cup
-API_FOOTBALL_SEASON = int(os.getenv('API_FOOTBALL_SEASON', '2026'))
-API_FOOTBALL_BASE_URL = os.getenv('API_FOOTBALL_BASE_URL', 'https://v3.football.api-sports.io')
-
-# ¿Puede una petición HTTP normal disparar una llamada a API-Football?
-# APAGADO desde que terminó el Mundial 2026. Solo afecta al perfil biográfico de
-# la ficha de jugador (PlayerDetailView), la única lectura que salía a la API al
-# vencer su caché; con esto la ficha se sirve entera desde la BD. Los comandos
-# manuales (polla_sync, polla_squads, polla_map_api) NO dependen de esta bandera.
-# Encender con POLLA_LIVE_API_FETCH=1 en el próximo torneo.
-POLLA_LIVE_API_FETCH = os.getenv('POLLA_LIVE_API_FETCH', '0') == '1'
-
-# Correo transaccional/recordatorios de la Polla (Resend)
-# -------------------------------------------------------------------------
-# Resend exige un dominio propio verificado (SPF/DKIM/DMARC) para que los
-# correos NO caigan en spam. Enviamos desde el dominio (frostbyte.com) y
-# dejamos Reply-To al Gmail de Frostbyte para que las respuestas lleguen ahí.
-# El management command `polla_email_reminder` usa estas variables.
-RESEND_API_KEY = os.getenv('RESEND_API_KEY', '')
-POLLA_EMAIL_FROM = os.getenv('POLLA_EMAIL_FROM', 'Frostbyte Polla <polla@frostbyte.com.co>')
-POLLA_EMAIL_REPLY_TO = os.getenv('POLLA_EMAIL_REPLY_TO', 'frostbyte.col@gmail.com')
-# URL pública de la Polla (botón del correo) y del backend (enlace de baja).
-POLLA_PUBLIC_URL = os.getenv('POLLA_PUBLIC_URL', 'https://frostbyte.com.co/polla-mundial')
 
 # Agente de pedidos por WhatsApp (Kapso + LangGraph)
 # -------------------------------------------------------------------------

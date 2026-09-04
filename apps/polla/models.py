@@ -1,11 +1,17 @@
-"""Modelos de la Polla Mundialista 2026.
+"""Modelos de la Polla Mundialista 2026 -- SOLO HISTORICO.
 
-Juego de pronosticos del Mundial: el cliente (login con Google) pronostica el
-marcador de cada partido, elige "menciones" de torneo (campeon, goleador, ...)
-y compite en una tabla de posiciones. El puntaje se recalcula automaticamente
-cuando llegan los resultados (comando ``polla_sync``).
+Terminado el Mundial 2026, la Polla se retiro del producto: no queda vistas,
+API, WebSocket, comandos, correos ni UI. Este archivo y sus migraciones son
+lo unico que sobrevive, y existe por una sola razon: que los datos del torneo
+(pronosticos, ranking, premios) sigan en la base de datos y sigan siendo
+consultables por el ORM y el admin de Django, con las llaves foraneas hacia
+``User`` intactas.
 
-Sistema de puntos (definido en el landing):
+No agregar logica aqui. Para el proximo torneo (2030), el codigo completo
+--vistas, scoring, bracket, sync con API-Football, correos y frontend-- vive
+en el historial de git: ver el commit que retiro la Polla.
+
+Sistema de puntos que rigio el torneo:
   - Marcador exacto ............ 3 pts
   - Resultado correcto ......... 1 pt
   - Incorrecto ................. 0 pts
