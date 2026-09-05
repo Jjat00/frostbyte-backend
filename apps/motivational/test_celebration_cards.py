@@ -51,6 +51,20 @@ class CelebrationCardTests(TestCase):
         self.assertEqual(self.request({}).status_code, 400)
         self.assertEqual(self.request({'image': photo_file(), 'phrase': 'x' * 241}).status_code, 400)
 
+    def test_una_foto_del_celular_en_otro_formato_no_se_rechaza(self):
+        """La lista de tres formatos dejaba fuera fotos que sí se podían leer."""
+        out = BytesIO()
+        Image.new('RGB', (32, 32), 'red').save(out, 'GIF')
+        file = SimpleUploadedFile('foto.gif', out.getvalue(), content_type='image/gif')
+        serializer = CardInput(data={'image': file})
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+
+    def test_un_heic_dice_que_hacer_en_vez_de_dar_la_foto_por_mala(self):
+        file = SimpleUploadedFile('IMG_0042.HEIC', b'not readable', content_type='image/heic')
+        serializer = CardInput(data={'image': file})
+        self.assertFalse(serializer.is_valid())
+        self.assertIn('HEIC', str(serializer.errors['image'][0]))
+
     def test_size_limit(self):
         file = photo_file()
         file.size = 10 * 1024 * 1024 + 1

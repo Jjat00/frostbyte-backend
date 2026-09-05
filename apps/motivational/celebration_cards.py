@@ -52,6 +52,20 @@ class PhraseThrottle(CardThrottle):
     rate = '40/hour'
 
 
+# Lo que graban los iPhone con "Alta eficiencia" activado. Ningún navegador
+# fuera de Safari lo sabe abrir y Pillow tampoco, así que el error dice qué
+# hacer en vez de dar por mala la foto.
+HEIF_SUFFIXES = ('.heic', '.heif')
+
+
+def _unreadable_photo_message(upload):
+    name = (getattr(upload, 'name', '') or '').lower()
+    if name.endswith(HEIF_SUFFIXES):
+        return ('Tu teléfono guardó esta foto en formato HEIC. Ábrela en tus fotos y '
+                'compártela como JPG, o mándale una captura de pantalla.')
+    return 'No pudimos leer esa foto. Prueba con otra, o con una captura de pantalla.'
+
+
 class CardInput(serializers.Serializer):
     image = serializers.FileField()
     phrase = serializers.CharField(max_length=240, required=False, allow_blank=True)
@@ -59,17 +73,22 @@ class CardInput(serializers.Serializer):
     from_name = serializers.CharField(max_length=60, required=False, allow_blank=True)
 
     def validate_image(self, value):
+        """Vale cualquier foto que se pueda abrir, no solo tres formatos.
+
+        Antes se exigía JPG, PNG o WebP, y quien subía una foto de su celular
+        se topaba con que la suya no valía sin saber por qué. La lista sobraba:
+        la vista reconvierte a JPEG lo que llegue (ver generate_celebration_card),
+        así que lo único que hay que comprobar es que la imagen se pueda leer.
+        """
         if value.size > 10 * 1024 * 1024:
             raise serializers.ValidationError('La foto debe pesar como máximo 10 MB.')
         try:
             with Image.open(value) as photo:
-                if photo.format not in ('JPEG', 'PNG', 'WEBP'):
-                    raise serializers.ValidationError('Usa JPG, PNG o WebP.')
                 if photo.width * photo.height > 25_000_000:
                     raise serializers.ValidationError('La foto es demasiado grande. Usa una de hasta 25 megapíxeles.')
                 photo.verify()
         except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError):
-            raise serializers.ValidationError('No pudimos leer la foto. Usa JPG, PNG o WebP.')
+            raise serializers.ValidationError(_unreadable_photo_message(value))
         finally:
             value.seek(0)
         return value
