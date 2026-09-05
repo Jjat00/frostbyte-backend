@@ -18,7 +18,7 @@ from django.utils import timezone
 from apps.orders.coverage import coverage_label
 from apps.orders.models import StoreSettings
 
-from . import kapso
+from . import banned, kapso
 from .llm import chat_model_params
 from .mood import sticker_urge
 from .models import AgentSettings, Sticker, StickerDraft
@@ -266,6 +266,13 @@ AJUSTES DE ESTILO QUE PIDIÓ EL NEGOCIO (mandan sobre todo lo de arriba, incluid
 personalidad):
 {tone}"""
 
+BANNED_PROMPT = """
+
+PALABRAS PROHIBIDAS: {words}. Esto manda sobre TODO lo anterior, incluidos los ejemplos de \
+jerga de tu personalidad y el saludo de muestra: si alguna aparece ahí arriba como parte de \
+cómo hablas, la que vale es esta lista. Di lo mismo con otras palabras, sin anunciar que no \
+puedes usarlas."""
+
 OWNER_PROMPT = """
 
 CON QUIÉN ESTÁS HABLANDO AHORA: con el DUEÑO de Frostbyte, el que te creó. No es \
@@ -396,6 +403,14 @@ def build_system_prompt(contact=None, turn=None):
         prompt += VOICE_SAMPLE_PROMPT.format(sample=sample)
     if config.tone.strip():
         prompt += TONE_PROMPT.format(tone=config.tone.strip())
+    # Lo último de los ajustes del negocio, porque contradice a propósito lo
+    # que la personalidad dice unas líneas más arriba. Aun así el filtro de
+    # salida es lo que lo garantiza (ver banned.clean en _for_whatsapp).
+    vetadas = config.forbidden_words()
+    if vetadas:
+        prompt += BANNED_PROMPT.format(
+            words=", ".join(f"«{word}»" for word in sorted(vetadas))
+        )
 
     draft = None
     if contact is not None and config.is_owner(contact.phone):
@@ -475,12 +490,19 @@ def record_messages(contact, entries):
         agent.update_state(config, {"messages": messages}, as_node="__start__")
 
 
-def _for_whatsapp(reply, already_answered=False):
+def _for_whatsapp(reply, already_answered=False, banned_words=(), silence_ok=False):
     """Texto plano listo para WhatsApp (no renderiza Markdown).
 
     `already_answered`: el turno ya respondió con un sticker, una foto, unos
     botones o una reacción. Entonces quedarse callado es la respuesta correcta
     —el prompt se lo pide— y el texto de relleno sería un mensaje de más.
+
+    `silence_ok`: el cliente no preguntó nada (mandó un gesto). Callarse
+    también es una respuesta y "Perdón, ¿me lo repites?" sería pedirle que
+    repita un sticker.
+
+    `banned_words`: lo que el negocio prohibió decir se quita aquí, y no solo
+    en el prompt, porque en el prompt es una petición (ver banned.py).
     """
     if isinstance(reply, list):  # content blocks -> texto plano
         reply = " ".join(
@@ -489,10 +511,16 @@ def _for_whatsapp(reply, already_answered=False):
     reply = re.sub(r"\*\*(.+?)\*\*", r"*\1*", reply)  # **negrilla** -> *negrilla*
     reply = re.sub(r"\[[^\]]*\]\((https?://[^)]+)\)", r"\1", reply)  # links planos
     reply = re.sub(r"^#{1,6}\s*", "", reply, flags=re.MULTILINE)  # sin encabezados
+    hits = banned.found(reply, banned_words)
+    if hits:
+        # No es un error del modelo: su personalidad se las pide. Se registra
+        # para saber si el tono elegido y lo prohibido se están peleando.
+        logger.info("Palabras vetadas quitadas de la respuesta: %s", ", ".join(hits))
+        reply = banned.clean(reply, banned_words)
     reply = reply.strip()
     if reply:
         return reply
-    return "" if already_answered else "Perdón, ¿me lo repites?"
+    return "" if (already_answered or silence_ok) else "Perdón, ¿me lo repites?"
 
 
 # Una línea de guiones sola: como el modelo pide mandar dos mensajes seguidos.
@@ -537,7 +565,14 @@ class AgentTurn(NamedTuple):
     sticker: object = None
 
 
-def run_turn(contact, user_text, phone_number_id="", message_id="", customer_sticker=False):
+def run_turn(
+    contact,
+    user_text,
+    phone_number_id="",
+    message_id="",
+    customer_sticker=False,
+    silence_ok=False,
+):
     """Corre un turno del agente y devuelve un AgentTurn.
 
     `phone_number_id` y `message_id` son por dónde y sobre qué mensaje puede el
@@ -546,6 +581,9 @@ def run_turn(contact, user_text, phone_number_id="", message_id="", customer_sti
 
     `customer_sticker`: el cliente mandó un sticker en este mensaje. Sube las
     ganas de devolverle el gesto, que es lo que hace cualquiera.
+
+    `silence_ok`: el turno nació de un gesto y no de una pregunta, así que si
+    el modelo decide no escribir, no se responde nada.
 
     El dado de los stickers se tira aquí, una sola vez: el prompt y la tool
     tienen que estar de acuerdo dentro del mismo turno, o el modelo intentaría
@@ -587,7 +625,12 @@ def run_turn(contact, user_text, phone_number_id="", message_id="", customer_sti
     # puede descartar y rehacer. El sticker no cuenta: todavía no ha salido.
     return AgentTurn(
         replies=_split_messages(
-            _for_whatsapp(messages[-1].content, already_answered=turn_ctx.answered)
+            _for_whatsapp(
+                messages[-1].content,
+                already_answered=turn_ctx.answered,
+                banned_words=AgentSettings.load().forbidden_words(),
+                silence_ok=silence_ok,
+            )
         ),
         message_ids=tuple(m.id for m in added),
         mutated=mutated or turn_ctx.posted,

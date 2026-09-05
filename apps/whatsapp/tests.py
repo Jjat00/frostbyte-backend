@@ -20,6 +20,7 @@ from django.utils import timezone
 
 from . import mood
 from . import worker
+from . import banned
 from .agent import AgentTurn, _for_whatsapp, _split_messages, build_system_prompt
 from .mood import StickerUrge
 from . import stickers as wa_stickers
@@ -52,7 +53,9 @@ FAST = dict(
 )
 
 
-def webhook_payload(text, sequence=1, message_id=None, quoted_wamid=None, msg_type="text"):
+def webhook_payload(
+    text, sequence=1, message_id=None, quoted_wamid=None, msg_type="text", media_id=None
+):
     """Un webhook de Kapso con buffering activo (siempre formato batch)."""
     message = {
         "id": message_id or f"wamid.test{sequence}",
@@ -62,6 +65,8 @@ def webhook_payload(text, sequence=1, message_id=None, quoted_wamid=None, msg_ty
         "context": {"id": quoted_wamid, "from": PHONE} if quoted_wamid else None,
         "kapso": {"direction": "inbound"},
     }
+    if media_id:
+        message[msg_type] = {"id": media_id}
     return {
         "type": "whatsapp.message.received",
         "batch": True,
@@ -128,7 +133,14 @@ class WorkerAgrupadoTests(TransactionTestCase):
     def fake_turn(self, reply="ok", mutated=False, delay=0.0, on_call=None):
         """Doble del LLM: registra el texto que recibió y tarda `delay`."""
 
-        def _run(contact, text, phone_number_id="", message_id="", customer_sticker=False):
+        def _run(
+            contact,
+            text,
+            phone_number_id="",
+            message_id="",
+            customer_sticker=False,
+            silence_ok=False,
+        ):
             self.turns.append(text)
             if on_call:
                 on_call()
@@ -2002,23 +2014,35 @@ class MediaDelDuenoTests(TestCase):
         self.assertIn("un granizado azul", texto)
         self.assertTrue(StickerDraft.objects.filter(contact=self.owner).exists())
 
-    def test_el_sticker_de_un_cliente_no_se_descarga(self):
+    def test_el_sticker_de_un_cliente_se_lee_pero_no_se_guarda(self):
+        """El banco de stickers es del dueño; el del cliente solo se mira."""
         from .worker import _resolve_media
 
-        with patch("apps.whatsapp.media.download_media") as download:
+        with patch("apps.whatsapp.media.describe_sticker", return_value="saluda contento") as vision:
             texto = _resolve_media(self._msg(), PHONE_NUMBER_ID, self.cliente)
-        download.assert_not_called()
+        vision.assert_called_once()
         self.assertEqual(StickerDraft.objects.count(), 0)
-        self.assertIn("no puedes ver", texto)
+        self.assertIn("saluda contento", texto)
+
+    def test_el_sticker_de_un_cliente_que_no_se_entiende_no_deja_texto(self):
+        """Sin texto no hay turno: al gesto que no viste no se le contesta."""
+        from .worker import _resolve_media
+
+        with patch("apps.whatsapp.media.describe_sticker", return_value=""):
+            self.assertEqual(_resolve_media(self._msg(), PHONE_NUMBER_ID, self.cliente), "")
 
     def test_si_la_descarga_falla_el_mensaje_sigue_llegando(self):
-        """No poder guardar un sticker no puede costar el mensaje que venía con él."""
+        """No poder guardar un sticker no puede costar el mensaje que venía con él.
+
+        Con el dueño no vale callarse: está configurando al agente y espera
+        respuesta, aunque el archivo se haya perdido por el camino.
+        """
         from .worker import _resolve_media
 
         with patch("apps.whatsapp.media.download_media", side_effect=RuntimeError("boom")):
             texto = _resolve_media(self._msg(), PHONE_NUMBER_ID, self.owner)
         self.assertEqual(StickerDraft.objects.count(), 0)
-        self.assertIn("no puedes ver", texto)
+        self.assertIn("sticker", texto)
 
     def test_un_archivo_gigante_se_descarta(self):
         from .worker import MAX_DRAFT_BYTES, _resolve_media
@@ -2522,3 +2546,214 @@ class ModuloDeConfiguracionEnElPanelTests(TestCase):
         self.assertFalse(config.reactions_enabled, "el que estaba apagado sigue apagado")
         self.assertTrue(config.product_photos_enabled)
         self.assertTrue(config.quick_replies_enabled)
+
+
+class PalabrasVetadasTests(TestCase):
+    """Lo que el negocio prohíbe decir no sale, aunque el modelo lo escriba.
+
+    Chat real del 05/09: con «parce» y «pana» prohibidas en el panel, Frosty
+    siguió diciendo «parce». No es desobediencia del modelo: su personalidad
+    se la pide, el saludo de muestra la usaba y sus propios mensajes de antes
+    —que sigue leyendo del hilo del día— también. Contra eso, una línea en el
+    prompt no alcanza: la palabra se quita del mensaje antes de enviarlo.
+    """
+
+    def test_la_palabra_prohibida_no_sale_aunque_el_modelo_la_escriba(self):
+        salida = _for_whatsapp("Qué más parce, ¿lo de siempre?", banned_words={"parce"})
+        self.assertEqual(salida, "Qué más, ¿lo de siempre?")
+
+    def test_el_vocativo_no_deja_la_coma_colgando(self):
+        salida = _for_whatsapp("Parce, ya te sale el pedido", banned_words={"parce"})
+        self.assertEqual(salida, "Ya te sale el pedido")
+
+    def test_da_igual_como_la_escriba(self):
+        """Mayúsculas y tildes son la misma palabra: si no, la prohibición se esquiva sola."""
+        salida = _for_whatsapp("PARCE y parcé son el mismo parce", banned_words={"parce"})
+        self.assertNotIn("arce", salida.lower())
+
+    def test_no_se_lleva_por_delante_una_palabra_que_la_contiene(self):
+        """Prohibir «pana» no puede dejar sin «panadería» ni sin «panela»."""
+        salida = _for_whatsapp("Tenemos panela y pan de la panadería", banned_words={"pana"})
+        self.assertEqual(salida, "Tenemos panela y pan de la panadería")
+
+    def test_sin_nada_prohibido_el_texto_sale_intacto(self):
+        texto = "Listo, tu pedido va en camino."
+        self.assertEqual(_for_whatsapp(texto), texto)
+
+    def test_lo_prohibido_en_los_ajustes_de_tono_tambien_cuenta(self):
+        """Ahí lo escribió el dueño antes de que existiera el campo de palabras."""
+        config = AgentSettings.load()
+        config.tone = 'Sin emojis, y nunca digas «pana».'
+        config.save()
+        self.assertEqual(config.forbidden_words(), {"pana"})
+
+    def test_una_instruccion_sin_comillas_no_prohibe_de_su_cuenta(self):
+        """«no uses palabras raras» no puede acabar borrando «raras» del pedido."""
+        config = AgentSettings.load()
+        config.tone = "No uses palabras raras ni tecnicismos."
+        config.save()
+        self.assertEqual(config.forbidden_words(), set())
+
+    def test_el_campo_del_panel_manda_igual(self):
+        config = AgentSettings.load()
+        config.banned_words = "parce, pana"
+        config.save()
+        self.assertEqual(config.forbidden_words(), {"parce", "pana"})
+
+    def test_el_saludo_de_muestra_no_le_ensena_la_palabra_prohibida(self):
+        """Darle de ejemplo justo lo que se le prohibió es pedirle que falle."""
+        config = AgentSettings.load()
+        config.tone_preset = "parcero"
+        config.banned_words = "parce"
+        config.save()
+        prompt = build_system_prompt()
+        self.assertIn("Así suena un saludo tuyo", prompt)
+        self.assertNotIn("parce,", prompt.split("Así suena un saludo tuyo")[1])
+
+    def test_el_prompt_dice_que_la_lista_manda_sobre_la_personalidad(self):
+        config = AgentSettings.load()
+        config.banned_words = "parce"
+        config.save()
+        prompt = build_system_prompt()
+        self.assertIn("PALABRAS PROHIBIDAS", prompt)
+        self.assertIn("«parce»", prompt)
+
+    def test_las_palabras_prohibidas_van_despues_de_los_ajustes_de_tono(self):
+        """Contradicen a la personalidad a propósito: van de últimas de lo estable."""
+        config = AgentSettings.load()
+        config.tone = "Trata al cliente de usted."
+        config.banned_words = "parce"
+        config.save()
+        prompt = build_system_prompt()
+        self.assertLess(prompt.index("AJUSTES DE ESTILO"), prompt.index("PALABRAS PROHIBIDAS"))
+        self.assertLess(prompt.index("PALABRAS PROHIBIDAS"), prompt.index("FECHA Y HORA"))
+
+    def test_una_frase_entera_no_se_guarda_como_palabra(self):
+        """Quitarle una frase a un mensaje lo deja cojo; se avisa en vez de guardarla."""
+        from .serializers import AgentSettingsSerializer
+
+        serializer = AgentSettingsSerializer(
+            AgentSettings.load(), data={"banned_words": "nunca digas parce"}, partial=True
+        )
+        self.assertFalse(serializer.is_valid())
+        self.assertIn("banned_words", serializer.errors)
+
+    def test_el_limpiador_deja_la_frase_en_pie(self):
+        self.assertEqual(banned.clean("Hágale pues parce", {"parce"}), "Hágale pues")
+        self.assertEqual(banned.clean("Bien parce, ¿y usted?", {"parce"}), "Bien, ¿y usted?")
+        self.assertEqual(banned.clean("Un texto cualquiera", {"parce"}), "Un texto cualquiera")
+
+
+class StickerDelClienteTests(TransactionTestCase):
+    """Un sticker es un gesto: si no se puede leer, no se responde nada.
+
+    Chat real del 05/09: el cliente mandó un sticker y Frosty contestó
+    "Perdón, ¿me lo repites?". El modelo había hecho lo correcto —callarse
+    ante un gesto que no vio—, y el relleno de _for_whatsapp convirtió ese
+    silencio en una pregunta absurda: no se le pide a nadie que repita un
+    sticker.
+    """
+
+    def setUp(self):
+        _pending.clear()
+        _active.clear()
+        self.sent = []
+        self.turns = []
+
+        patcher = patch("apps.whatsapp.worker.kapso")
+        self.kapso = patcher.start()
+        self.addCleanup(patcher.stop)
+        self.kapso.send_text.side_effect = lambda pnid, phone, text: self.sent.append(text)
+
+        # El hilo del agente vive en Postgres (LangGraph): en las pruebas no se
+        # toca, solo se comprueba que se le anota lo que llegó
+        recall = patch("apps.whatsapp.agent.record_messages")
+        self.record = recall.start()
+        self.addCleanup(recall.stop)
+
+        vision = patch("apps.whatsapp.worker.wa_media.describe_sticker")
+        self.describe = vision.start()
+        self.addCleanup(vision.stop)
+
+    def receive(self, text, sequence=1, msg_type="text", media_id=None):
+        event = WebhookEvent.objects.create(
+            idempotency_key=f"sticker-{sequence}",
+            payload=webhook_payload(
+                text, sequence, msg_type=msg_type, media_id=media_id
+            ),
+            event_type="whatsapp.message.received",
+        )
+        _process_event_safe(event.pk)
+        return event
+
+    def wait_idle(self, timeout=10):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if PHONE not in _active and not _pending.get(PHONE):
+                return True
+            time.sleep(0.05)
+        self.fail("el loop del contacto no terminó a tiempo")
+
+    def fake_turn(self, reply="ok"):
+        def _run(
+            contact,
+            text,
+            phone_number_id="",
+            message_id="",
+            customer_sticker=False,
+            silence_ok=False,
+        ):
+            self.turns.append(text)
+            return AgentTurn(
+                replies=(reply,) if reply else (), message_ids=("m1",), mutated=False
+            )
+
+        return _run
+
+    @override_settings(**FAST, OPENAI_API_KEY="test")
+    def test_un_sticker_que_no_se_entiende_no_recibe_respuesta(self):
+        self.describe.return_value = ""
+        with patch("apps.whatsapp.agent.run_turn", side_effect=self.fake_turn()):
+            self.receive("", msg_type="sticker", media_id="media-1")
+            self.wait_idle()
+        self.assertEqual(self.sent, [], "a un gesto que no viste no se le contesta")
+        self.assertEqual(self.turns, [], "ni siquiera se llama al modelo")
+
+    @override_settings(**FAST, OPENAI_API_KEY="test")
+    def test_el_sticker_ilegible_queda_anotado_en_el_hilo(self):
+        """Que no se responda no significa que la conversación no lo sepa."""
+        self.describe.return_value = ""
+        with patch("apps.whatsapp.agent.run_turn", side_effect=self.fake_turn()):
+            self.receive("", msg_type="sticker", media_id="media-1")
+            self.wait_idle()
+        self.assertTrue(self.record.called)
+
+    @override_settings(**FAST, OPENAI_API_KEY="test")
+    def test_un_sticker_que_si_se_entiende_llega_al_agente_como_gesto(self):
+        self.describe.return_value = "Un bebé con cara de confusión; pregunta qué pasó."
+        with patch("apps.whatsapp.agent.run_turn", side_effect=self.fake_turn()):
+            self.receive("", msg_type="sticker", media_id="media-1")
+            self.wait_idle()
+        self.assertEqual(len(self.turns), 1)
+        self.assertIn("cara de confusión", self.turns[0])
+        self.assertIn("Es un gesto, no una pregunta", self.turns[0])
+
+    @override_settings(**FAST, OPENAI_API_KEY="test")
+    def test_un_sticker_junto_a_una_pregunta_no_calla_al_agente(self):
+        """Lo que se ignora es el gesto, no lo que el cliente escribió con él."""
+        self.describe.return_value = ""
+        with patch("apps.whatsapp.agent.run_turn", side_effect=self.fake_turn()):
+            self.receive("", sequence=1, msg_type="sticker", media_id="media-1")
+            self.receive("¿cuánto se demora?", sequence=2)
+            self.wait_idle()
+        self.assertEqual(len(self.turns), 1)
+        self.assertIn("¿cuánto se demora?", self.turns[0])
+        self.assertNotIn("\n\n", self.turns[0], "el sticker no deja renglones en blanco")
+        self.assertEqual(self.sent, ["ok"])
+
+    def test_el_silencio_ante_un_gesto_no_se_rellena(self):
+        self.assertEqual(_for_whatsapp("", silence_ok=True), "")
+
+    def test_ante_una_pregunta_el_silencio_si_se_rellena(self):
+        """Callarse cuando el cliente preguntó algo sigue siendo un fallo."""
+        self.assertEqual(_for_whatsapp(""), "Perdón, ¿me lo repites?")

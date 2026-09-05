@@ -96,6 +96,7 @@ class AgentSettingsSerializer(serializers.ModelSerializer):
             "tone_preset",
             "tone_presets",
             "tone",
+            "banned_words",
             "stickers_enabled",
             "reactions_enabled",
             "product_photos_enabled",
@@ -120,6 +121,27 @@ class AgentSettingsSerializer(serializers.ModelSerializer):
         if not value:
             raise serializers.ValidationError("El agente necesita un nombre para presentarse.")
         return value
+
+    def validate_banned_words(self, value):
+        """Palabras sueltas separadas por coma, y se avisa si llegó una frase.
+
+        Lo que se guarda aquí se le quita al mensaje antes de enviarlo, así que
+        una frase entera dejaría la respuesta coja. Quien escribe "nunca digas
+        parce" está usando el campo de al lado, y merece que se lo digan en vez
+        de guardarle algo que no va a funcionar.
+        """
+        palabras = []
+        for part in (value or "").replace(";", ",").split(","):
+            palabra = part.strip()
+            if not palabra:
+                continue
+            if len(palabra.split()) > 1:
+                raise serializers.ValidationError(
+                    f"«{palabra}» son varias palabras. Aquí va una por una, separadas por "
+                    "coma (ej.: parce, pana); las instrucciones van en los ajustes de tono."
+                )
+            palabras.append(palabra)
+        return ", ".join(palabras)
 
     def validate_owner_phones(self, value):
         """Deja la lista en dígitos separados por coma.

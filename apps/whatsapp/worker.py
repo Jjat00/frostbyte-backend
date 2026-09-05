@@ -171,16 +171,24 @@ def extract_inbound_messages(payload):
                 "[El cliente envió una nota de voz que no se pudo transcribir. "
                 "Pídele amablemente que lo escriba.]"
             )
-        elif msg_type in ("video", "sticker"):
-            # Se descargan solo para el dueño (ver _resolve_media): son la
-            # materia prima de sus stickers. Para un cliente siguen siendo algo
+        elif msg_type == "sticker":
+            # Un sticker es un gesto, no un mensaje: se intenta leer (ver
+            # _resolve_media) y, si no se entiende, el turno no llega a
+            # correr. Este texto es solo lo que ve el equipo en el panel.
+            payload_media = message.get(msg_type) or {}
+            if payload_media.get("id"):
+                media = {"kind": "sticker", "media_id": payload_media["id"], "caption": ""}
+            text = "[El cliente envió un sticker]"
+        elif msg_type == "video":
+            # Se descarga solo para el dueño (ver _resolve_media): es la
+            # materia prima de sus stickers. Para un cliente sigue siendo algo
             # que el agente no puede ver.
             payload_media = message.get(msg_type) or {}
             caption = payload_media.get("caption", "")
             if payload_media.get("id"):
-                media = {"kind": msg_type, "media_id": payload_media["id"], "caption": caption}
+                media = {"kind": "video", "media_id": payload_media["id"], "caption": caption}
             text = (
-                f"[El cliente envió un(a) {msg_type} que no puedes ver"
+                "[El cliente envió un video que no puedes ver"
                 + (f'; escribió: "{caption}"' if caption else "")
                 + ". Si esperabas un comprobante de pago, dile que el equipo lo verificará.]"
             )
@@ -314,7 +322,12 @@ def _resolve_media(msg, phone_number_id, contact=None):
     """Convierte el media de un mensaje en texto para el agente.
 
     Audios -> transcripción; imágenes -> descripción (con extracción de datos
-    si es un comprobante). Si algo falla se usa el texto de respaldo.
+    si es un comprobante); stickers -> el gesto que hacen. Si algo falla se usa
+    el texto de respaldo, salvo con los stickers: ahí se devuelve "" y el
+    mensaje no llega al agente (ver _run_turn). Un sticker que no se pudo leer
+    no es una pregunta sin responder, es un gesto que no vimos, y contestarle
+    "¿me lo repites?" a un sticker es lo que delata que no hay nadie del otro
+    lado.
 
     Cuando escribe el dueño, lo que manda es además la materia prima de sus
     stickers: se guarda el archivo entero antes de describirlo.
@@ -324,6 +337,10 @@ def _resolve_media(msg, phone_number_id, contact=None):
         return msg["text"]
 
     is_owner = contact is not None and AgentSettings.load().is_owner(contact.phone)
+    # Callarse es la respuesta correcta ante el gesto de un cliente que no se
+    # pudo leer, pero no ante el del dueño: él está configurando al agente y
+    # espera que le conteste.
+    silencio = "" if (media["kind"] == "sticker" and not is_owner) else msg["text"]
     if is_owner and media["kind"] in ("image", "sticker", "video") and phone_number_id:
         if _keep_sticker_draft(contact, media, phone_number_id):
             caption = media.get("caption") or ""
@@ -335,7 +352,7 @@ def _resolve_media(msg, phone_number_id, contact=None):
                 return f'{text}\nJunto a él escribió: "{caption}"' if caption else text
 
     if not phone_number_id or not settings.OPENAI_API_KEY:
-        return msg["text"]
+        return silencio
     try:
         if media["kind"] == "audio":
             transcript = wa_media.transcribe_audio(media["media_id"], phone_number_id)
@@ -348,9 +365,17 @@ def _resolve_media(msg, phone_number_id, contact=None):
                 if media.get("caption"):
                     text += f'\nJunto a la imagen escribió: "{media["caption"]}"'
                 return text
+        elif media["kind"] == "sticker":
+            gesto = wa_media.describe_sticker(media["media_id"], phone_number_id)
+            if gesto:
+                return (
+                    f"[El cliente te mandó un sticker: {gesto} Es un gesto, no una pregunta: "
+                    "devuélveselo con otro sticker o con una línea corta, y si no hace falta "
+                    "nada, no escribas.]"
+                )
     except Exception:
         logger.exception("No se pudo procesar el media %s", media.get("media_id"))
-    return msg["text"]
+    return silencio
 
 
 def _quote_prefix(quoted_wamid):
@@ -375,12 +400,47 @@ def _quote_prefix(quoted_wamid):
 
 
 def _message_text(msg, phone_number_id, contact=None):
-    """Texto que lee el agente: media ya resuelta y la cita al frente."""
+    """Texto que lee el agente: media ya resuelta y la cita al frente.
+
+    Vacío cuando el mensaje era solo un gesto que no se pudo leer: entonces no
+    hay nada que darle al agente.
+    """
     resolved = _resolve_media(msg, phone_number_id, contact)
+    if not resolved:
+        return ""
     if msg.get("media") and resolved != msg["text"]:
         # lo que el agente leyó vale más que el texto de respaldo
         ChatMessage.enrich(msg.get("message_id") or msg.get("wamid"), resolved)
     return _quote_prefix(msg.get("quoted_wamid")) + resolved
+
+
+def _batch_text(messages, phone_number_id, contact=None):
+    """Todo lo que dijo el cliente en la ráfaga, listo para el agente.
+
+    Los mensajes que no dejaron texto (un sticker ilegible) se caen aquí: si
+    se cuelan, el agente recibe renglones en blanco y responde a la nada.
+    """
+    parts = [_message_text(m, phone_number_id, contact) for m in messages]
+    return "\n".join(part for part in parts if part.strip())
+
+
+# Lo que queda en la memoria de la conversación cuando llegó un sticker que no
+# se pudo leer: sin esto el hilo se salta que el cliente dijo algo.
+UNSEEN_STICKER = (
+    "[El cliente te mandó un sticker. No lo pudiste ver y no le respondiste; "
+    "no se lo menciones.]"
+)
+
+
+def _remember_unseen(contact, phone):
+    """Deja constancia en el hilo del sticker que no se pudo leer."""
+    from .agent import record_messages
+
+    try:
+        with _phone_lock(phone):
+            record_messages(contact, [("user", UNSEEN_STICKER)])
+    except Exception:
+        logger.exception("No se pudo anotar el sticker ilegible de %s", phone)
 
 
 def _keep_typing(phone_number_id, message_id, stop_event, max_renewals=6):
@@ -557,7 +617,7 @@ def _run_turn(phone, batch):
     # responde, solo deja lo que dijo el cliente en el hilo
     if contact.human_handoff or (contact.human_until and contact.human_until > timezone.now()):
         try:
-            text = "\n".join(_message_text(m, phone_number_id, contact) for m in messages)
+            text = _batch_text(messages, phone_number_id, contact)
             with _phone_lock(phone):
                 record_messages(contact, [("user", text)])
         except Exception:
@@ -565,10 +625,28 @@ def _run_turn(phone, batch):
         _close_events(batch["event_ids"], WebhookEvent.Status.IGNORED, "agente pausado: humano atendiendo")
         return
 
+    # Un lote de puros gestos no es una pregunta: si el modelo decide no
+    # escribir, el silencio es la respuesta y no el "¿me lo repites?"
+    solo_gestos = bool(messages) and all(
+        (m.get("media") or {}).get("kind") == "sticker" for m in messages
+    )
+
     with _phone_lock(phone):
         # Los audios/imágenes se resuelven aquí (descarga + OpenAI) para que el
         # 'escribiendo…' ya esté visible mientras tanto
-        text = "\n".join(_message_text(m, phone_number_id, contact) for m in messages)
+        text = _batch_text(messages, phone_number_id, contact)
+
+    if not text:
+        # Todo lo que llegó fue un sticker que no se pudo leer. No se contesta
+        # nada: el cliente hizo un gesto, no una pregunta, y responderle sin
+        # haberlo visto solo puede salir mal.
+        _remember_unseen(contact, phone)
+        _close_events(
+            batch["event_ids"], WebhookEvent.Status.IGNORED, "sticker que no se pudo leer"
+        )
+        return
+
+    with _phone_lock(phone):
         # El último mensaje del lote es sobre el que se reacciona: es el que el
         # cliente tiene delante cuando llega la respuesta
         turn = run_turn(
@@ -576,11 +654,12 @@ def _run_turn(phone, batch):
             text,
             phone_number_id=phone_number_id,
             message_id=(messages[-1].get("message_id") or "") if messages else "",
-            # El agente no ve el sticker que le mandaron, pero saber que se lo
-            # mandaron le cambia las ganas de responder con otro
+            # Saber que le mandaron un sticker le cambia las ganas de
+            # responder con otro
             customer_sticker=any(
                 (m.get("media") or {}).get("kind") == "sticker" for m in messages
             ),
+            silence_ok=solo_gestos,
         )
 
         # ¿Escribió mientras el agente pensaba? Entonces esta respuesta ya nació
@@ -806,7 +885,7 @@ def _process_event(event):
             from .agent import record_messages
 
             try:
-                text = "\n".join(_message_text(m, phone_number_id) for m in messages)
+                text = _batch_text(messages, phone_number_id)
                 with _phone_lock(contact.phone):
                     record_messages(contact, [("user", text)])
             except Exception:
