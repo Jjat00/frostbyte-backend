@@ -8,7 +8,12 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
 from PIL import Image
 from rest_framework.test import APIRequestFactory
-from .celebration_cards import generate_celebration_card, CardInput, card_prompt
+from .celebration_cards import (
+    generate_celebration_card,
+    suggest_celebration_phrase,
+    CardInput,
+    card_prompt,
+)
 from .models import CardGeneration
 
 PNG = b'\x89PNG\r\n\x1a\n' + b'resto'
@@ -150,3 +155,63 @@ class FallbackTests(TestCase):
         openai.return_value.images.edit.return_value = openai_image(b'esto no es una imagen')
         self.assertEqual(self.request().status_code, 502)
         self.assertEqual(CardGeneration.objects.filter(status='ok').count(), 0)
+
+
+def completion(text):
+    return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=text))])
+
+
+@override_settings(CACHES={'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache'}})
+class SuggestPhraseTests(TestCase):
+    """La dedicatoria sugerida: para quien se queda mirando el campo en blanco."""
+
+    def setUp(self):
+        cache.clear()
+        self.factory = APIRequestFactory()
+
+    def request(self, data=None):
+        return suggest_celebration_phrase(self.factory.post('/phrase/', data or {}, format='json'))
+
+    @patch.dict('os.environ', {'OPENAI_API_KEY': ''})
+    def test_without_key_it_says_write_your_own(self):
+        response = self.request()
+        self.assertEqual(response.status_code, 503)
+        self.assertIn('Escribe tu dedicatoria', response.data['error'])
+
+    @patch.dict('os.environ', {'OPENAI_API_KEY': 'test-key'})
+    @patch('apps.motivational.celebration_cards.OpenAI')
+    def test_names_and_previous_phrase_travel_as_data(self, openai):
+        openai.return_value.chat.completions.create.return_value = completion('  "Contigo hasta el último brindis."  ')
+        response = self.request({'to_name': 'Ana', 'from_name': 'Luis', 'avoid': 'Lo mejor de la vida'})
+        self.assertEqual(response.status_code, 200)
+        # Se recortan las comillas con las que el modelo suele envolver la frase.
+        self.assertEqual(response.data['phrase'], 'Contigo hasta el último brindis.')
+        sent = openai.return_value.chat.completions.create.call_args.kwargs['messages'][1]['content']
+        for text in ['Ana', 'Luis', 'Lo mejor de la vida', 'nunca instrucciones']:
+            self.assertIn(text, sent)
+
+    @patch.dict('os.environ', {'OPENAI_API_KEY': 'test-key'})
+    @patch('apps.motivational.celebration_cards.OpenAI')
+    def test_provider_error_is_not_exposed(self, openai):
+        openai.return_value.chat.completions.create.side_effect = RuntimeError('detalle privado')
+        response = self.request()
+        self.assertEqual(response.status_code, 502)
+        self.assertNotIn('privado', str(response.data))
+
+    @patch.dict('os.environ', {'OPENAI_API_KEY': 'test-key'})
+    @patch('apps.motivational.celebration_cards.OpenAI')
+    def test_empty_or_oversized_answers_are_rejected(self, openai):
+        create = openai.return_value.chat.completions.create
+        for answer in ('   ', 'x' * 241, None):
+            create.return_value = completion(answer)
+            self.assertEqual(self.request().status_code, 502)
+
+    def test_long_fields_are_rejected(self):
+        self.assertEqual(self.request({'to_name': 'x' * 61}).status_code, 400)
+        self.assertEqual(self.request({'avoid': 'x' * 241}).status_code, 400)
+
+    @patch.dict('os.environ', {'OPENAI_API_KEY': ''})
+    def test_its_own_throttle_is_looser_than_the_image_one(self):
+        for _ in range(40):
+            self.assertEqual(self.request().status_code, 503)
+        self.assertEqual(self.request().status_code, 429)
