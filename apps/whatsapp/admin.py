@@ -179,7 +179,7 @@ class AgentSettingsAdmin(admin.ModelAdmin):
         (
             "Identidad",
             {
-                "fields": ("agent_name", "tone_preset", "tone"),
+                "fields": ("agent_name", "tone_preset", "tone", "banned_words"),
                 "description": (
                     "El tono elegido reemplaza la personalidad por defecto; los ajustes "
                     "se suman encima y mandan sobre ella."

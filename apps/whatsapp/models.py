@@ -5,6 +5,7 @@ from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from django.utils.text import slugify
 
+from . import banned
 from .tones import DEFAULT_TONE, SEED_TONES, seed_persona, seed_tone
 
 # Cuántos stickers recuerda cada contacto. Solo hacen falta los del día, y un
@@ -504,6 +505,16 @@ class AgentSettings(models.Model):
             "Ej.: 'Trata al cliente de usted' o 'sin emojis'. Vacío = solo el tono elegido."
         ),
     )
+    banned_words = models.CharField(
+        max_length=300,
+        blank=True,
+        verbose_name="Palabras que nunca debe decir",
+        help_text=(
+            "Separadas por coma (ej.: parce, pana). Estas NO dependen de que el agente "
+            "haga caso: se le quitan al mensaje antes de enviarlo, aunque el tono "
+            "elegido las use como ejemplo. Palabras sueltas, no frases."
+        ),
+    )
     stickers_enabled = models.BooleanField(
         default=True,
         verbose_name="Puede mandar stickers",
@@ -547,8 +558,16 @@ class AgentSettings(models.Model):
         return AgentTone.persona_for(self.tone_preset)
 
     def sample(self):
-        """Una frase de muestra del tono elegido, para el prompt."""
-        return AgentTone.sample_for(self.tone_preset)
+        """Una frase de muestra del tono elegido, para el prompt.
+
+        Sale ya sin las palabras vetadas: es la frase que el modelo imita, y
+        darle de ejemplo justo lo que se le prohibió es pedirle que falle.
+        """
+        return banned.clean(AgentTone.sample_for(self.tone_preset), self.forbidden_words())
+
+    def forbidden_words(self):
+        """Las palabras que tiene prohibido decir (ver banned.words_for)."""
+        return banned.words_for(self)
 
     @property
     def tone_catalog(self):

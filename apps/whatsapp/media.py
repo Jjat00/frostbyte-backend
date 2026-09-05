@@ -49,6 +49,19 @@ referencia o comprobante. No inventes datos que no se lean.
 
 Responde SOLO con la descripción, sin preámbulos. Máximo 80 palabras."""
 
+STICKER_PROMPT = """Un cliente mandó este sticker por WhatsApp a un negocio de comida en \
+Colombia. Un sticker es un gesto: lo que importa no es el dibujo sino qué está diciendo con él.
+
+Responde en UNA frase de máximo 20 palabras, en español: qué se ve y qué gesto hace (saludar, \
+agradecer, celebrar, reírse, quejarse, decir que sí, decir que no, despedirse, apurar, \
+enternecerse). Si trae texto escrito, cítalo tal cual.
+
+Si no logras entender qué gesto es, responde exactamente: NO_SE_ENTIENDE"""
+
+# Lo que responde la visión cuando el sticker no se deja leer. Ese sticker se
+# trata igual que uno que no se pudo descargar: el agente no lo ve.
+UNREADABLE = "NO_SE_ENTIENDE"
+
 
 def download_media(media_id, phone_number_id):
     """Descarga un media de WhatsApp vía Kapso. Devuelve (bytes, mime_type)."""
@@ -85,9 +98,8 @@ def transcribe_audio(media_id, phone_number_id):
     return (result.text or "").strip()
 
 
-def describe_image(media_id, phone_number_id):
-    """Describe una imagen (con ojo de comprobante de pago) y devuelve el texto."""
-    content, mime = download_media(media_id, phone_number_id)
+def _look(content, mime, prompt, max_output_tokens):
+    """Le muestra una imagen al modelo de visión y devuelve lo que dice."""
     if not mime.startswith("image/"):
         mime = "image/jpeg"
     data_uri = f"data:{mime};base64,{base64.b64encode(content).decode()}"
@@ -98,11 +110,58 @@ def describe_image(media_id, phone_number_id):
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": IMAGE_PROMPT},
+                    {"type": "text", "text": prompt},
                     {"type": "image_url", "image_url": {"url": data_uri}},
                 ],
             }
         ],
-        **completion_params(model, temperature=0, max_output_tokens=200, effort=VISION_REASONING_EFFORT),
+        **completion_params(
+            model, temperature=0, max_output_tokens=max_output_tokens, effort=VISION_REASONING_EFFORT
+        ),
     )
     return (result.choices[0].message.content or "").strip()
+
+
+def describe_image(media_id, phone_number_id):
+    """Describe una imagen (con ojo de comprobante de pago) y devuelve el texto."""
+    content, mime = download_media(media_id, phone_number_id)
+    return _look(content, mime, IMAGE_PROMPT, max_output_tokens=200)
+
+
+def _first_frame(content):
+    """El sticker convertido a PNG, y si es animado solo su primer frame.
+
+    Los stickers de WhatsApp son WebP y los animados traen varios frames, que
+    la visión no admite. El primero es donde está el dibujo, así que se manda
+    ese. Si Pillow no puede abrirlo se devuelve tal cual: que decida el
+    proveedor en vez de perder el sticker aquí.
+    """
+    from PIL import Image
+
+    try:
+        with Image.open(io.BytesIO(content)) as image:
+            image.seek(0)
+            buffer = io.BytesIO()
+            image.convert("RGBA").save(buffer, format="PNG")
+            return buffer.getvalue(), "image/png"
+    except Exception:
+        logger.warning("No se pudo convertir el sticker a PNG; se manda tal cual")
+        return content, "image/webp"
+
+
+def describe_sticker(media_id, phone_number_id):
+    """Lee el gesto que hace un sticker. Devuelve "" si no se entiende.
+
+    Un sticker no se describe como una imagen cualquiera: al cliente no le
+    interesa que le cuenten el dibujo, sino que le contesten al gesto. Y si no
+    se entiende, la cadena vacía es la respuesta correcta —quien llama sabe
+    que entonces el sticker no llega al agente (ver worker._resolve_media)—,
+    porque contestarle cualquier cosa a un gesto que no viste es peor que
+    quedarse callado.
+    """
+    content, _ = download_media(media_id, phone_number_id)
+    content, mime = _first_frame(content)
+    gesto = _look(content, mime, STICKER_PROMPT, max_output_tokens=60)
+    if UNREADABLE in gesto.upper():
+        return ""
+    return gesto
