@@ -80,7 +80,7 @@ rasgos, edades aparentes, tonos de piel, cabello, ropa, joyas, gafas y accesorio
 No embellezcas ni reemplaces caras, no añadas personas. La foto es la protagonista,
 enmarcada con cuidado; no inventes vestuario ni coloques accesorios sobre las personas.
 Dirección artística: editorial íntima, fondo negro mate #0a0a0a, vino profundo #5e1c2b,
-acento vino claro #c45a6d, texto marfil #f4f0f1, cristal tallado, lazo de satén,
+acento vino claro #cf6b7c, texto marfil #f4f0f1, cristal tallado, lazo de satén,
 mármol negro veteado y luz cálida de vela. El negro manda; el vino solo acompaña.
 Observa los colores REALES de ropa y accesorios: incorpóralos al satén, reflejos y
 pequeños detalles de la tarjeta, armonizados con el vino de Frostbyte. Usa el metal de
