@@ -96,10 +96,22 @@ class CelebrationCardTests(TestCase):
             self.assertEqual(self.request({'image': photo_file()}).status_code, 503)
         self.assertEqual(self.request({'image': photo_file()}).status_code, 429)
 
-    def test_prompt_preserves_identity_and_coordinates_accessories(self):
+    def test_prompt_keeps_the_photo_alone_and_takes_the_palette_from_it(self):
         prompt = card_prompt({'phrase': 'Te quiero'})
-        for text in ['rostros', 'ropa', 'accesorios', 'satén', '#0a0a0a', 'No añadas bebidas alcohólicas', 'SOLO texto literal']:
+        # Identidad de las personas y nada añadido a su alrededor.
+        for text in ['rostros', 'ropa', 'accesorios', 'PROHIBIDO añadir', 'copas', 'velas',
+                     'LA PALETA SALE DE LA FOTO', 'TOCAR al menos un borde',
+                     'UNA vez y solo una', 'SOLO texto literal']:
             self.assertIn(text, prompt)
+
+    def test_prompt_no_longer_imposes_the_brand_palette(self):
+        # La paleta la pone la foto: un vino fijo teñía tarjetas que no lo pedían.
+        prompt = card_prompt({})
+        for hexa in ['#0a0a0a', '#5e1c2b', '#cf6b7c']:
+            self.assertNotIn(hexa, prompt)
+        # El satén y el mármol solo pueden aparecer como prohibición, nunca como encargo.
+        self.assertIn('mármol', prompt.split('PROHIBIDO añadir')[1].split('LA PALETA')[0])
+        self.assertIn('No impongas rojo, vino ni rosa', prompt)
 
 
 @override_settings(CACHES={'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache'}})
