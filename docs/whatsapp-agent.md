@@ -75,6 +75,15 @@ Cliente WhatsApp
   ubicación guardada es de un día anterior, el agente confirma que la entrega
   es en el mismo punto; si el cliente no puede compartir su ubicación, escala
   con `solicitar_humano`.
+- **La dirección escrita es opcional y el agente NO la pide** (2026-09-05):
+  con las coordenadas el domiciliario llega por el mapa ("Cómo llegar" en la
+  tarjeta del pedido), así que preguntarla era un paso de más camino a la
+  venta (chat del 04-09: el cliente compartió su ubicación y el agente le
+  respondió "¿Me pasas la dirección escrita exacta?"). Tampoco pregunta el
+  punto de referencia. Si el cliente escribe la dirección por su cuenta, el
+  agente la pasa en `direccion` y queda en `delivery_address`; un pedido sin
+  dirección deja ese campo vacío (la tarjeta dice "Ubicación compartida") y
+  NO borra la dirección habitual que el contacto ya tuviera.
 - **Efectivo**: solo se registra el billete que el cliente DIJO (o
   `paga_con='exacto'` si paga completo); prohibido inventarlo. El dato llega
   al domiciliario en `customer_notes` y el agente no habla de vueltas.

@@ -1041,6 +1041,94 @@ class ClienteSinNumeroPideCelularTests(TestCase):
         self.assertNotIn("NO nos muestra su número", build_system_prompt(normal))
 
 
+class DomicilioConUbicacionSinDireccionTests(TestCase):
+    """Chat real 2026-09-04 (Lina): compartió su ubicación y el agente le
+    respondió "Ubicación lista 🙌 ¿Me pasas la dirección escrita exacta?".
+
+    Con las coordenadas ya registradas el domiciliario llega con el mapa: la
+    dirección escrita era una pregunta de más en el camino a la venta. Ahora es
+    opcional y solo se guarda si el cliente la da por su cuenta.
+    """
+
+    def setUp(self):
+        from apps.business.models import Business
+        from apps.orders.models import StoreSettings
+        from apps.products.models import Category, Product, ProductVariant
+        from django.conf import settings as dj_settings
+
+        food, _ = Business.objects.get_or_create(
+            slug="frostbyte-food", defaults={"name": "Frostbyte Food"}
+        )
+        categoria = Category.objects.create(name="Salchipapas", slug="salchipapas", business=food)
+        producto = Product.objects.create(
+            name="Salchipapa con Queso", category=categoria, business=food, description="Con queso"
+        )
+        self.variante = ProductVariant.objects.create(
+            product=producto, name="Personal", sku="SPQ-1", price=18000
+        )
+        cfg = StoreSettings.load()
+        cfg.is_open = True
+        cfg.customer_ordering_enabled = True
+        cfg.delivery_fee = 2000
+        cfg.save()
+
+        # Ubicación compartida en el propio local: dentro de la zona seguro
+        self.contact = WhatsAppContact.objects.create(
+            phone=PHONE,
+            last_location_lat=dj_settings.DELIVERY_CENTER_LAT,
+            last_location_lng=dj_settings.DELIVERY_CENTER_LNG,
+            last_location_at=timezone.now(),
+        )
+        self.tools = {t.name: t for t in build_tools(self.contact)}
+
+    def _crear(self, **kwargs):
+        datos = {
+            "items": [{"variante_id": self.variante.id, "cantidad": 1, "notas": ""}],
+            "nombre_cliente": "Lina Erazo",
+            "metodo_pago": "cash",
+            "paga_con": "100000",
+        }
+        datos.update(kwargs)
+        return self.tools["crear_pedido"].invoke(datos)
+
+    def test_con_ubicacion_el_domicilio_se_crea_sin_direccion_escrita(self):
+        resultado = self._crear()
+        self.assertIn("PEDIDO CREADO", resultado)
+        order = Order.objects.get()
+        self.assertEqual(order.order_type, Order.OrderType.DELIVERY)
+        self.assertEqual(order.delivery_address, "")
+        self.assertIsNotNone(order.delivery_lat, "el domiciliario llega con el mapa")
+        self.assertIsNotNone(order.delivery_lng)
+
+    def test_la_direccion_que_el_cliente_escribe_por_su_cuenta_se_guarda(self):
+        self.assertIn("PEDIDO CREADO", self._crear(direccion="Transversal 4 #13-80"))
+        self.assertEqual(Order.objects.get().delivery_address, "Transversal 4 #13-80")
+
+    def test_un_pedido_sin_direccion_no_borra_la_habitual(self):
+        self.contact.default_address = "Transversal 4 #13-80"
+        self.contact.default_reference = "Asadero de cuyes"
+        self.contact.save()
+        self.assertIn("PEDIDO CREADO", self._crear())
+        self.contact.refresh_from_db()
+        self.assertEqual(self.contact.default_address, "Transversal 4 #13-80")
+        self.assertEqual(self.contact.default_reference, "Asadero de cuyes")
+
+    def test_sin_ubicacion_el_error_pide_la_ubicacion_y_no_la_direccion(self):
+        self.contact.last_location_lat = None
+        self.contact.last_location_lng = None
+        self.contact.save()
+        resultado = self._crear()
+        self.assertIn("ERROR", resultado)
+        self.assertIn("ubicación", resultado)
+        self.assertNotIn("hace falta la dirección", resultado)
+        self.assertEqual(Order.objects.count(), 0)
+
+    def test_el_prompt_ya_no_le_manda_pedir_la_direccion_escrita(self):
+        prompt = build_system_prompt(self.contact)
+        self.assertIn("NO le pidas la dirección escrita", prompt)
+        self.assertNotIn("dirección escrita EXACTA", prompt)
+
+
 class ParametrosDelModeloTests(TestCase):
     """Cada familia de modelos se llama distinto (2026-09-03, cambio a GPT-5.6 Terra).
 

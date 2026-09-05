@@ -556,10 +556,10 @@ def build_tools(contact, turn=None):
         """Crea el pedido DEFINITIVO, a domicilio o para recoger en el local.
 
         A domicilio: llámala SOLO después de que el cliente confirmó el resumen
-        completo (items, total y método de pago). La dirección y la ubicación
-        de WhatsApp son OBLIGATORIAS; la ubicación la toma el sistema por su
-        cuenta (verifícala antes con verificar_cobertura) y tú nunca manejas
-        coordenadas.
+        completo (items, total y método de pago). Lo OBLIGATORIO es la ubicación
+        de WhatsApp, que hace de dirección: la toma el sistema por su cuenta
+        (verifícala antes con verificar_cobertura) y tú nunca manejas
+        coordenadas. La dirección escrita es opcional y NO se le pide.
         Para recoger (para_recoger=True): llámala cuando el cliente confirme el
         resumen (items y TOTAL de cotizar_pedido). NO pidas dirección,
         ubicación, teléfono ni método de pago (paga al recoger en el local, sin
@@ -573,8 +573,11 @@ def build_tools(contact, turn=None):
                 por llave Bre-B va como nequi, porque la llave es ese mismo
                 número). Obligatorio a domicilio; para recoger déjalo vacío
                 (paga al recoger)
-            direccion: dirección de entrega completa (solo domicilio)
-            referencia: punto de referencia para el domiciliario (solo domicilio)
+            direccion: dirección escrita del cliente (solo domicilio) y SOLO
+                si la dio por su cuenta; déjala vacía si no la dijo, porque no
+                se le pide: la ubicación que compartió es la dirección
+            referencia: punto de referencia, solo si el cliente lo mencionó
+                (domicilio); tampoco se le pide
             paga_con: SOLO efectivo: billete que DIJO el cliente (ej. '50000'),
                 o 'exacto' si dice que paga completo/justo. PROHIBIDO inventar
                 un valor que el cliente no mencionó.
@@ -607,8 +610,6 @@ def build_tools(contact, turn=None):
                     else ""
                 )
             )
-        if not para_recoger and not direccion.strip():
-            return "ERROR: para un domicilio hace falta la dirección de entrega."
         if metodo_pago and metodo_pago not in Order.ACTIVE_PAYMENT_METHODS:
             return f"ERROR: metodo_pago inválido. Usa uno de: {', '.join(Order.ACTIVE_PAYMENT_METHODS)}."
         if not para_recoger and not metodo_pago:
@@ -725,7 +726,10 @@ def build_tools(contact, turn=None):
         if celular and contact.contact_phone != celular:
             contact.contact_phone = celular
             campos.append("contact_phone")
-        if not para_recoger:
+        # La dirección escrita ya no se pide (la ubicación compartida es la
+        # dirección): si el pedido no trae ninguna, se conserva la que hubiera
+        # de antes en vez de borrarla.
+        if not para_recoger and direccion.strip():
             contact.default_address = direccion.strip()[:300]
             contact.default_reference = referencia.strip()[:300]
             campos += ["default_address", "default_reference"]
