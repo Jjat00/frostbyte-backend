@@ -5,9 +5,11 @@ deja una fila en `CardGeneration` con el proveedor y el resultado — nunca la
 foto, los nombres ni la dedicatoria — para poder contar cuántas tarjetas se han
 generado y con cuál de los dos.
 
-Los tiempos límite de los dos intentos suman menos que el corte del navegador
-(110 s en CelebrationCardPage): si el primero agota su minuto, al segundo aún le
-queda margen para responder.
+Los tiempos límite salen de lo que tarda cada proveedor medido contra la API
+real (2026-09-05): Gemini ~10 s, OpenAI ~42 s. A cada uno se le da holgura de
+sobra sin que la suma (100 s) alcance el corte del navegador (110 s en
+CelebrationCardPage). Si Gemini pasa de 35 s ya no está sano, y esperarlo más
+solo le quita tiempo al que sí puede responder.
 """
 import base64
 import json
@@ -29,8 +31,8 @@ from rest_framework.throttling import SimpleRateThrottle
 from .models import CardGeneration
 from .card_stats import build_card_stats
 
-GEMINI_TIMEOUT_SECONDS = 55
-OPENAI_TIMEOUT_SECONDS = 45
+GEMINI_TIMEOUT_SECONDS = 35
+OPENAI_TIMEOUT_SECONDS = 65
 IMAGE_MIME_TYPES = ('image/png', 'image/jpeg', 'image/webp')
 
 
