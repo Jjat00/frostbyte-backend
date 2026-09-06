@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import RecommenderLog
+from .models import CardGeneration, RecommenderLog
 from apps.search import PlainSearchAdminMixin
 
 
@@ -35,6 +35,28 @@ class RecommenderLogAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
         return f"temp={d.get('temperature')} | sabor={d.get('taste')} | alcohol={d.get('alcohol')}"
 
     get_input_preview.short_description = "Consulta"
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(CardGeneration)
+class CardGenerationAdmin(admin.ModelAdmin):
+    """El contador de tarjetas de campaña: cuántas, con qué proveedor y cuándo.
+
+    Es un registro anónimo (no guarda foto, nombres ni dedicatoria), así que
+    aquí solo se lee: las filas con resultado "Generada" son las tarjetas que
+    de verdad se entregaron.
+    """
+
+    list_display = ("created_at", "provider", "status", "model_name", "was_fallback", "duration_ms")
+    list_filter = ("provider", "status", "was_fallback", "created_at")
+    date_hierarchy = "created_at"
+    ordering = ["-created_at"]
+    readonly_fields = ("provider", "status", "model_name", "was_fallback", "duration_ms", "created_at")
 
     def has_add_permission(self, request):
         return False
