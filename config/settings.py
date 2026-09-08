@@ -235,8 +235,37 @@ SIMPLE_JWT = {
 }
 
 # CORS settings
+# En dev vale cualquier origen; en produccion manda la lista, asi que apagar
+# DEBUG sin llenarla dejaria al frontend sin API.
 CORS_ALLOW_ALL_ORIGINS = DEBUG
 CORS_ALLOW_CREDENTIALS = True
+CORS_ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv(
+        'CORS_ALLOWED_ORIGINS',
+        'https://frostbyte.com.co,https://www.frostbyte.com.co,http://localhost:5173',
+    ).split(',')
+    if origin.strip()
+]
+# Los previews de Cloudflare Pages estrenan subdominio en cada build.
+CORS_ALLOWED_ORIGIN_REGEXES = [r'^https://[a-z0-9-]+\.frostbyte\.pages\.dev$']
+
+# Detras del proxy de Railway la peticion llega por http: sin esto Django cree
+# que el admin no es seguro y rechaza el Origin del formulario de login.
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+CSRF_TRUSTED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv(
+        'CSRF_TRUSTED_ORIGINS',
+        'https://frostbyte-backend-production.up.railway.app,https://frostbyte.com.co',
+    ).split(',')
+    if origin.strip()
+]
+
+# El sitio solo se sirve por HTTPS: las cookies del admin no tienen por que
+# viajar en claro. En dev seguirian sin enviarse nunca sobre http.
+SESSION_COOKIE_SECURE = not DEBUG
+CSRF_COOKIE_SECURE = not DEBUG
 
 # Default primary key field type
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
