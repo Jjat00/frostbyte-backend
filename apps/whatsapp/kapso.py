@@ -127,6 +127,12 @@ def recent_undelivered(phone, within_minutes=UNDELIVERED_LOOKBACK_MINUTES, limit
 
 def _post_message(phone_number_id, payload):
     """Envía un payload a la API de mensajes con reintentos ante 429/5xx."""
+    if getattr(settings, "TESTING", False):
+        # Un test que cambia el estado de un pedido dispara la notificación de
+        # verdad, y el .env local tiene las credenciales buenas: al cliente le
+        # llega el WhatsApp. La única salida del módulo pasa por aquí.
+        logger.debug("Envío omitido: la suite no manda mensajes reales")
+        return None
     if not settings.KAPSO_API_KEY:
         logger.warning("KAPSO_API_KEY no configurada; mensaje descartado: %s", payload.get("type"))
         return None

@@ -18,6 +18,9 @@ from django.test import (
 
 from django.utils import timezone
 
+from decimal import Decimal
+
+from . import missing
 from . import mood
 from . import worker
 from . import banned
@@ -346,16 +349,29 @@ class PromptTests(TestCase):
         )
 
     def test_el_tono_elegido_reemplaza_la_personalidad_por_defecto(self):
-        """Elegir "serio" no puede dejar dentro al parcero: se contradirían."""
+        """Elegir "serio" no puede dejar dentro al de la chispa: se contradirían."""
         config = AgentSettings.load()
         config.tone_preset = "serio"
         config.save()
         prompt = build_system_prompt()
         self.assertIn("USTED siempre", prompt)
-        self.assertNotIn("parcero del pueblo", prompt)
+        self.assertNotIn("amigo del pueblo", prompt)
 
-    def test_el_tono_por_defecto_es_el_parcero_de_siempre(self):
-        self.assertIn("parcero del pueblo", build_system_prompt())
+    def test_el_tono_por_defecto_es_el_de_siempre(self):
+        self.assertIn("amigo del pueblo", build_system_prompt())
+
+    def test_ningun_tono_de_fabrica_le_enseña_a_decir_parce(self):
+        """Pedido de Jaime (08/09): «parce» no se dice en todo el país, y en
+        Cumbal marca a un forastero. El tono sigue siendo colombiano; la jerga
+        que lo delataba como paisa se fue del texto de fábrica."""
+        from .tones import SEED_TONES
+
+        for tono in SEED_TONES:
+            for campo in ("name", "description", "sample", "persona"):
+                self.assertNotIn("parce", tono[campo].lower(), f"{tono['key']}.{campo}")
+
+    def test_el_prompt_le_prohibe_la_jerga_de_una_sola_region(self):
+        self.assertIn("Nada de jerga que sea de una sola región", build_system_prompt())
 
     def test_un_tono_que_ya_no_existe_no_deja_al_agente_sin_personalidad(self):
         config = AgentSettings.load()
@@ -415,7 +431,18 @@ class CoberturaSinUbicacionTests(TestCase):
         ):
             respuesta = self._verificar_cobertura()
         self.assertIn("SÍ intentó enviarnos algo", respuesta)
-        self.assertIn("solicitar_humano", respuesta, "a la segunda, un humano")
+        self.assertIn("créalo sin ubicación", respuesta, "a la segunda, el pedido igual")
+
+    def test_sin_ubicacion_la_tool_no_frena_el_pedido(self):
+        """Chat real 06/09 (Estefa): la ubicación no llegó y el chat se murió.
+
+        La tool decía "sin ella no se puede crear el pedido", así que el agente
+        se quedaba esperando un mensaje que WhatsApp nunca iba a entregarle.
+        """
+        with patch("apps.whatsapp.tools.kapso.recent_undelivered", return_value=[]):
+            respuesta = self._verificar_cobertura()
+        self.assertNotIn("no se puede crear el pedido", respuesta)
+        self.assertIn("el pedido se crea igual", respuesta)
 
 
 class BusquedaDeProductosTests(TestCase):
@@ -598,12 +625,18 @@ class PedidoParaRecogerTests(TestCase):
         self.assertIn("nombre", resultado)
         self.assertEqual(Order.objects.count(), 0)
 
-    def test_el_domicilio_sigue_exigiendo_metodo_de_pago(self):
+    def test_el_domicilio_sin_metodo_de_pago_se_crea_y_lo_deja_pendiente(self):
+        """El pago se pregunta, pero no vale un pedido: lo cuadra el equipo."""
+        from apps.orders.models import Order
+
         self.cfg.customer_ordering_enabled = True
         self.cfg.save()
         resultado = self._crear(metodo_pago="", direccion="Carrera 11 #21-17")
-        self.assertIn("ERROR", resultado)
-        self.assertIn("método de pago", resultado)
+        self.assertIn("PEDIDO CREADO", resultado)
+        self.assertIn("el método de pago", resultado)
+        order = Order.objects.get()
+        self.assertEqual(order.payment_method, "")
+        self.assertIn("el método de pago", order.customer_notes)
 
     def test_el_prompt_no_pregunta_nada_para_recoger_pero_si_confirma(self):
         prompt = build_system_prompt()
@@ -878,7 +911,9 @@ class ClientesSinNumeroTests(TestCase):
         from . import kapso
 
         posted = []
-        with override_settings(KAPSO_API_KEY="clave"):
+        # TESTING=False a propósito: esta prueba es justamente sobre el payload
+        # que sale, con requests parcheado (ver kapso._post_message).
+        with override_settings(KAPSO_API_KEY="clave", TESTING=False):
             with patch("apps.whatsapp.kapso.requests.post", side_effect=self.fake_post(posted)):
                 kapso.send_text(PHONE_NUMBER_ID, BSUID, "hola")
                 kapso.send_text(PHONE_NUMBER_ID, PHONE, "hola")
@@ -949,7 +984,11 @@ class ClientesSinNumeroTests(TestCase):
 class ClienteSinNumeroPideCelularTests(TestCase):
     """Pedido de Jaime (27/08): si WhatsApp no muestra el número del cliente,
     el agente pide un celular de contacto para poder llamarlo si hace falta.
-    Solo en domicilios: quien pasa a recoger viene al local."""
+    Solo en domicilios: quien pasa a recoger viene al local.
+
+    Se pide, no se exige (08/09): si el cliente no lo da —o dice que está
+    pendiente del chat— el pedido entra igual y el celular queda como
+    pendiente. Ningún dato vale un pedido."""
 
     def setUp(self):
         from apps.business.models import Business
@@ -994,11 +1033,28 @@ class ClienteSinNumeroPideCelularTests(TestCase):
         datos.update(kwargs)
         return self.tools["crear_pedido"].invoke(datos)
 
-    def test_sin_celular_no_se_crea_el_domicilio(self):
+    def test_sin_celular_el_domicilio_se_crea_con_el_celular_pendiente(self):
+        """El celular se pide, pero no a cambio del pedido: lo pide el equipo."""
         resultado = self._crear()
-        self.assertIn("ERROR", resultado)
-        self.assertIn("celular", resultado)
-        self.assertEqual(Order.objects.count(), 0)
+        self.assertIn("PEDIDO CREADO", resultado)
+        self.assertIn("el celular de contacto", resultado)
+        order = Order.objects.get()
+        self.assertEqual(order.customer_phone, BSUID, "sin celular queda su identidad")
+        self.assertIn("el celular de contacto", order.customer_notes)
+
+    def test_con_celular_no_queda_ningun_pendiente(self):
+        resultado = self._crear(telefono_contacto="3001234567")
+        self.assertIn("PEDIDO CREADO", resultado)
+        self.assertNotIn("pendientes", resultado)
+        order = Order.objects.get()
+        self.assertEqual(order.customer_phone, "573001234567")
+        self.assertFalse(order.customer_notes.startswith(missing.PREFIX))
+
+    def test_el_prompt_le_pide_el_celular_pero_no_a_cambio_del_pedido(self):
+        prompt = build_system_prompt(self.contact)
+        self.assertIn("pídele un celular de contacto de 10 dígitos", prompt)
+        self.assertIn("crea el pedido igual", prompt)
+        self.assertNotIn("sin ese celular no se crea el domicilio", prompt)
 
     def test_para_recoger_no_se_pide_ningun_numero(self):
         resultado = self._crear(para_recoger=True, direccion="")
@@ -1125,15 +1181,22 @@ class DomicilioConUbicacionSinDireccionTests(TestCase):
         self.assertEqual(self.contact.default_address, "Transversal 4 #13-80")
         self.assertEqual(self.contact.default_reference, "Asadero de cuyes")
 
-    def test_sin_ubicacion_el_error_pide_la_ubicacion_y_no_la_direccion(self):
+    def test_sin_ubicacion_el_pedido_se_crea_igual_y_queda_anotada(self):
+        """Chat real 06/09 (Estefa): la ubicación se perdió y el pedido también.
+
+        WhatsApp no nos entregó el mensaje (error 131060) y la tool rechazaba
+        el pedido, así que la conversación se quedó parada en la ubicación. Un
+        dato que falta cuesta una pregunta; el pedido que no existe, la venta.
+        """
         self.contact.last_location_lat = None
         self.contact.last_location_lng = None
         self.contact.save()
         resultado = self._crear()
-        self.assertIn("ERROR", resultado)
-        self.assertIn("ubicación", resultado)
-        self.assertNotIn("hace falta la dirección", resultado)
-        self.assertEqual(Order.objects.count(), 0)
+        self.assertIn("PEDIDO CREADO", resultado)
+        order = Order.objects.get()
+        self.assertIsNone(order.delivery_lat)
+        self.assertTrue(order.customer_notes.startswith(missing.PREFIX))
+        self.assertIn(missing.LOCATION, order.customer_notes)
 
     def test_el_prompt_ya_no_le_manda_pedir_la_direccion_escrita(self):
         prompt = build_system_prompt(self.contact)
@@ -2757,3 +2820,266 @@ class StickerDelClienteTests(TransactionTestCase):
     def test_ante_una_pregunta_el_silencio_si_se_rellena(self):
         """Callarse cuando el cliente preguntó algo sigue siendo un fallo."""
         self.assertEqual(_for_whatsapp(""), "Perdón, ¿me lo repites?")
+
+
+class AvisosDeEstadoTests(TestCase):
+    """Los avisos automáticos de estado hablan con la misma boca que el agente.
+
+    Chat real del 06/09: con «parce» prohibida en el panel, el cliente recibió
+    "¡Listo parce! Tu pedido ya está en la cocina". No lo escribió el modelo:
+    es una plantilla nuestra, y el filtro solo miraba lo que escribía el modelo.
+    Para el negocio la palabra seguía viva justo donde la vio.
+    """
+
+    def setUp(self):
+        config = AgentSettings.load()
+        config.banned_words = "parce, pana"
+        config.save()
+        self.order = Order.objects.create(
+            source=Order.Source.WHATSAPP,
+            order_type=Order.OrderType.DELIVERY,
+            customer_name="Anyi",
+            customer_phone=PHONE,
+            payment_method=Order.PaymentMethod.NEQUI,
+        )
+
+    def _aviso(self, status):
+        """El texto que le llega al cliente con el pedido en ese estado."""
+        from .signals import message_for
+
+        self.order.status = status
+        return message_for(self.order)
+
+    def test_el_aviso_de_la_cocina_no_dice_la_palabra_prohibida(self):
+        aviso = self._aviso(Order.Status.PREPARING)
+        self.assertNotIn("parce", aviso.lower())
+        self.assertIn("ya está en la cocina", aviso, "el aviso sigue diciendo lo suyo")
+        self.assertTrue(aviso.startswith("👨‍🍳 ¡Listo!"), aviso)
+
+    def test_ninguna_plantilla_dice_la_palabra_que_el_negocio_prohibió(self):
+        """El filtro es el guardarraíl; la plantilla ya no la trae de fábrica."""
+        from .signals import PICKUP_MESSAGES, STATUS_MESSAGES
+
+        for plantilla in list(STATUS_MESSAGES.values()) + list(PICKUP_MESSAGES.values()):
+            self.assertNotIn("parce", plantilla.lower(), plantilla)
+
+    def test_la_palabra_prohibida_sale_de_cualquier_parte_del_aviso(self):
+        """No solo del saludo: también de la línea de pago, que es nuestra."""
+        config = AgentSettings.load()
+        config.banned_words = "porfa"
+        config.save()
+        self.order.payment_method = Order.PaymentMethod.CASH
+        aviso = self._aviso(Order.Status.READY)
+        self.assertNotIn("porfa", aviso.lower())
+        self.assertIn("Ten listico el efectivo", aviso)
+
+    def test_sin_nada_prohibido_el_aviso_va_tal_cual(self):
+        config = AgentSettings.load()
+        config.banned_words = ""
+        config.tone = ""
+        config.save()
+        self.assertEqual(
+            self._aviso(Order.Status.PREPARING),
+            f"👨‍🍳 ¡Listo! Tu pedido {self.order.order_number} ya está en la cocina.",
+        )
+
+    def test_al_pedido_sin_metodo_de_pago_no_se_le_pide_comprobante(self):
+        """Se creó sin pago elegido (ver missing.py): no hay nada que mandar."""
+        self.order.payment_method = ""
+        aviso = self._aviso(Order.Status.READY)
+        self.assertNotIn("comprobante", aviso)
+        self.assertIn("cuadramos el pago", aviso)
+
+    def test_un_estado_sin_aviso_no_manda_nada(self):
+        self.assertEqual(self._aviso(Order.Status.PENDING), "")
+
+
+class UbicacionQueLlegaTardeTests(TestCase):
+    """El pedido se toma sin ubicación y el cliente la manda después.
+
+    Para él ya la dio: nadie va a repetirla porque el sistema la pidió tarde.
+    """
+
+    def setUp(self):
+        self.contact = WhatsAppContact.objects.create(phone=PHONE)
+        self.order = Order.objects.create(
+            source=Order.Source.WHATSAPP,
+            order_type=Order.OrderType.DELIVERY,
+            customer_name="Estefania",
+            customer_phone=PHONE,
+            customer_notes=missing.note([missing.LOCATION, "el método de pago"], "Sin ají"),
+        )
+
+    def test_la_ubicacion_entra_sola_al_pedido_abierto(self):
+        missing.attach_location(self.contact, Decimal("0.9821"), Decimal("-77.7912"))
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.delivery_lat, Decimal("0.9821000"))
+        self.assertEqual(self.order.delivery_lng, Decimal("-77.7912000"))
+
+    def test_lo_que_ya_no_falta_sale_de_la_nota_y_lo_demas_se_queda(self):
+        missing.attach_location(self.contact, Decimal("0.9821"), Decimal("-77.7912"))
+        self.order.refresh_from_db()
+        self.assertNotIn(missing.LOCATION, self.order.customer_notes)
+        self.assertIn("el método de pago", self.order.customer_notes)
+        self.assertIn("Sin ají", self.order.customer_notes, "la nota del cliente no se toca")
+
+    def test_cuando_no_falta_nada_mas_la_nota_del_cliente_queda_limpia(self):
+        self.order.customer_notes = missing.note([missing.LOCATION], "Sin ají")
+        self.order.save(update_fields=["customer_notes"])
+        missing.attach_location(self.contact, Decimal("0.9821"), Decimal("-77.7912"))
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.customer_notes, "Sin ají")
+
+    def test_un_pedido_ya_entregado_no_se_toca(self):
+        # update() y no save(): cambiar el estado avisaría al cliente
+        Order.objects.filter(pk=self.order.pk).update(status=Order.Status.DELIVERED)
+        self.assertEqual(missing.attach_location(self.contact, Decimal("0.98"), Decimal("-77.79")), [])
+        self.order.refresh_from_db()
+        self.assertIsNone(self.order.delivery_lat)
+
+    def test_no_le_pisa_la_ubicacion_a_un_pedido_que_ya_la_tenia(self):
+        self.order.delivery_lat = Decimal("0.9000000")
+        self.order.delivery_lng = Decimal("-77.7000000")
+        self.order.save(update_fields=["delivery_lat", "delivery_lng"])
+        self.assertEqual(missing.attach_location(self.contact, Decimal("0.98"), Decimal("-77.79")), [])
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.delivery_lat, Decimal("0.9000000"))
+
+    def test_la_ubicacion_no_dispara_el_aviso_de_estado_al_cliente(self):
+        """Completar un dato no es un cambio de estado: el cliente no se entera."""
+        with patch("apps.whatsapp.kapso.send_text") as send:
+            missing.attach_location(self.contact, Decimal("0.9821"), Decimal("-77.7912"))
+        send.assert_not_called()
+
+
+class PedidoQueSeCreaConLoQueHayTests(TestCase):
+    """El prompt manda crear el pedido aunque falte un dato (chat 06/09)."""
+
+    def test_el_prompt_no_deja_la_conversacion_esperando_la_ubicacion(self):
+        prompt = build_system_prompt()
+        self.assertIn("UN PEDIDO CONFIRMADO SE CREA SIEMPRE", prompt)
+        self.assertIn("NO te quedes esperándola", prompt)
+        self.assertNotIn("que es OBLIGATORIA para todo domicilio", prompt)
+
+    def test_el_prompt_conserva_la_regla_dura_de_no_dar_por_hecho_el_pedido(self):
+        """Crear con lo que hay no es decir que existe sin haberlo creado."""
+        prompt = build_system_prompt()
+        self.assertIn('crear_pedido responde "PEDIDO CREADO"', prompt)
+
+
+class PedidoConLoQueElClienteQuisoDarTests(TestCase):
+    """Los datos se piden todos; ninguno vale el pedido.
+
+    Reconstruye los dos chats del 06/09 que se atendieron a mano:
+    - Estefa: la ubicación no llegó (131060) y el pedido nunca existió.
+    - Anyi: "te envío el dinero cuando estén aquí" — paga al recibir.
+    """
+
+    def setUp(self):
+        from apps.business.models import Business
+        from apps.orders.models import StoreSettings
+        from apps.products.models import Category, Product, ProductVariant
+        from django.conf import settings as dj_settings
+
+        food, _ = Business.objects.get_or_create(
+            slug="frostbyte-food", defaults={"name": "Frostbyte Food"}
+        )
+        categoria = Category.objects.create(name="Granizados", slug="granizados", business=food)
+        producto = Product.objects.create(name="Blue Berry", category=categoria, business=food)
+        self.variante = ProductVariant.objects.create(
+            product=producto, name="Extragrande", sku="BB-14", price=14000
+        )
+        cfg = StoreSettings.load()
+        cfg.is_open = True
+        cfg.customer_ordering_enabled = True
+        cfg.delivery_fee = 2000
+        cfg.save()
+        self.centro = (dj_settings.DELIVERY_CENTER_LAT, dj_settings.DELIVERY_CENTER_LNG)
+        self.contact = WhatsAppContact.objects.create(phone=PHONE)
+        self.tools = {t.name: t for t in build_tools(self.contact)}
+
+    def _crear(self, **kwargs):
+        datos = {
+            "items": [{"variante_id": self.variante.id, "cantidad": 1, "notas": ""}],
+            "nombre_cliente": "Estefania Patiño",
+        }
+        datos.update(kwargs)
+        return self.tools["crear_pedido"].invoke(datos)
+
+    def _con_ubicacion(self):
+        self.contact.last_location_lat, self.contact.last_location_lng = self.centro
+        self.contact.last_location_at = timezone.now()
+        self.contact.save()
+
+    def test_estefa_el_pedido_entra_con_la_direccion_escrita_y_sin_ubicacion(self):
+        """Ella dio "Barrio la merced, Transversal 4 #17-41"; la ubicación se perdió."""
+        resultado = self._crear(
+            metodo_pago="cash", paga_con="20000", direccion="Transversal 4 #17-41",
+            referencia="Barrio la merced",
+        )
+        self.assertIn("PEDIDO CREADO", resultado)
+        order = Order.objects.get()
+        self.assertEqual(order.delivery_address, "Transversal 4 #17-41")
+        self.assertIsNone(order.delivery_lat)
+        self.assertIn("dio dirección escrita", order.customer_notes)
+        self.assertIn("Paga en efectivo con $20.000", order.customer_notes)
+
+    def test_anyi_paga_cuando_llegue_el_domiciliario(self):
+        """"Te envío el dinero cuando estén aquí": es un sí, no un pedido a medias."""
+        self._con_ubicacion()
+        resultado = self._crear(metodo_pago="nequi", paga_al_recibir=True)
+        self.assertIn("PEDIDO CREADO", resultado)
+        order = Order.objects.get()
+        self.assertEqual(order.payment_method, Order.PaymentMethod.NEQUI)
+        self.assertFalse(order.is_paid, "el comprobante no ha llegado")
+        self.assertIn("Paga al recibir el pedido", order.customer_notes)
+        self.assertFalse(
+            order.customer_notes.startswith(missing.PREFIX),
+            "eligió cómo paga: no hay nada pendiente",
+        )
+
+    def test_en_efectivo_no_se_repite_que_paga_al_recibir(self):
+        """El efectivo se paga en la puerta por definición; decirlo sobra."""
+        self._con_ubicacion()
+        self._crear(metodo_pago="cash", paga_con="exacto", paga_al_recibir=True)
+        self.assertNotIn("Paga al recibir", Order.objects.get().customer_notes)
+
+    def test_sin_nada_mas_que_los_items_y_el_nombre_el_pedido_existe(self):
+        """El peor caso: solo se sabe qué quiere y quién es. Igual entra."""
+        resultado = self._crear()
+        self.assertIn("PEDIDO CREADO", resultado)
+        order = Order.objects.get()
+        self.assertEqual(order.customer_name, "Estefania Patiño")
+        self.assertEqual(order.payment_method, "")
+        for pendiente in (missing.LOCATION, "el método de pago"):
+            self.assertIn(pendiente, order.customer_notes)
+
+    def test_fuera_de_la_zona_sigue_sin_haber_pedido(self):
+        """Un dato que falta se pregunta; una entrega imposible no se promete."""
+        self.contact.last_location_lat = Decimal("1.5000000")
+        self.contact.last_location_lng = Decimal("-78.5000000")
+        self.contact.last_location_at = timezone.now()
+        self.contact.save()
+        resultado = self._crear(metodo_pago="nequi")
+        self.assertIn("ERROR", resultado)
+        self.assertIn("FUERA de la zona", resultado)
+        self.assertEqual(Order.objects.count(), 0)
+
+    def test_el_local_cerrado_sigue_sin_tomar_pedidos(self):
+        from apps.orders.models import StoreSettings
+
+        cfg = StoreSettings.load()
+        cfg.is_open = False
+        cfg.save()
+        self.assertIn("ERROR", self._crear(metodo_pago="nequi"))
+        self.assertEqual(Order.objects.count(), 0)
+
+    def test_un_pedido_sin_items_no_es_un_pedido(self):
+        self.assertIn("ERROR", self._crear(items=[]))
+        self.assertEqual(Order.objects.count(), 0)
+
+    def test_el_prompt_pide_el_comprobante_pero_no_lo_espera(self):
+        prompt = build_system_prompt()
+        self.assertIn("pide que envíe el comprobante cuando pague", prompt)
+        self.assertIn("NUNCA se espera para crear el pedido", prompt)
+        self.assertIn("paga_al_recibir=True", prompt)

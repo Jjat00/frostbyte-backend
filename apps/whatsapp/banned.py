@@ -1,10 +1,11 @@
 """Las palabras que el negocio le prohibió decir a Frosty.
 
-Pedirlo en el prompt no basta, y no es culpa del modelo: el tono «Parcero» le
-ordena hablar con "parce" en el bloque QUIÉN ERES, se lo repite al final en TU
-VOZ y encima le deja un saludo de muestra que la usa. Contra tres refuerzos y
-un ejemplo, una línea suelta que diga "no digas parce" pierde tarde o
-temprano. Una prohibición que se cumple casi siempre no es una prohibición: es
+Pedirlo en el prompt no basta, y no es culpa del modelo: cuando la palabra
+está en el bloque QUIÉN ERES del tono, se le repite al final en TU VOZ y
+encima aparece en el saludo de muestra, una línea suelta que diga "no la
+digas" pierde tarde o temprano. (Fue el caso de «parce» hasta el 08/09, que
+salió del tono de fábrica; el siguiente tono que alguien escriba puede traer
+otra.) Una prohibición que se cumple casi siempre no es una prohibición: es
 una sugerencia, y quien la escribió en el panel la lee como una orden.
 
 Así que aquí la prohibición deja de depender del modelo. Las palabras se

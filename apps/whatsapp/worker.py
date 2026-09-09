@@ -27,6 +27,7 @@ from django.utils import timezone
 
 from . import kapso
 from . import media as wa_media
+from . import missing
 from . import stickers
 from .models import (
     AgentSettings,
@@ -858,6 +859,15 @@ def _process_event(event):
             contact.last_location_at = timezone.now()
             updates += ["last_location_lat", "last_location_lng", "last_location_at"]
         contact.save(update_fields=updates)
+        if location:
+            # El pedido pudo tomarse sin ella (ver missing.py): si llega ahora,
+            # entra sola al pedido en vez de esperar a que alguien la copie.
+            try:
+                missing.attach_location(
+                    contact, contact.last_location_lat, contact.last_location_lng
+                )
+            except Exception:
+                logger.exception("No se pudo aplicar la ubicación a los pedidos abiertos")
 
         event.contact_phone = contact.phone
         event.phone_number_id = phone_number_id

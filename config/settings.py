@@ -380,6 +380,11 @@ YOUTUBE_QUOTA_LIMIT = int(os.getenv('YOUTUBE_QUOTA_LIMIT', '10000'))
 # /api/v1/whatsapp/webhook/. El agente (apps.whatsapp) responde vía la API de
 # Kapso. KAPSO_PHONE_NUMBER_IDS lista los números propios (separados por coma)
 # para ignorar eventos de números desconocidos.
+# Corriendo la suite: el .env local trae credenciales de Kapso de verdad, así
+# que un test que cambie el estado de un pedido llegaba a mandarle un WhatsApp
+# a un cliente real (se descubrió el 08/09; solo falló por la ventana de 24 h).
+TESTING = 'test' in sys.argv
+
 KAPSO_API_KEY = os.getenv('KAPSO_API_KEY', '')
 KAPSO_WEBHOOK_SECRET = os.getenv('KAPSO_WEBHOOK_SECRET', '')
 KAPSO_PHONE_NUMBER_IDS = [

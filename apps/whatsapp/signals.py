@@ -4,6 +4,12 @@ Solo aplica a pedidos creados por el agente (source=whatsapp): esos clientes
 tienen una conversación de WhatsApp activa, así que el mensaje sale como
 respuesta normal dentro de la ventana de 24 horas (gratis en Meta).
 El envío corre en un hilo para no bloquear el request del staff/KDS.
+
+Estos avisos los escribimos nosotros, no el modelo, pero el cliente no
+distingue: le llegan por el mismo chat y con la misma voz. Así que pasan por
+el mismo filtro de palabras prohibidas que las respuestas del agente (ver
+banned.py). Sin eso, prohibir una muletilla en el panel la quitaba de lo que
+el agente escribe y la dejaba viva justo aquí, que es donde el negocio la vio.
 """
 
 import logging
@@ -14,6 +20,8 @@ from django.dispatch import receiver
 
 from apps.orders.models import Order
 
+from . import banned
+
 logger = logging.getLogger(__name__)
 
 _SKIP = object()
@@ -22,7 +30,7 @@ _SKIP = object()
 # escribiera el agente: van en la misma voz. El número del pedido y la línea de
 # pago son el dato, así que se dicen igual de claro que en el chat.
 STATUS_MESSAGES = {
-    Order.Status.PREPARING: "👨‍🍳 ¡Listo parce! Tu pedido {order_number} ya está en la cocina.",
+    Order.Status.PREPARING: "👨‍🍳 ¡Listo! Tu pedido {order_number} ya está en la cocina.",
     Order.Status.READY: "🛵 ¡Salió! Tu pedido {order_number} ya va en camino. {payment_line}",
     Order.Status.DELIVERED: (
         "✅ Pedido {order_number} entregado. ¡Que lo disfrutes y gracias por pedir en Frostbyte! 💙"
@@ -73,6 +81,41 @@ def _stash_old_status(sender, instance, **kwargs):
         instance._old_status = None
 
 
+def message_for(order):
+    """El aviso que le toca a este pedido, ya listo para enviarlo.
+
+    Devuelve "" cuando no hay nada que avisar. Sale de aquí y no del receiver
+    para poder leerlo tal cual en las pruebas: lo que el cliente recibe es
+    exactamente esto.
+    """
+    if order.order_type == Order.OrderType.PICKUP:
+        template = PICKUP_MESSAGES.get(order.status, STATUS_MESSAGES.get(order.status))
+    else:
+        template = STATUS_MESSAGES.get(order.status)
+    if not template:
+        return ""
+
+    if order.payment_method == Order.PaymentMethod.CASH:
+        payment_line = "Ten listico el efectivo, porfa."
+    elif order.is_paid:
+        payment_line = "Tu pago ya quedó confirmado."
+    elif order.order_type == Order.OrderType.PICKUP and not order.payment_method:
+        payment_line = "Pagas al recogerlo."
+    elif not order.payment_method:
+        # El pedido se creó sin método de pago (ver missing.py): pedirle el
+        # comprobante a quien nunca dijo que pagaba por Nequi lo confundiría.
+        payment_line = "Cuando llegue cuadramos el pago."
+    else:
+        payment_line = "Si todavía no has pagado, mándanos el comprobante."
+
+    from .models import AgentSettings
+
+    message = template.format(order_number=order.order_number, payment_line=payment_line)
+    # Lo prohibido se quita aquí y no de las plantillas de arriba: la lista la
+    # escribe el negocio en el panel y cambia cuando él quiera.
+    return banned.clean(message, AgentSettings.load().forbidden_words())
+
+
 @receiver(post_save, sender=Order)
 def _notify_status_change(sender, instance, created, **kwargs):
     if created:
@@ -82,23 +125,9 @@ def _notify_status_change(sender, instance, created, **kwargs):
         return
     if instance.source != Order.Source.WHATSAPP or not instance.customer_phone:
         return
-    if instance.order_type == Order.OrderType.PICKUP:
-        template = PICKUP_MESSAGES.get(instance.status, STATUS_MESSAGES.get(instance.status))
-    else:
-        template = STATUS_MESSAGES.get(instance.status)
-    if not template:
+    body = message_for(instance)
+    if not body:
         return
-
-    if instance.payment_method == Order.PaymentMethod.CASH:
-        payment_line = "Ten listico el efectivo, porfa."
-    elif instance.is_paid:
-        payment_line = "Tu pago ya quedó confirmado."
-    elif instance.order_type == Order.OrderType.PICKUP and not instance.payment_method:
-        payment_line = "Pagas al recogerlo."
-    else:
-        payment_line = "Si todavía no has pagado, mándanos el comprobante."
-
-    message = template.format(order_number=instance.order_number, payment_line=payment_line)
     phone = instance.customer_phone
 
     def _send():
@@ -116,7 +145,7 @@ def _notify_status_change(sender, instance, created, **kwargs):
             if not phone_number_id:
                 logger.warning("Sin phone_number_id para notificar el pedido %s", instance.order_number)
                 return
-            kapso.send_text(phone_number_id, to, message)
+            kapso.send_text(phone_number_id, to, body)
         except Exception:
             logger.exception("Error notificando por WhatsApp el pedido %s", instance.order_number)
         finally:

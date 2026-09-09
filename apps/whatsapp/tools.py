@@ -20,6 +20,7 @@ from apps.orders.models import Order, OrderItem, StoreSettings
 from apps.products.models import Category, Product, ProductVariant
 
 from . import kapso
+from . import missing
 from . import stickers as stickers_media
 from .models import AgentSettings, Sticker, StickerDraft
 
@@ -552,14 +553,18 @@ def build_tools(contact, turn=None):
         notas: str = "",
         para_recoger: bool = False,
         telefono_contacto: str = "",
+        paga_al_recibir: bool = False,
     ) -> str:
         """Crea el pedido DEFINITIVO, a domicilio o para recoger en el local.
 
-        A domicilio: llámala SOLO después de que el cliente confirmó el resumen
-        completo (items, total y método de pago). Lo OBLIGATORIO es la ubicación
-        de WhatsApp, que hace de dirección: la toma el sistema por su cuenta
-        (verifícala antes con verificar_cobertura) y tú nunca manejas
-        coordenadas. La dirección escrita es opcional y NO se le pide.
+        A domicilio: llámala cuando el cliente confirmó el resumen (items y
+        total). La ubicación de WhatsApp hace de dirección y la toma el sistema
+        por su cuenta (verifícala antes con verificar_cobertura); tú nunca
+        manejas coordenadas. La dirección escrita es opcional y NO se le pide.
+        Lo ÚNICO imprescindible son los items y el nombre: si falta la
+        ubicación, el método de pago o el celular de contacto, el pedido SE
+        CREA IGUAL y la tool te dice qué quedó pendiente para que el equipo lo
+        cuadre. Nunca dejes un pedido sin crear porque un dato no llegó.
         Para recoger (para_recoger=True): llámala cuando el cliente confirme el
         resumen (items y TOTAL de cotizar_pedido). NO pidas dirección,
         ubicación, teléfono ni método de pago (paga al recoger en el local, sin
@@ -571,8 +576,9 @@ def build_tools(contact, turn=None):
                 lo omites se usa el nombre ya conocido del cliente
             metodo_pago: cash o nequi (los únicos que acepta el local; un pago
                 por llave Bre-B va como nequi, porque la llave es ese mismo
-                número). Obligatorio a domicilio; para recoger déjalo vacío
-                (paga al recoger)
+                número). Pregúntalo siempre a domicilio, pero si el cliente no
+                lo dijo déjalo vacío y crea el pedido igual; para recoger va
+                vacío (paga al recoger)
             direccion: dirección escrita del cliente (solo domicilio) y SOLO
                 si la dio por su cuenta; déjala vacía si no la dijo, porque no
                 se le pide: la ubicación que compartió es la dirección
@@ -586,6 +592,10 @@ def build_tools(contact, turn=None):
             telefono_contacto: celular del cliente (10 dígitos) SOLO para
                 domicilios de clientes a los que WhatsApp no les muestra el
                 número (el sistema te lo avisa); en otro caso déjalo vacío
+            paga_al_recibir: True si el cliente dijo que paga cuando le
+                entreguen (típico del Nequi que manda al llegar el
+                domiciliario). Queda anotado para que el equipo lo cobre allí;
+                NUNCA esperes el comprobante para crear el pedido
         """
         cfg = StoreSettings.load()
         if not cfg.is_open:
@@ -612,15 +622,8 @@ def build_tools(contact, turn=None):
             )
         if metodo_pago and metodo_pago not in Order.ACTIVE_PAYMENT_METHODS:
             return f"ERROR: metodo_pago inválido. Usa uno de: {', '.join(Order.ACTIVE_PAYMENT_METHODS)}."
-        if not para_recoger and not metodo_pago:
-            return (
-                "ERROR: para un domicilio hace falta el método de pago (cash o nequi; "
-                "un pago por Bre-B va como nequi)."
-            )
         if not items:
             return "ERROR: el pedido no tiene items."
-        if metodo_pago == Order.PaymentMethod.CASH and not paga_con:
-            return "ERROR: para pago en efectivo pregunta primero con qué billete paga (paga_con)."
         contact.refresh_from_db()
         nombre = (
             nombre_cliente.strip() or contact.customer_name or contact.profile_name
@@ -642,22 +645,15 @@ def build_tools(contact, turn=None):
                     "de 10 dígitos (ej. 300 123 4567)."
                 )
             celular = _celular_colombiano(telefono_contacto) or contact.contact_phone
-            if not celular and not para_recoger:
-                return (
-                    "ERROR: WhatsApp no nos muestra el número de este cliente. Antes de "
-                    "crear un domicilio pídele un celular de contacto de 10 dígitos, por "
-                    "si el equipo necesita llamarle, y pásalo en telefono_contacto."
-                )
-        if not para_recoger and (
+        # Un pedido a domicilio sin ubicación SÍ se crea: lo caro no es que le
+        # falte un dato, es que el pedido no exista (chat del 06/09, la
+        # ubicación que WhatsApp no nos entregó dejó la conversación muerta).
+        # Lo que falta se anota para que el equipo lo pida; lo único que sigue
+        # frenando el pedido es una ubicación que SABEMOS que está fuera.
+        sin_ubicacion = not para_recoger and (
             contact.last_location_lat is None or contact.last_location_lng is None
-        ):
-            return (
-                "ERROR: falta la ubicación de WhatsApp del cliente y es OBLIGATORIA "
-                "para el domicilio. Pídele que la comparta (clip de adjuntar → "
-                "Ubicación → Enviar ubicación actual); si no puede compartirla, usa "
-                "solicitar_humano."
-            )
-        if not para_recoger and not is_within_delivery_area(
+        )
+        if not para_recoger and not sin_ubicacion and not is_within_delivery_area(
             contact.last_location_lat, contact.last_location_lng
         ):
             return (
@@ -665,6 +661,17 @@ def build_tools(contact, turn=None):
                 f"({coverage_label()}). NO crees el pedido: explícale "
                 "con amabilidad que por ahora no llegamos hasta allá."
             )
+        pendientes = []
+        if sin_ubicacion:
+            pendientes.append(
+                missing.LOCATION + (" (dio dirección escrita)" if direccion.strip() else "")
+            )
+        if not para_recoger and not metodo_pago:
+            pendientes.append("el método de pago")
+        if not para_recoger and kapso.is_bsuid(contact.phone) and not celular:
+            pendientes.append("el celular de contacto")
+        if metodo_pago == Order.PaymentMethod.CASH and not paga_con:
+            pendientes.append("con qué billete paga")
 
         variants = {}
         for item in items:
@@ -676,6 +683,10 @@ def build_tools(contact, turn=None):
                 return f"ERROR: la variante {item.variante_id} no existe o no está activa. Revisa el menú."
 
         customer_notes = notas.strip()
+        if paga_al_recibir and metodo_pago != Order.PaymentMethod.CASH:
+            # En efectivo se paga al recibir por definición; con Nequi no, y el
+            # domiciliario tiene que saber que va a cobrar en la puerta.
+            customer_notes = (customer_notes + "\nPaga al recibir el pedido.").strip()
         if metodo_pago == Order.PaymentMethod.CASH and paga_con:
             billete = re.sub(r"\D", "", paga_con)
             billete_txt = (
@@ -684,6 +695,9 @@ def build_tools(contact, turn=None):
                 else "Paga en efectivo con el valor exacto."
             )
             customer_notes = (customer_notes + "\n" + billete_txt).strip()
+        # Lo que falta va en la primera línea de las notas: es lo que el equipo
+        # ve en la tarjeta del pedido sin abrirla, y es lo que tiene que pedir.
+        customer_notes = missing.note(pendientes, customer_notes)
 
         with transaction.atomic():
             order = Order.objects.create(
@@ -745,9 +759,19 @@ def build_tools(contact, turn=None):
             if para_recoger
             else "Sale a domicilio."
         )
+        aviso = ""
+        if pendientes:
+            falta = "la dirección" if sin_ubicacion else "lo que falta"
+            aviso = (
+                f"\nOJO: el pedido quedó creado con datos pendientes "
+                f"({', '.join(pendientes)}). El equipo ya los ve y se los pide al "
+                f"cliente. A él dile que su pedido quedó tomado y, en una línea, "
+                f"que el equipo le confirma {falta}; NO le repitas la instrucción "
+                f"que ya no funcionó ni lo dejes esperando."
+            )
         return (
             f"PEDIDO CREADO. {cierre}\n{_order_summary(order)}\n"
-            f"Código de consulta: {order.access_code}."
+            f"Código de consulta: {order.access_code}.{aviso}"
         )
 
     @tool
@@ -901,13 +925,16 @@ def build_tools(contact, turn=None):
                     "la misma instrucción. Dile que su ubicación no llegó (pasa "
                     "cuando se envía desde WhatsApp Web o un dispositivo vinculado) y "
                     "pídele que la reenvíe DESDE EL CELULAR (clip de adjuntar → "
-                    "Ubicación → Enviar ubicación actual). Si ya lo intentó dos veces, "
-                    "no insistas más: usa solicitar_humano."
+                    "Ubicación → Enviar ubicación actual). Si ya lo intentó dos veces "
+                    "o no puede, SIGUE con el pedido y créalo sin ubicación: el "
+                    "equipo le confirma la dirección después."
                 )
             return (
                 "El cliente NO ha compartido su ubicación de WhatsApp todavía. "
-                "Pídele que la comparta (clip de adjuntar → Ubicación → Enviar "
-                "ubicación actual): sin ella no se puede crear el pedido."
+                "Pídesela una vez (clip de adjuntar → Ubicación → Enviar ubicación "
+                "actual) y sigue con el resto del pedido en el mismo turno; no te "
+                "quedes esperándola. Si no llega, el pedido se crea igual: el "
+                "equipo le confirma la dirección después."
             )
         lines = []
         if is_within_delivery_area(contact.last_location_lat, contact.last_location_lng):
