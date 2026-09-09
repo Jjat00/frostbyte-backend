@@ -112,11 +112,19 @@ class CelebrationCardTests(TestCase):
 
     def test_prompt_keeps_the_photo_alone_and_takes_the_palette_from_it(self):
         prompt = card_prompt({'phrase': 'Te quiero'})
-        # Identidad de las personas y nada añadido a su alrededor.
+        # Identidad de las personas y nada fotográfico añadido a su alrededor.
         for text in ['rostros', 'ropa', 'accesorios', 'PROHIBIDO añadir', 'copas', 'velas',
-                     'LA PALETA SALE DE LA FOTO', 'TOCAR al menos un borde',
-                     'UNA vez y solo una', 'SOLO texto literal']:
+                     'LA PALETA SALE DE LA FOTO', 'UNA vez y solo una', 'SOLO texto literal']:
             self.assertIn(text, prompt)
+
+    def test_prompt_asks_for_illustrated_ornament_of_the_date(self):
+        # La primera tanda salía genérica: sin rosas ni marco no se leía la fecha.
+        prompt = card_prompt({})
+        for text in ['AMOR Y AMISTAD: TIENE QUE NOTARSE', 'rosas', 'corazones', 'EL MARCO',
+                     'orla ilustrada']:
+            self.assertIn(text, prompt)
+        # El adorno es dibujo: pedirlo fotográfico devolvería el montaje que se quitó.
+        self.assertIn('ILUSTRACIÓN', prompt)
 
     def test_prompt_no_longer_imposes_the_brand_palette(self):
         # La paleta la pone la foto: un vino fijo teñía tarjetas que no lo pedían.
@@ -124,8 +132,9 @@ class CelebrationCardTests(TestCase):
         for hexa in ['#0a0a0a', '#5e1c2b', '#cf6b7c']:
             self.assertNotIn(hexa, prompt)
         # El satén y el mármol solo pueden aparecer como prohibición, nunca como encargo.
-        self.assertIn('mármol', prompt.split('PROHIBIDO añadir')[1].split('LA PALETA')[0])
-        self.assertIn('No impongas rojo, vino ni rosa', prompt)
+        self.assertIn('mármol', prompt.split('PROHIBIDO añadir')[1].split('Y SÍ ES DE AMOR')[0])
+        # Los rojos son acento sobre la base que da la foto, no un tinte general.
+        self.assertIn('No teñir la tarjeta entera de rojo', prompt)
 
 
 @override_settings(CACHES={'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache'}})

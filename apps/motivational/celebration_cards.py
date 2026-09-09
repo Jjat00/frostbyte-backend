@@ -102,32 +102,34 @@ def card_prompt(data):
         'de': data.get('from_name', ''),
     }
     return '''Diseña una tarjeta digital de Amor y Amistad, vertical 4:5, a partir de la foto adjunta.
-Es DISEÑO GRÁFICO editorial, no un montaje fotográfico.
+Es DISEÑO GRÁFICO editorial ilustrado, no un montaje fotográfico.
 
 LA FOTO ES LO ÚNICO FOTOGRÁFICO DE LA PIEZA.
 Conserva TODAS las personas, sus rostros, rasgos, edades aparentes, tonos de piel, cabello,
 ropa, joyas, gafas y accesorios. No embellezcas ni reemplaces caras, no añadas personas, no
 inventes vestuario ni pongas nada encima de ellas.
-PROHIBIDO añadir cualquier objeto, escenario o textura fotográfica: nada de copas, bebidas,
-velas, llamas, pétalos, flores, corazones, lazos, cintas, regalos, mármol, madera, telas,
-fondos desenfocados ni marcos ornamentados. Si algo no está en la foto, NO aparece en la
-tarjeta. Todo lo que rodea a la foto es color plano, forma y tipografía.
+PROHIBIDO añadir cualquier objeto, escenario o textura FOTOGRÁFICA: nada de copas, bebidas,
+velas, pétalos sueltos, telas, satén, mármol, madera, bokeh ni fondos desenfocados. Si algo
+parece fotografiado y no está en la foto, NO aparece en la tarjeta.
 
-LA PALETA SALE DE LA FOTO, NO DE UNA MARCA.
+Y SÍ ES DE AMOR Y AMISTAD: TIENE QUE NOTARSE.
+Todo lo que rodea a la foto es ILUSTRACIÓN, dibujada con trazo limpio y un solo estilo
+coherente: rosas abiertas y en capullo, follaje, corazones, alguna rama o lazo de línea fina.
+Que se lean como dibujo editorial — vectorial plano o línea entintada —, nunca como recorte
+fotográfico ni como clipart de plantilla. Poco y bien puesto gana a mucho: dos o tres racimos
+de rosas que respiren, no una alfombra de adornos.
+
+EL MARCO: la foto va enmarcada por una orla ilustrada de rosas y hojas que la abrace. La orla
+carga en dos esquinas opuestas y se afina en las otras, o rodea la imagen entera con ritmo
+desigual; lo que no vale es un rectángulo liso, centrado y simétrico, ni una cenefa repetida
+igual por los cuatro lados. La foto es grande y protagonista: al menos la mitad de la tarjeta.
+
+LA PALETA SALE DE LA FOTO.
 Lee los colores reales de la foto — ropa, fondo, luz, piel, accesorios — y quédate con dos o
-tres tonos dominantes más un neutro. El fondo de la tarjeta, los bloques de color y el texto
-se pintan con ESA paleta, de modo que la tarjeta y la foto se vean de la misma familia. Si la
-foto es fría, la tarjeta es fría; si es cálida, cálida. No impongas rojo, vino ni rosa por ser
-una tarjeta de Amor y Amistad.
-
-COMPOSICIÓN: elige UNA idea gráfica y llévala lejos.
-REGLA FIRME: la foto tiene que TOCAR al menos un borde de la tarjeta y salirse por él. Nunca
-la dejes flotando con margen por los cuatro lados ni le pongas un marco alrededor: eso es
-exactamente lo que hay que evitar, plano y simétrico es un fallo.
-Ideas: la foto ocupando dos tercios y sangrando por la derecha; un bloque de color que la
-cruza o la sostiene; la foto recortada en una forma geométrica grande que se sale del lienzo;
-el título a escala enorme conviviendo con ella. Retícula asimétrica, mucho aire y jerarquía
-clarísima entre título, dedicatoria y firma.
+tres tonos dominantes más un neutro: ese es el fondo y la base de la tarjeta. Sobre esa base,
+la ilustración y los acentos pueden llevar los rojos, vino, rosa viejo o dorado de la fecha,
+elegidos para convivir con la foto y no pelearse con ella. Si la foto es fría, escoge el rojo
+o el rosa que le siente; si es cálida, aprovéchalo. No teñir la tarjeta entera de rojo.
 
 TIPOGRAFÍA serif editorial elegante y perfectamente legible sobre su fondo, nunca encima de
 los rostros. Nada de glitter, degradados chillones, sombras duras ni collage recargado.
