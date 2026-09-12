@@ -13,6 +13,7 @@ from .celebration_cards import (
     suggest_celebration_phrase,
     CardInput,
     card_prompt,
+    CARD_STYLES,
 )
 from .models import CardGeneration
 
@@ -110,37 +111,75 @@ class CelebrationCardTests(TestCase):
             self.assertEqual(self.request({'image': photo_file()}).status_code, 503)
         self.assertEqual(self.request({'image': photo_file()}).status_code, 429)
 
-    def test_prompt_keeps_the_photo_alone_and_takes_the_palette_from_it(self):
-        prompt = card_prompt({'phrase': 'Te quiero'})
-        # Identidad de las personas y nada fotográfico añadido a su alrededor.
-        for text in ['rostros', 'ropa', 'accesorios', 'PROHIBIDO añadir', 'copas', 'velas',
-                     'LA PALETA SALE DE LA FOTO', 'UNA vez y solo una', 'SOLO texto literal']:
+    def test_prompt_keeps_the_people_and_the_text_rules(self):
+        prompt = card_prompt({'phrase': 'Te quiero'}, style=CARD_STYLES[0])
+        # Identidad de las personas (rostros nítidos aunque el montaje cambie)
+        # y cada texto una sola vez, copiado tal cual.
+        for text in ['rostros', 'ropa', 'accesorios', 'NÍTIDOS', 'UNA vez y solo una',
+                     'SOLO texto literal', 'Te quiero']:
             self.assertIn(text, prompt)
 
-    def test_prompt_asks_for_illustrated_ornament_of_the_date(self):
-        # La primera tanda salía genérica: sin rosas ni marco no se leía la fecha.
-        prompt = card_prompt({})
-        for text in ['AMOR Y AMISTAD: TIENE QUE NOTARSE', 'rosas', 'corazones', 'EL MARCO',
-                     'orla ilustrada']:
+    def test_prompt_is_a_handmade_album_page_with_the_photo_pasted_whole(self):
+        # 12-09, cuarta vuelta: fuera el hyper bloom; Jaime trajo doce referencias de
+        # álbum con la foto montada como copia física (polaroid, fotograma, recorte).
+        prompt = card_prompt({}, style=CARD_STYLES[1])
+        for text in ['PÁGINA DE ÁLBUM HECHA A MANO', 'copia física', 'Pega la foto adjunta tal cual',
+                     'sin recortar a nadie', 'entre el 45 % y el 60 %', 'Ningún adorno, texto ni flor pisa una cara']:
             self.assertIn(text, prompt)
-        # El adorno es dibujo: pedirlo fotográfico devolvería el montaje que se quitó.
-        self.assertIn('ILUSTRACIÓN', prompt)
+        # El estilo anterior no sobrevive en ninguna de sus piezas.
+        for gone in ['HYPER BLOOM', 'PROHIBIDO EL MARCO', 'aberración cromática', 'Didone']:
+            self.assertNotIn(gone, prompt)
 
-    def test_prompt_no_longer_imposes_the_brand_palette(self):
-        # La paleta la pone la foto: un vino fijo teñía tarjetas que no lo pedían.
-        prompt = card_prompt({})
-        for hexa in ['#0a0a0a', '#5e1c2b', '#cf6b7c']:
-            self.assertNotIn(hexa, prompt)
-        # El satén y el mármol solo pueden aparecer como prohibición, nunca como encargo.
-        self.assertIn('mármol', prompt.split('PROHIBIDO añadir')[1].split('Y SÍ ES DE AMOR')[0])
-        # Los rojos son acento sobre la base que da la foto, no un tinte general.
-        self.assertIn('No teñir la tarjeta entera de rojo', prompt)
+    def test_prompt_draws_one_montage_at_random_from_the_references(self):
+        # Doce montajes, uno por tarjeta: la misma foto no da siempre la misma pieza.
+        self.assertEqual(len(CARD_STYLES), 12)
+        with patch('apps.motivational.celebration_cards.random.choice',
+                   return_value=CARD_STYLES[9]) as choice:
+            prompt = card_prompt({})
+        choice.assert_called_once_with(CARD_STYLES)
+        self.assertIn('FONDO OSCURO SATURADO', prompt)
+        # Solo entra el montaje sorteado, no el catálogo entero.
+        self.assertNotIn('CARTÓN KRAFT', prompt)
+        self.assertEqual(prompt.count('EL MONTAJE DE ESTA TARJETA'), 1)
+
+    def test_every_montage_says_paper_photo_and_ink(self):
+        # Cada ficha tiene que bastarse sola: soporte, montaje de la foto y color de tinta.
+        for montage in CARD_STYLES:
+            prompt = card_prompt({}, style=montage)
+            self.assertIn(montage, prompt)
+            self.assertTrue(montage.isupper() is False and montage[:4].isupper(),
+                            msg=f'sin titular en mayúsculas: {montage[:40]}')
+            self.assertTrue(any(word in montage.lower() for word in ('foto', 'copia', 'fotograma')),
+                            msg=f'sin montaje de la foto: {montage[:40]}')
+            self.assertTrue(any(word in montage.lower() for word in ('tinta', 'texto', 'dorado')),
+                            msg=f'sin color de texto: {montage[:40]}')
+
+    def test_color_is_taken_from_the_photo_not_fixed_by_the_montage(self):
+        # 12-09: a Jaime le gustó el montaje pero pidió que los colores fueran acordes
+        # a la foto. El montaje fija la estructura; el matiz lo pone la fotografía.
+        prompt = card_prompt({}, style=CARD_STYLES[7])
+        for text in ['EL COLOR SALE DE LA FOTO', 'DOMINANTE', 'ACENTO',
+                     'El papel toma su temperatura', 'Tres colores como mucho',
+                     'NO tiñas la foto']:
+            self.assertIn(text, prompt)
+        # Ninguna ficha ata su color: todas dicen de dónde sale el del papel o el del acento.
+        for montage in CARD_STYLES:
+            flat = ' '.join(montage.split())
+            self.assertTrue('la foto' in flat or 'LA FOTO' in flat,
+                            msg=f'ficha con color cerrado: {montage[:40]}')
+
+    def test_prompt_typography_is_handwritten_and_matte(self):
+        # La cursiva manuscrita manda, y nada de efectos sobre las letras.
+        prompt = card_prompt({}, style=CARD_STYLES[3])
+        for text in ['cursiva manuscrita', 'versalitas', 'sin brillo metálico',
+                     'Frostbyte', 'línea fina dibujada a mano', 'Sin globos, peluches']:
+            self.assertIn(text, prompt)
 
 
 @override_settings(CACHES={'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache'}})
 @patch.dict('os.environ', BOTH_PROVIDERS)
 class FallbackTests(TestCase):
-    """Gemini primero; OpenAI solo cuando el primero no entrega imagen."""
+    """OpenAI primero, con coste acotado; Gemini rescata fallos y claves ausentes."""
 
     def setUp(self):
         cache.clear()
@@ -151,27 +190,60 @@ class FallbackTests(TestCase):
 
     @patch('apps.motivational.celebration_cards.OpenAI')
     @patch('apps.motivational.celebration_cards.genai.Client')
-    def test_openai_is_not_called_when_gemini_answers(self, gemini, openai):
-        gemini.return_value.__enter__.return_value.models.generate_content.return_value.parts = [
-            SimpleNamespace(inline_data=SimpleNamespace(data=b'output', mime_type='image/png'))]
+    @patch.dict('os.environ', {'CELEBRATION_OPENAI_IMAGE_MODEL': '',
+                              'CELEBRATION_FALLBACK_IMAGE_MODEL': 'gpt-image-1.5'})
+    def test_openai_is_primary_with_bounded_cost(self, gemini, openai):
+        openai.return_value.images.edit.return_value = openai_image()
         self.assertEqual(self.request().status_code, 200)
-        openai.assert_not_called()
+        gemini.assert_not_called()
+        args = openai.return_value.images.edit.call_args.kwargs
+        self.assertEqual(args['model'], 'gpt-image-2.5-flare')
+        self.assertEqual(args['quality'], 'medium')
+        self.assertEqual(args['size'], '1024x1280')
+        self.assertEqual(args['n'], 1)
+        self.assertEqual(args['output_format'], 'jpeg')
+        self.assertEqual(args['output_compression'], 90)
+        self.assertEqual(openai.call_args.kwargs['max_retries'], 0)
+        self.assertEqual(args['image'][0].name, 'foto.jpg')
         row = CardGeneration.objects.get()
-        self.assertEqual((row.provider, row.status, row.was_fallback), ('gemini', 'ok', False))
+        self.assertEqual((row.provider, row.status, row.was_fallback), ('openai', 'ok', False))
+        self.assertEqual(row.model_name, 'gpt-image-2.5-flare')
 
     @patch('apps.motivational.celebration_cards.OpenAI')
     @patch('apps.motivational.celebration_cards.genai.Client')
-    def test_openai_rescues_a_gemini_failure(self, gemini, openai):
-        gemini.return_value.__enter__.return_value.models.generate_content.side_effect = RuntimeError('caído')
-        openai.return_value.images.edit.return_value = openai_image()
+    def test_gemini_rescues_an_openai_failure(self, gemini, openai):
+        openai.return_value.images.edit.side_effect = RuntimeError('caído')
+        gemini.return_value.__enter__.return_value.models.generate_content.return_value.parts = [
+            SimpleNamespace(inline_data=SimpleNamespace(data=PNG, mime_type='image/png'))]
         response = self.request()
         self.assertEqual(response.status_code, 200)
         self.assertEqual(base64.b64decode(response.data['image_base64']), PNG)
         self.assertEqual(response.data['mime_type'], 'image/png')
-        self.assertEqual(openai.return_value.images.edit.call_args.kwargs['size'], '1024x1536')
         self.assertEqual(
             [(r.provider, r.status, r.was_fallback) for r in CardGeneration.objects.order_by('id')],
-            [('gemini', 'failed', False), ('openai', 'ok', True)])
+            [('openai', 'failed', False), ('gemini', 'ok', True)])
+
+    @patch.dict('os.environ', {'GEMINI_API_KEY': '',
+                              'CELEBRATION_OPENAI_IMAGE_MODEL': 'gpt-image-2.5-sunburst'})
+    @patch('apps.motivational.celebration_cards.OpenAI')
+    @patch('apps.motivational.celebration_cards.genai.Client')
+    def test_openai_alone_and_explicit_model_override(self, gemini, openai):
+        openai.return_value.images.edit.return_value = openai_image()
+        self.assertEqual(self.request().status_code, 200)
+        self.assertEqual(openai.return_value.images.edit.call_args.kwargs['model'],
+                         'gpt-image-2.5-sunburst')
+        gemini.assert_not_called()
+
+    @patch('apps.motivational.celebration_cards.OpenAI')
+    @patch('apps.motivational.celebration_cards.genai.Client')
+    def test_empty_openai_response_uses_gemini(self, gemini, openai):
+        openai.return_value.images.edit.return_value = SimpleNamespace(data=[])
+        gemini.return_value.__enter__.return_value.models.generate_content.return_value.parts = [
+            SimpleNamespace(inline_data=SimpleNamespace(data=PNG, mime_type='image/png'))]
+        self.assertEqual(self.request().status_code, 200)
+        self.assertEqual(
+            [(r.provider, r.status, r.was_fallback) for r in CardGeneration.objects.order_by('id')],
+            [('openai', 'failed', False), ('gemini', 'ok', True)])
 
     @patch('apps.motivational.celebration_cards.OpenAI')
     @patch('apps.motivational.celebration_cards.genai.Client')
