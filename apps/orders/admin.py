@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django.utils.html import format_html
 from django.db.models import Count
-from .models import Order, OrderItem, Table, PageVisit, StoreSettings
+from .models import Order, OrderItem, Table, PageVisit, SocialClick, StoreSettings
 from apps.search import PlainSearchAdminMixin
 
 
@@ -142,6 +142,19 @@ class PageVisitAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
         ("Estadísticas", {"fields": ("visit_count",)}),
         ("Fechas", {"fields": ("created_at", "updated_at")}),
     )
+
+
+@admin.register(SocialClick)
+class SocialClickAdmin(admin.ModelAdmin):
+    """Solo lectura: las filas las escribe el endpoint público, no una persona."""
+
+    list_display = ["date", "network", "source", "click_count"]
+    list_filter = ["network", "source", "date"]
+    readonly_fields = ["network", "source", "date", "click_count", "created_at", "updated_at"]
+    ordering = ["-date", "-click_count"]
+
+    def has_add_permission(self, request):
+        return False
 
 
 @admin.register(StoreSettings)

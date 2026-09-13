@@ -3,7 +3,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.exceptions import ValidationError
-from rest_framework.throttling import UserRateThrottle
+from rest_framework.throttling import UserRateThrottle, AnonRateThrottle
 from apps.accounts.permissions import IsAdminUser, IsStaffMember
 from decimal import Decimal, InvalidOperation
 from django.db import transaction
@@ -18,6 +18,7 @@ from .models import (
     OrderItem,
     Table,
     PageVisit,
+    SocialClick,
     StoreSettings,
     MIN_DELIVERY_RADIUS_KM,
     MAX_DELIVERY_RADIUS_KM,
@@ -1377,6 +1378,114 @@ class PageVisitViewSet(viewsets.ViewSet):
         return Response({
             "pages": data,
             "total_visits": sum(p.visit_count for p in pages)
+        })
+
+
+class SocialClickThrottle(AnonRateThrottle):
+    """Tope por IP para que el contador no se envenene con un bucle trivial.
+
+    Generoso a propósito: un cliente real toca el enlace unas pocas veces por
+    visita, así que 60 por hora no estorba a nadie.
+    """
+
+    scope = "social_click"
+    rate = "60/hour"
+
+
+class SocialClickViewSet(viewsets.ViewSet):
+    """Clics de salida hacia Instagram y TikTok, por origen.
+
+    Mide qué sitio de la app trae seguidores. El registro es público (lo llama
+    la carta sin sesión) y las estadísticas son solo para administradores.
+    """
+
+    permission_classes = [AllowAny]
+
+    @action(
+        detail=False,
+        methods=["post"],
+        url_path="register-click",
+        throttle_classes=[SocialClickThrottle],
+    )
+    def register_click(self, request):
+        """Suma un clic hacia una red social desde un origen concreto."""
+        network = (request.data.get("network") or "").strip().lower()
+        source = (request.data.get("source") or "").strip().lower()
+
+        valid_networks = dict(SocialClick.NETWORK_CHOICES)
+        valid_sources = dict(SocialClick.SOURCE_CHOICES)
+
+        if network not in valid_networks:
+            return Response(
+                {"error": f"network debe ser uno de: {', '.join(valid_networks)}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if source not in valid_sources:
+            return Response(
+                {"error": f"source debe ser uno de: {', '.join(valid_sources)}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        row = SocialClick.register(network, source)
+        return Response({
+            "network": row.network,
+            "source": row.source,
+            "date": row.date,
+            "click_count": row.click_count,
+        })
+
+    @action(
+        detail=False,
+        methods=["get"],
+        url_path="stats",
+        permission_classes=[IsAdminUser],
+    )
+    def stats(self, request):
+        """Clics por origen y por día en una ventana reciente.
+
+        ?days=N acota la ventana (30 por defecto, 365 como techo).
+        """
+        try:
+            days = int(request.query_params.get("days", 30))
+        except (TypeError, ValueError):
+            days = 30
+        days = max(1, min(days, 365))
+
+        since = timezone.localdate() - timedelta(days=days - 1)
+        rows = SocialClick.objects.filter(date__gte=since)
+
+        by_source = (
+            rows.values("network", "source")
+            .annotate(clicks=Sum("click_count"))
+            .order_by("-clicks")
+        )
+        by_day = (
+            rows.values("date")
+            .annotate(clicks=Sum("click_count"))
+            .order_by("date")
+        )
+
+        source_labels = dict(SocialClick.SOURCE_CHOICES)
+        network_labels = dict(SocialClick.NETWORK_CHOICES)
+
+        return Response({
+            "days": days,
+            "since": since,
+            "total_clicks": rows.aggregate(total=Sum("click_count"))["total"] or 0,
+            "by_source": [
+                {
+                    "network": r["network"],
+                    "network_label": network_labels.get(r["network"], r["network"]),
+                    "source": r["source"],
+                    "source_label": source_labels.get(r["source"], r["source"]),
+                    "clicks": r["clicks"],
+                }
+                for r in by_source
+            ],
+            "by_day": [
+                {"date": r["date"], "clicks": r["clicks"]}
+                for r in by_day
+            ],
         })
 
 

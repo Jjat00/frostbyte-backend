@@ -6,6 +6,7 @@ from .views import (
     TableViewSet,
     PageVisitViewSet,
     PublicOrderViewSet,
+    SocialClickViewSet,
     CustomerOrderViewSet,
 )
 
@@ -14,6 +15,7 @@ router.register(r"orders", OrderViewSet, basename="order")
 router.register(r"order-items", OrderItemViewSet, basename="order-item")
 router.register(r"tables", TableViewSet, basename="table")
 router.register(r"pages", PageVisitViewSet, basename="page")
+router.register(r"social", SocialClickViewSet, basename="social")
 router.register(r"public-orders", PublicOrderViewSet, basename="public-order")
 router.register(r"my-orders", CustomerOrderViewSet, basename="my-order")
 

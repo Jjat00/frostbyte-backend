@@ -677,6 +677,92 @@ class PageVisit(models.Model):
         self.save(update_fields=["visit_count", "updated_at"])
 
 
+class SocialClick(models.Model):
+    """Clic de salida hacia una red social, contado por red, origen y día.
+
+    Existe para responder una sola pregunta: de los sitios donde ofrecemos
+    Instagram (el hero, el banner del descuento, el popup, el pie), ¿cuál
+    trae gente de verdad? Sin esto se decide a ciegas cuál conservar.
+
+    Una fila por (red, origen, día) en vez de una por clic: basta para ver la
+    serie semanal y la tabla no crece sin control. El contador es una señal
+    interna, no una métrica contable: el endpoint es público y aunque está
+    limitado por IP, nada impide que alguien lo infle.
+    """
+
+    NETWORK_CHOICES = [
+        ("instagram", "Instagram"),
+        ("tiktok", "TikTok"),
+    ]
+
+    # Cada origen es un sitio distinto de la app. Añadir uno aquí es lo único
+    # que hace falta para que el front pueda reportarlo.
+    SOURCE_CHOICES = [
+        ("hero", "Hero"),
+        ("banner_descuento", "Banner de descuento"),
+        ("popup", "Popup"),
+        ("footer", "Pie de página"),
+        ("carta", "Carta"),
+    ]
+
+    network = models.CharField(
+        max_length=20,
+        choices=NETWORK_CHOICES,
+        verbose_name="Red social",
+    )
+    source = models.CharField(
+        max_length=30,
+        choices=SOURCE_CHOICES,
+        verbose_name="Origen",
+        help_text="Lugar de la app desde donde se tocó el enlace",
+    )
+    date = models.DateField(
+        verbose_name="Fecha",
+        help_text="Día local del clic",
+    )
+    click_count = models.PositiveIntegerField(
+        default=0,
+        verbose_name="Clics",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Clic a red social"
+        verbose_name_plural = "Clics a redes sociales"
+        ordering = ["-date", "-click_count"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["network", "source", "date"],
+                name="unique_social_click_per_day",
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.get_network_display()} desde {self.get_source_display()} ({self.date}): {self.click_count}"
+
+    @classmethod
+    def register(cls, network, source):
+        """Suma un clic al día de hoy, creando la fila si es el primero.
+
+        El incremento va por F() para que dos clics simultáneos no se pisen.
+        """
+        today = timezone.localdate()
+        row, created = cls.objects.get_or_create(
+            network=network,
+            source=source,
+            date=today,
+            defaults={"click_count": 1},
+        )
+        if not created:
+            cls.objects.filter(pk=row.pk).update(
+                click_count=models.F("click_count") + 1,
+                updated_at=timezone.now(),
+            )
+            row.refresh_from_db(fields=["click_count"])
+        return row
+
+
 # Límites del radio de domicilios: evitan un 0 (que dejaría fuera al local
 # mismo) y un valor absurdo por un dedazo en la UI.
 MIN_DELIVERY_RADIUS_KM = Decimal("0.10")
