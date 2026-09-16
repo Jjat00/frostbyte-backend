@@ -3432,3 +3432,68 @@ class MensajeViejoQueSeRelleTests(TestCase):
         del payload["data"][0]["message"]["timestamp"]
         self._procesar(payload, "sin-hora")
         self.assertIsNotNone(self.contact.human_until)
+
+
+class AcusesDelMismoMensajeTests(TestCase):
+    """Los acuses de recibo no son mensajes nuevos.
+
+    WhatsApp manda un webhook por cada estado (enviado, entregado, leído) del
+    MISMO mensaje: al chat de Anyi del 15/09 le llegaron 38 webhooks de un solo
+    wamid. Cada uno renovaba la pausa otros minutos y metía otra copia del
+    texto en el hilo del modelo.
+    """
+
+    def setUp(self):
+        self.contact = WhatsAppContact.objects.create(phone=BSUID, wa_user_id=BSUID)
+
+    def _procesar(self, payload, key):
+        from .worker import _handle_outbound, extract_outbound_messages
+
+        event = WebhookEvent.objects.create(
+            idempotency_key=key, payload=payload, event_type="whatsapp.message.sent"
+        )
+        _handle_outbound(event, extract_outbound_messages(payload))
+        self.contact.refresh_from_db()
+        return event
+
+    def test_el_segundo_acuse_no_renueva_la_pausa(self):
+        payload = app_reply_payload("Buenas noches", wamid="wamid.mismo")
+        self._procesar(payload, "acuse-1")
+        primera = self.contact.human_until
+        self.assertIsNotNone(primera)
+        self._procesar(payload, "acuse-2")  # el mismo mensaje, ahora "leído"
+        self.assertEqual(self.contact.human_until, primera)
+
+    def test_el_texto_no_se_duplica_en_el_hilo(self):
+        payload = app_reply_payload("Dime qué necesitas?", wamid="wamid.mismo2")
+        with patch("apps.whatsapp.agent.record_messages") as record:
+            self._procesar(payload, "dup-1")
+            self._procesar(payload, "dup-2")
+            self._procesar(payload, "dup-3")
+        self.assertEqual(record.call_count, 1)
+
+    def test_un_mensaje_distinto_del_equipo_si_renueva(self):
+        self._procesar(app_reply_payload("Buenas noches", wamid="wamid.a"), "a")
+        primera = self.contact.human_until
+        self._procesar(app_reply_payload("Que sabor?", wamid="wamid.b"), "b")
+        self.assertGreater(self.contact.human_until, primera)
+
+
+class PausaCortaTests(TestCase):
+    """Jaime (15/09): "si el humano interviene, Frosty no se pause tanto".
+
+    La pausa se renueva con cada mensaje del equipo, así que mientras alguien
+    atienda no se acaba; lo que cambia es cuánto espera el cliente desde el
+    último mensaje del equipo hasta que el agente vuelve a estar disponible.
+    """
+
+    def test_la_pausa_por_intervencion_es_corta(self):
+        from django.conf import settings as dj
+
+        self.assertLessEqual(dj.WHATSAPP_HUMAN_PAUSE_MINUTES, 15)
+
+    def test_la_escalada_pausa_mas_que_una_intervencion_pero_tambien_caduca(self):
+        from django.conf import settings as dj
+
+        self.assertGreater(dj.WHATSAPP_HANDOFF_PAUSE_MINUTES, dj.WHATSAPP_HUMAN_PAUSE_MINUTES)
+        self.assertLessEqual(dj.WHATSAPP_HANDOFF_PAUSE_MINUTES, 12 * 60)

@@ -751,6 +751,12 @@ def _handle_outbound(event, outbounds):
             continue
         if msg["wamid"] and SentMessage.objects.filter(wamid=msg["wamid"]).exists():
             continue
+        if msg["wamid"] and ChatMessage.objects.filter(wamid=msg["wamid"]).exists():
+            # Ya lo tratamos: esto es un acuse (enviado/entregado/leído) del
+            # MISMO mensaje. WhatsApp manda varios por mensaje —a un chat del
+            # 15/09 le llegaron 38 del mismo wamid— y cada uno renovaba la
+            # pausa y metía otra copia del texto en el hilo del modelo.
+            continue
         if msg["origin"] == "business_app":
             human.append(msg)  # la app del celular siempre es un humano
         else:
