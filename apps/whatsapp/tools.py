@@ -217,6 +217,32 @@ def _coincidencias(products, words, exigir_variantes=True):
     return scored
 
 
+def _lo_que_mas_pide(contact):
+    """Los productos que más ha pedido este cliente, del más repetido al menos.
+
+    Los últimos pedidos ya se listan uno por uno, pero de esa lista no se ve de
+    un vistazo lo que de verdad le gusta: quien lleva cuatro granizados de
+    maracuyá en seis pedidos tiene un favorito, y es lo que un mesero recuerda
+    de un cliente que vuelve.
+    """
+    from collections import Counter
+
+    conteo = Counter()
+    items = (
+        OrderItem.objects.filter(
+            order__in=_customer_orders(contact).exclude(status=Order.Status.CANCELLED)
+        )
+        .select_related("product_variant__product")
+        .order_by()
+    )
+    for item in items:
+        variant = item.product_variant
+        if variant and variant.product:
+            conteo[variant.product.name] += item.quantity
+    frecuentes = [nombre for nombre, veces in conteo.most_common(3) if veces >= 2]
+    return ", ".join(frecuentes)
+
+
 def _ubicacion_guardada(contact):
     """Cómo nombrarle al cliente la ubicación que ya tenemos suya, o "".
 
@@ -641,6 +667,9 @@ def build_tools(contact, turn=None):
             )
         if contact.notes:
             lines.append(f"Preferencias guardadas: {contact.notes}")
+        favoritos = _lo_que_mas_pide(contact)
+        if favoritos:
+            lines.append(f"Lo que más pide: {favoritos}")
         for order in orders:
             date = timezone.localtime(order.created_at).strftime("%Y-%m-%d")
             items = ", ".join(

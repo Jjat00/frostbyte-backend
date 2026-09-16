@@ -10,6 +10,7 @@ entra vía tools.
 import logging
 import re
 import threading
+from datetime import timedelta
 from typing import NamedTuple
 
 from django.conf import settings
@@ -74,9 +75,14 @@ mismo turno, ni por lo que creas recordar de la conversación.
 cliente pregunta y deja que él lleve la conversación. Solo recomienda (por ejemplo "lo de \
 siempre" según su historial) cuando el cliente pida ideas o esté indeciso.
 4. Usa consultar_historial_cliente al inicio para saber con quién hablas y saludarlo por su \
-nombre si se conoce. Ofrece "lo de siempre" SOLO si esa tool devuelve pedidos anteriores (y \
-sabiendo qué pidió); a un cliente sin pedidos previos NUNCA le menciones "lo de siempre" \
-porque no existe tal cosa: salúdalo y pregúntale qué desea.
+nombre si se conoce. A un cliente que ya pidió antes lo tratas como lo que es: alguien \
+conocido. Tienes lo que más pide, sus últimos pedidos, sus preferencias guardadas y su \
+ubicación, y además arriba en esta conversación está lo que ya se habló con él otras veces \
+(cuando ha pasado un día verás una nota que lo separa). Úsalo como lo usaría alguien que \
+atiende: sin recitárselo y sin presumir de acordarte. Ofrece "lo de siempre" SOLO si esa tool \
+devuelve pedidos anteriores (y sabiendo qué pidió); a un cliente sin pedidos previos NUNCA le \
+menciones "lo de siempre" porque no existe tal cosa: salúdalo y pregúntale qué desea. Y un \
+pedido de otro día NO sigue vivo: no lo retomes ni lo des por hecho.
 5. Si el cliente pide ver la carta, el menú completo o pregunta en general "qué hay \
 disponible", responde con las categorías que devuelve consultar_menu (solo los nombres) y \
 compártele el enlace {site_url} (ahí está la carta completa con fotos): NO vuelques el menú \
@@ -551,8 +557,48 @@ def _build_agent(contact, turn=None):
     )
 
 
+# Cuánto silencio separa una conversación de la siguiente. Por debajo es la
+# misma charla; por encima, el cliente vuelve otro día y hay que decírselo al
+# modelo o retomaría un pedido de ayer como si siguiera vivo.
+NUEVA_CONVERSACION = timedelta(hours=6)
+
+SESION_PROMPT = (
+    "[Pasó {cuanto} desde el último mensaje: esto es una conversación NUEVA. "
+    "Lo de arriba es de otro día — te sirve para saber quién es y qué suele "
+    "pedir, pero NINGÚN pedido de entonces sigue vivo: no des por hecho nada "
+    "de aquello ni lo retomes salvo que él lo mencione.]"
+)
+
+
 def _thread_id(contact):
-    return f"wa:{contact.phone}:{timezone.localdate().isoformat()}"
+    """Un hilo por cliente, no uno por día.
+
+    Antes el hilo llevaba la fecha y cada mañana el cliente volvía a ser un
+    desconocido: había pedido diez veces y el agente lo saludaba como si nunca
+    se hubieran hablado (Jaime, 15/09). Lo que impide que el hilo crezca sin
+    fin no es cortarlo cada día, es el resumen (ver _summarization_middleware).
+    """
+    return f"wa:{contact.phone}"
+
+
+def _corte_de_sesion(contact):
+    """La nota que separa la conversación de hoy de la de la otra vez, o "".
+
+    Sale del último mensaje registrado del contacto; si no hay ninguno, es un
+    cliente nuevo y no hay nada que separar.
+    """
+    if not contact.last_message_at:
+        return ""
+    quieto = timezone.now() - contact.last_message_at
+    if quieto < NUEVA_CONVERSACION:
+        return ""
+    dias = quieto.days
+    if dias >= 1:
+        cuanto = "un día" if dias == 1 else f"{dias} días"
+    else:
+        horas = int(quieto.total_seconds() // 3600)
+        cuanto = "una hora" if horas <= 1 else f"{horas} horas"
+    return SESION_PROMPT.format(cuanto=cuanto)
 
 
 def record_messages(contact, entries):
@@ -702,8 +748,12 @@ def run_turn(
     except Exception:
         logger.exception("No se pudo leer el hilo previo de %s", contact.phone)
 
+    corte = _corte_de_sesion(contact)
+    entrada = ([{"role": "user", "content": corte}] if corte else []) + [
+        {"role": "user", "content": user_text}
+    ]
     result = agent.invoke(
-        {"messages": [{"role": "user", "content": user_text}]},
+        {"messages": entrada},
         config=config,
     )
     messages = result["messages"]

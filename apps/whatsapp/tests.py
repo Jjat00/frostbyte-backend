@@ -3613,13 +3613,11 @@ class ResumenDeLaConversacionTests(TestCase):
         self.assertIn("sin inventar nada", prompt)
         self.assertNotIn("ARTIFACTS", prompt)  # el de fábrica es para agentes de código
 
-    def test_el_hilo_sigue_siendo_de_un_dia(self):
-        """Ni "toda la vida" ni una sola sesión: el día, como hasta ahora."""
+    def test_el_hilo_es_del_cliente_y_no_del_dia(self):
+        """Lo que acota el hilo es el resumen, no cortarlo cada mañana."""
         contact = WhatsAppContact.objects.create(phone=PHONE)
-        self.assertEqual(
-            agent_mod._thread_id(contact),
-            f"wa:{PHONE}:{timezone.localdate().isoformat()}",
-        )
+        self.assertEqual(agent_mod._thread_id(contact), f"wa:{PHONE}")
+        self.assertNotIn(timezone.localdate().isoformat(), agent_mod._thread_id(contact))
 
 
 class ResumenEnUnTurnoRealTests(TestCase):
@@ -3685,3 +3683,90 @@ class ResumenEnUnTurnoRealTests(TestCase):
         grafo = self._grafo()
         grafo.invoke({"messages": [HumanMessage(content="hola")]})
         self.assertEqual(len(self.resumidor.responses), 1, "no debió consumirse")
+
+
+class ClienteQueVuelveTests(TestCase):
+    """El cliente que ya pidió no vuelve a ser un desconocido cada mañana.
+
+    Jaime (15/09): "si quiera el agente tenga contexto de las conversaciones, o
+    conozca del usuario que ya pidió antes, sus productos favoritos... con el
+    hilo de cada día no conocemos a la persona, sería como una persona nueva
+    cada conversación aunque sea la misma y ya haya pedido antes".
+    """
+
+    def setUp(self):
+        from apps.business.models import Business
+        from apps.products.models import Category, Product, ProductVariant
+
+        negocio, _ = Business.objects.get_or_create(
+            slug="frostbyte", defaults={"name": "Frostbyte"}
+        )
+        categoria = Category.objects.create(name="Granizados", slug="granizados", business=negocio)
+        self.maracuya = Product.objects.create(
+            name="Granizado de Maracuyá", category=categoria, business=negocio, description="Fruta"
+        )
+        self.mora = Product.objects.create(
+            name="Granizado de Mora", category=categoria, business=negocio, description="Fruta"
+        )
+        self.v_maracuya = ProductVariant.objects.create(
+            product=self.maracuya, name="Grande", sku="GM-1", price=10000
+        )
+        self.v_mora = ProductVariant.objects.create(
+            product=self.mora, name="Grande", sku="GMO-1", price=10000
+        )
+        self.contact = WhatsAppContact.objects.create(phone=PHONE, customer_name="Camila")
+        self.tools = {t.name: t for t in build_tools(self.contact)}
+
+    def _pedido(self, variante, cantidad=1):
+        from apps.orders.models import OrderItem
+
+        order = Order.objects.create(
+            source=Order.Source.WHATSAPP,
+            order_type=Order.OrderType.DELIVERY,
+            customer_name="Camila",
+            customer_phone=PHONE,
+            status=Order.Status.DELIVERED,
+        )
+        OrderItem.objects.create(
+            order=order,
+            product_variant=variante,
+            quantity=cantidad,
+            unit_price=variante.price,
+            subtotal=variante.price * cantidad,
+        )
+        return order
+
+    def test_el_historial_dice_lo_que_mas_pide(self):
+        for _ in range(3):
+            self._pedido(self.v_maracuya)
+        self._pedido(self.v_mora)
+        historial = self.tools["consultar_historial_cliente"].invoke({})
+        self.assertIn("Lo que más pide: Granizado de Maracuyá", historial)
+
+    def test_un_producto_pedido_una_sola_vez_no_es_un_favorito(self):
+        self._pedido(self.v_mora)
+        historial = self.tools["consultar_historial_cliente"].invoke({})
+        self.assertNotIn("Lo que más pide", historial)
+
+    def test_el_hilo_no_lleva_la_fecha(self):
+        self.assertEqual(agent_mod._thread_id(self.contact), f"wa:{PHONE}")
+
+    def test_tras_unos_dias_el_turno_avisa_de_que_es_otra_conversacion(self):
+        self.contact.last_message_at = timezone.now() - datetime.timedelta(days=3)
+        corte = agent_mod._corte_de_sesion(self.contact)
+        self.assertIn("conversación NUEVA", corte)
+        self.assertIn("3 días", corte)
+        self.assertIn("NINGÚN pedido de entonces sigue vivo", corte)
+
+    def test_dentro_de_la_misma_charla_no_se_corta_nada(self):
+        self.contact.last_message_at = timezone.now() - datetime.timedelta(minutes=20)
+        self.assertEqual(agent_mod._corte_de_sesion(self.contact), "")
+
+    def test_un_cliente_nuevo_no_tiene_nada_que_separar(self):
+        self.contact.last_message_at = None
+        self.assertEqual(agent_mod._corte_de_sesion(self.contact), "")
+
+    def test_el_prompt_le_dice_que_conoce_al_cliente(self):
+        prompt = build_system_prompt()
+        self.assertIn("lo tratas como lo que es: alguien", prompt)
+        self.assertIn("un pedido de otro día NO sigue vivo", prompt)
