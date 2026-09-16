@@ -125,9 +125,21 @@ def _notify_status_change(sender, instance, created, **kwargs):
         return
     if instance.source != Order.Source.WHATSAPP or not instance.customer_phone:
         return
+    # Cada estado se avisa UNA vez. Un pedido retrocede más de lo que parece
+    # (el equipo lo devuelve a la cocina, o lo marca entregado por error) y el
+    # cliente recibía el mismo mensaje dos veces: a Anyi le llegó "entregado"
+    # a las 18:47, contestó "aún no me entregan", y le volvió a llegar a las
+    # 19:17 con un "va en camino" en medio.
+    avisados = [s for s in (instance.notified_statuses or []) if isinstance(s, str)]
+    if instance.status in avisados:
+        return
     body = message_for(instance)
     if not body:
         return
+    instance.notified_statuses = avisados + [instance.status]
+    Order.objects.filter(pk=instance.pk).update(
+        notified_statuses=instance.notified_statuses
+    )
     phone = instance.customer_phone
 
     def _send():

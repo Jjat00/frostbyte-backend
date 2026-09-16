@@ -531,6 +531,39 @@ class BusquedaDeProductosTests(TestCase):
     def test_el_tamano_sigue_desempatando(self):
         self.assertIn("Salchipapa Clásica", self._buscar("salchipapa clasica personal"))
 
+    def test_lo_agotado_no_se_niega_como_si_no_existiera(self):
+        """Chat real 2026-09-14: la clienta mandó una foto de la carta con las
+        salchipapas y el agente contestó "por ahora no tenemos salchipapas
+        disponibles en la carta". Ese día la categoría estaba apagada porque se
+        acabó la comida, y ella lo leyó como que no vendemos eso. Se fue."""
+        self.salchipapas.is_active = False
+        self.salchipapas.save()
+        resultado = self._buscar("una salchipapa con queso")
+        self.assertIn("HOY no está disponible", resultado)
+        self.assertIn("NUNCA que no lo vendemos", resultado)
+        self.assertIn("Salchipapa con Queso", resultado)
+
+    def test_lo_agotado_ofrece_lo_que_si_hay_hoy(self):
+        self.salchipapas.is_active = False
+        self.salchipapas.save()
+        self.assertIn("Granizado de Mora", self._buscar("salchipapa"))
+
+    def test_un_typo_que_las_letras_no_alcanzan_lo_resuelve_el_modelo(self):
+        """Chat real 2026-09-12: "Tiene pesera??" -> "No, pesera tampoco
+        tenemos". La Pecera granizada estaba activa a $30.000 y se perdió la
+        venta: "pesera" y "pecera" se parecen 0,833 contra un umbral de 0,85.
+        La tool no adivina por él; le entrega lo que hay y el modelo decide."""
+        resultado = self._buscar("tiene pesera")
+        self.assertIn("Sin coincidencias literales", resultado)
+        self.assertIn("Granizado de Mora", resultado)  # el catálogo de hoy, para que elija
+        self.assertIn("búscalo otra vez con ESE nombre", resultado)
+
+    def test_el_catalogo_que_se_le_da_al_modelo_no_lleva_precios(self):
+        """Es material para que decida, no para volcarlo al chat."""
+        resultado = self._buscar("tienen hamburguesas")
+        self.assertNotIn("$", resultado)
+        self.assertNotIn("[variante_id=", resultado)
+
 
 class PedidoParaRecogerTests(TestCase):
     """Chat real 2026-08-19: con los domicilios pausados un cliente pidió una
@@ -3083,3 +3116,253 @@ class PedidoConLoQueElClienteQuisoDarTests(TestCase):
         self.assertIn("pide que envíe el comprobante cuando pague", prompt)
         self.assertIn("NUNCA se espera para crear el pedido", prompt)
         self.assertIn("paga_al_recibir=True", prompt)
+
+
+class EscaladaAHumanoTests(TestCase):
+    """La pausa que pide el agente caduca; la del panel no.
+
+    Chats reales: Anyi V escaló el 06/09 ("me figura como entregado, ya le pasé
+    el caso al equipo") y el 15/09, nueve días después, escribió "Hola, quiero
+    hacer un pedido a domicilio" y no le contestó nadie durante diez minutos.
+    Lo mismo Natt Studio (19/08) y Dayana (27/08): tres clientes con el agente
+    apagado para siempre porque human_handoff no se apaga solo.
+    """
+
+    def setUp(self):
+        self.contact = WhatsAppContact.objects.create(phone=PHONE, profile_name="Anyi V")
+        self.tools = {t.name: t for t in build_tools(self.contact)}
+
+    def _escalar(self, motivo="el cliente pide hablar con una persona"):
+        with patch("apps.whatsapp.tools._avisar_escalada"):
+            return self.tools["solicitar_humano"].invoke({"motivo": motivo})
+
+    def test_escalar_no_enciende_el_interruptor_permanente(self):
+        self._escalar()
+        self.contact.refresh_from_db()
+        self.assertFalse(self.contact.human_handoff)
+
+    def test_escalar_pausa_al_agente_ahora(self):
+        self._escalar()
+        self.contact.refresh_from_db()
+        self.assertIsNotNone(self.contact.human_until)
+        self.assertGreater(self.contact.human_until, timezone.now())
+
+    def test_la_pausa_caduca_y_el_agente_vuelve(self):
+        """Al día siguiente el cliente encuentra al agente, no un silencio."""
+        self._escalar()
+        self.contact.refresh_from_db()
+        manana = timezone.now() + datetime.timedelta(days=1)
+        self.assertLess(self.contact.human_until, manana)
+
+    def test_escalar_no_acorta_una_pausa_mas_larga(self):
+        lejos = timezone.now() + datetime.timedelta(days=2)
+        self.contact.human_until = lejos
+        self.contact.save()
+        self._escalar()
+        self.contact.refresh_from_db()
+        self.assertEqual(self.contact.human_until, lejos)
+
+    def test_el_dueno_recibe_el_aviso_de_que_alguien_espera(self):
+        config = AgentSettings.load()
+        config.owner_phones = "573164277879"
+        config.save()
+        self.contact.last_phone_number_id = "pn-1"
+        self.contact.save()
+        with patch("apps.whatsapp.tools.kapso.send_text") as enviar:
+            self.tools["solicitar_humano"].invoke({"motivo": "pago en disputa"})
+        enviar.assert_called_once()
+        _, destino, cuerpo = enviar.call_args[0]
+        self.assertEqual(destino, "573164277879")
+        self.assertIn("Anyi V", cuerpo)
+        self.assertIn("pago en disputa", cuerpo)
+
+    def test_un_aviso_que_falla_no_tumba_la_pausa(self):
+        config = AgentSettings.load()
+        config.owner_phones = "573164277879"
+        config.save()
+        self.contact.last_phone_number_id = "pn-1"
+        self.contact.save()
+        with patch("apps.whatsapp.tools.kapso.send_text", side_effect=RuntimeError("Kapso caído")):
+            self.tools["solicitar_humano"].invoke({"motivo": "queja"})
+        self.contact.refresh_from_db()
+        self.assertGreater(self.contact.human_until, timezone.now())
+
+    def test_el_interruptor_del_panel_sigue_siendo_permanente(self):
+        """Apagar el agente a mano no caduca: eso lo decide una persona."""
+        self.contact.human_handoff = True
+        self.contact.save()
+        self.contact.refresh_from_db()
+        self.assertTrue(self.contact.human_handoff)
+
+
+class AvisoRepetidoTests(TransactionTestCase):
+    """Un pedido que retrocede no vuelve a avisar lo que ya avisó.
+
+    Chat real del 06/09: a Anyi le llegó "✅ entregado" a las 18:47, contestó
+    "Aún no me entregan", y a las 19:11 y 19:17 le llegaron "va en camino" y
+    "entregado" otra vez. El equipo había devuelto el pedido a la cocina.
+    """
+
+    def setUp(self):
+        WhatsAppContact.objects.create(phone=PHONE, last_phone_number_id="pn-1")
+        self.order = Order.objects.create(
+            source=Order.Source.WHATSAPP,
+            order_type=Order.OrderType.DELIVERY,
+            customer_name="Anyi",
+            customer_phone=PHONE,
+            payment_method=Order.PaymentMethod.NEQUI,
+        )
+
+    def _mover(self, status, enviados):
+        self.order.status = status
+        with patch("apps.whatsapp.kapso.send_text", side_effect=lambda *a: enviados.append(a[2])):
+            self.order.save()
+            time.sleep(0.3)
+
+    def test_el_mismo_estado_no_se_avisa_dos_veces(self):
+        enviados = []
+        self._mover(Order.Status.PREPARING, enviados)
+        self._mover(Order.Status.DELIVERED, enviados)
+        self._mover(Order.Status.PREPARING, enviados)  # el equipo lo devuelve
+        self._mover(Order.Status.DELIVERED, enviados)
+        entregados = [t for t in enviados if "entregado" in t]
+        self.assertEqual(len(entregados), 1, enviados)
+
+    def test_cada_estado_nuevo_sí_se_avisa(self):
+        enviados = []
+        self._mover(Order.Status.PREPARING, enviados)
+        self._mover(Order.Status.READY, enviados)
+        self._mover(Order.Status.DELIVERED, enviados)
+        self.assertEqual(len(enviados), 3, enviados)
+
+    def test_queda_anotado_de_qué_se_avisó(self):
+        self._mover(Order.Status.PREPARING, [])
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.notified_statuses, [Order.Status.PREPARING])
+
+
+class NumeroDePedidoTests(TestCase):
+    """El número lleva la fecha local, no la de UTC.
+
+    Después de las 19:00 en Colombia, timezone.now() ya es del día siguiente:
+    cinco de los once pedidos de WhatsApp nacieron con la fecha de mañana y el
+    agente se la explicó a un cliente como "la fecha en que quedó creado".
+    """
+
+    def test_el_numero_usa_la_fecha_local(self):
+        order = Order.objects.create(
+            source=Order.Source.WHATSAPP,
+            order_type=Order.OrderType.DELIVERY,
+            customer_name="Daniel",
+            customer_phone=PHONE,
+        )
+        self.assertTrue(
+            order.order_number.startswith(timezone.localdate().strftime("%Y%m%d")),
+            order.order_number,
+        )
+
+    def test_un_pedido_de_la_noche_no_nace_con_la_fecha_de_manana(self):
+        """Las 20:36 del 15/09 en Cumbal son las 01:36 del 16/09 en UTC."""
+        noche = timezone.now().replace(hour=1, minute=36)  # UTC
+        with patch("django.utils.timezone.now", return_value=noche):
+            order = Order.objects.create(
+                source=Order.Source.WHATSAPP,
+                order_type=Order.OrderType.DELIVERY,
+                customer_name="Daniel",
+                customer_phone=PHONE,
+            )
+        esperado = timezone.localtime(noche).strftime("%Y%m%d")
+        self.assertTrue(order.order_number.startswith(esperado), order.order_number)
+
+
+class OpcionesQueNoSeCobranTests(TestCase):
+    """Una opción con recargo no se ofrece mientras el pedido no sepa cobrarla.
+
+    El 15/09, el pedido 20260916-6B022D salió con "Salchipapa con Queso
+    (Personal)" más "Salchicha ranchera" (+$5.000) cobrada a $18.000: las
+    elecciones viajan como texto en las notas del item y cotizar_pedido solo
+    multiplica el precio de la variante. El campo price_delta se escribe en el
+    panel y no lo cobra nadie, en ningún canal.
+    """
+
+    def setUp(self):
+        from apps.business.models import Business
+        from apps.products.models import (
+            Category,
+            ModifierGroup,
+            ModifierOption,
+            Product,
+            ProductModifierGroup,
+            ProductVariant,
+        )
+
+        food, _ = Business.objects.get_or_create(
+            slug="frostbyte-food", defaults={"name": "Frostbyte Food"}
+        )
+        categoria = Category.objects.create(name="Salchipapas", slug="salchipapas", business=food)
+        self.producto = Product.objects.create(
+            name="Salchipapa con Queso",
+            slug="salchipapa-con-queso",
+            category=categoria,
+            business=food,
+            description="La clásica con queso fundido",
+        )
+        ProductVariant.objects.create(
+            product=self.producto, name="Personal", sku="SPQ-1", price=18000
+        )
+        self.carnes = ModifierGroup.objects.create(
+            name="Elige tu carne", business=food, min_select=1, max_select=1
+        )
+        for nombre in ("Res", "Cerdo", "Pollo"):
+            ModifierOption.objects.create(group=self.carnes, name=nombre, price_delta=0)
+        self.adiciones = ModifierGroup.objects.create(
+            name="Adiciones", business=food, min_select=0, max_select=7
+        )
+        for nombre, precio in (("Queso fundido", 2000), ("Salchicha ranchera", 5000)):
+            ModifierOption.objects.create(group=self.adiciones, name=nombre, price_delta=precio)
+        for orden, grupo in enumerate((self.carnes, self.adiciones)):
+            ProductModifierGroup.objects.create(
+                product=self.producto, group=grupo, display_order=orden
+            )
+        contact = WhatsAppContact.objects.create(phone=PHONE)
+        self.tools = {t.name: t for t in build_tools(contact)}
+
+    def _detalle(self):
+        return self.tools["consultar_producto"].invoke({"producto_slug": "salchipapa-con-queso"})
+
+    def test_una_opcion_con_recargo_no_se_ofrece(self):
+        detalle = self._detalle()
+        self.assertNotIn("Salchicha ranchera", detalle)
+        self.assertNotIn("Queso fundido", detalle)
+
+    def test_el_grupo_entero_de_recargos_desaparece(self):
+        self.assertNotIn("Adiciones", self._detalle())
+
+    def test_las_opciones_sin_recargo_se_siguen_ofreciendo(self):
+        detalle = self._detalle()
+        self.assertIn("Elige tu carne", detalle)
+        for carne in ("Res", "Cerdo", "Pollo"):
+            self.assertIn(carne, detalle)
+
+    def test_el_precio_de_la_variante_sigue_ahi(self):
+        self.assertIn("$18.000", self._detalle())
+
+    def test_un_producto_solo_con_recargos_no_se_anuncia_personalizable(self):
+        """Si no queda nada que preguntar, el menú no puede decir que lo hay."""
+        from apps.products.models import ProductModifierGroup
+
+        ProductModifierGroup.objects.filter(group=self.carnes).delete()
+        menu = self.tools["consultar_menu"].invoke({})
+        self.assertIn("Salchipapa con Queso", menu)
+        self.assertNotIn("personalizable", menu)
+
+    def test_con_opciones_gratis_sigue_siendo_personalizable(self):
+        self.assertIn("personalizable", self.tools["consultar_menu"].invoke({}))
+
+    def test_la_busqueda_usa_el_mismo_criterio(self):
+        from apps.products.models import ProductModifierGroup
+
+        ProductModifierGroup.objects.filter(group=self.carnes).delete()
+        resultado = self.tools["buscar_producto"].invoke({"texto": "salchipapa con queso"})
+        self.assertIn("Salchipapa con Queso", resultado)
+        self.assertNotIn("personalizable", resultado)

@@ -412,6 +412,11 @@ WHATSAPP_CONTACT_PHONE = os.getenv('WHATSAPP_CONTACT_PHONE', '3164277879')
 # Minutos que el agente queda pausado tras cada mensaje que un humano del
 # equipo envía al cliente (desde el inbox de Kapso o la app de WhatsApp)
 WHATSAPP_HUMAN_PAUSE_MINUTES = int(os.getenv('WHATSAPP_HUMAN_PAUSE_MINUTES', '30'))
+# Minutos que el agente queda pausado cuando ES ÉL quien pide una persona
+# (tool solicitar_humano). Es más larga que la de arriba porque nadie ha
+# entrado todavía al chat, pero CADUCA: un cliente que vuelve al día siguiente
+# debe encontrar al agente, no un silencio heredado de la semana pasada.
+WHATSAPP_HANDOFF_PAUSE_MINUTES = int(os.getenv('WHATSAPP_HANDOFF_PAUSE_MINUTES', '180'))
 # Agrupado de mensajes seguidos: el agente espera este tanto desde el ÚLTIMO
 # mensaje del cliente antes de responder (cada mensaje nuevo reinicia la
 # cuenta), con un tope duro desde el primero para quien escribe sin parar.

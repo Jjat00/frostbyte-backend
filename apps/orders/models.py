@@ -234,6 +234,18 @@ class Order(models.Model):
         default=False,
         verbose_name="Pagado",
     )
+    notified_statuses = models.JSONField(
+        default=list,
+        blank=True,
+        editable=False,
+        verbose_name="Estados ya avisados",
+        help_text=(
+            "Estados de los que ya se le avisó al cliente por WhatsApp. Un pedido "
+            "puede retroceder (el equipo lo devuelve a la cocina) y sin esto el "
+            "cliente recibe dos veces el mismo aviso: a Anyi le llegó 'entregado', "
+            "contestó que aún no le entregaban, y le volvió a llegar media hora después"
+        ),
+    )
 
     # Totales
     subtotal = models.DecimalField(
@@ -297,8 +309,14 @@ class Order(models.Model):
         return uuid.uuid4().hex[:4].upper()
 
     def _generate_order_number(self):
-        """Genera un número de pedido único basado en fecha y UUID"""
-        date_part = timezone.now().strftime("%Y%m%d")
+        """Genera un número de pedido único basado en fecha y UUID.
+
+        La fecha es la LOCAL, no la de UTC. Con timezone.now() todo pedido
+        tomado después de las 19:00 en Colombia nacía con la fecha del día
+        siguiente (5 de los 11 pedidos de WhatsApp), y el agente hasta se lo
+        explicaba al cliente: "es la fecha en que quedó creado".
+        """
+        date_part = timezone.localtime().strftime("%Y%m%d")
         uuid_part = uuid.uuid4().hex[:6].upper()
         return f"{date_part}-{uuid_part}"
 

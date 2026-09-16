@@ -5,11 +5,14 @@ contacto (closure) para que el agente nunca pueda operar sobre pedidos de
 otro cliente. Todas devuelven strings: es lo que el modelo lee.
 """
 
+import logging
 import re
 import unicodedata
+from datetime import timedelta
 from decimal import Decimal
 from difflib import SequenceMatcher
 
+from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 from langchain_core.tools import tool
@@ -23,6 +26,8 @@ from . import kapso
 from . import missing
 from . import stickers as stickers_media
 from .models import AgentSettings, Sticker, StickerDraft
+
+logger = logging.getLogger(__name__)
 
 
 def normalize_phone(phone):
@@ -166,6 +171,142 @@ def _customer_orders(contact):
     return Order.objects.filter(customer_phone__endswith=digits)
 
 
+def _coincidencias(products, words, exigir_variantes=True):
+    """Puntúa los productos contra las palabras del cliente, de más a menos.
+
+    Devuelve [(puntaje, producto, variantes activas)]. Se usa dos veces: con lo
+    que está a la venta hoy y, si eso no da nada, con lo apagado, para poder
+    distinguir "se acabó" de "no lo vendemos" (`exigir_variantes=False` porque
+    un producto apagado puede tener las variantes apagadas también).
+    """
+    scored = []
+    for product in products:
+        variants = [v for v in product.variants.all() if v.is_active]
+        if not variants and exigir_variantes:
+            continue
+        # el peso dice qué tan directa es la coincidencia: el nombre manda,
+        # la categoría permite que "salchipapas" traiga todas las que hay
+        fuertes = (
+            (_tokens(product.name), 3),
+            (_tokens(product.category.name), 2),
+        )
+        # el tamaño y la descripción solo desempatan: "1 grande" o "personal"
+        # no nombran ningún producto, y por sí solos traerían medio menú
+        debiles = (
+            (_tokens(" ".join(v.name for v in variants)), 1),
+            (_tokens(product.description), 1),
+        )
+        score = 0
+        identificado = False
+        for word in words:
+            peso = max(
+                (w for tokens, w in fuertes if any(_words_match(word, t) for t in tokens)),
+                default=0,
+            )
+            if peso:
+                identificado = True
+            else:
+                peso = max(
+                    (w for tokens, w in debiles if any(_words_match(word, t) for t in tokens)),
+                    default=0,
+                )
+            score += peso
+        if identificado:
+            scored.append((score, product, variants))
+    scored.sort(key=lambda row: (-row[0], row[1].name))
+    return scored
+
+
+def _opciones_ofrecibles(group):
+    """Las opciones del grupo que el agente puede ofrecer de verdad.
+
+    Deja fuera las que llevan recargo. El pedido guarda las elecciones como
+    TEXTO en las notas del item, así que `cotizar_pedido` no las suma: ofrecer
+    una opción con precio es regalarla. Pasó el 15/09 con el pedido
+    20260916-6B022D —salchipapa con queso más salchicha ranchera (+$5.000)
+    cobrada a $18.000— y el campo `price_delta` no lo cobra nadie en ningún
+    canal, solo se escribe en el panel.
+
+    Un grupo obligatorio cuyas opciones cuesten todas se queda sin ofrecer, y
+    es lo correcto mientras esto sea así: es preferible no dar a elegir a dar
+    a elegir gratis. El día que el recargo se sume de verdad, este filtro sobra.
+    """
+    return [opt for opt in group.options.all() if opt.is_active and not opt.price_delta]
+
+
+def _es_personalizable(product):
+    """Si al agente le queda algo que preguntarle al cliente de este producto."""
+    return any(
+        pm.is_active and pm.group.is_active and _opciones_ofrecibles(pm.group)
+        for pm in product.modifier_links.all()
+    )
+
+
+def _catalogo_de_hoy():
+    """Los nombres de todo lo que está a la venta hoy, por categoría.
+
+    Sin precios ni variantes a propósito: esto no se le muestra al cliente, se
+    le da al modelo para que resuelva por su cuenta lo que la comparación de
+    letras no puede ("pesera" es la "Pecera granizada"). Cargarlo de cifras
+    solo lo tentaría a volcarlo al chat.
+    """
+    lineas = []
+    categories = (
+        Category.objects.filter(is_active=True, business__is_active=True)
+        .select_related("business")
+        .order_by("business__display_order", "display_order", "name")
+    )
+    for category in categories:
+        nombres = [
+            product.name
+            for product in Product.objects.filter(
+                category=category, is_active=True, is_coming_soon=False
+            )
+            .prefetch_related("variants")
+            .order_by("name")
+            if any(v.is_active for v in product.variants.all())
+        ]
+        if nombres:
+            lineas.append(f"[{category.name}] {', '.join(nombres)}")
+    return "\n".join(lineas) if lineas else "Hoy no hay ningún producto activo."
+
+
+def _avisar_escalada(contact, motivo):
+    """Le avisa al dueño por WhatsApp que un chat quedó esperando a una persona.
+
+    Sin esto, escalar es un agujero: el agente se calla, el cliente se queda
+    mirando el chat y nadie del equipo se entera a menos que abra el inbox.
+    Pasó de verdad —un comprobante de $57.000 sin respuesta el 27/08— así que
+    el aviso sale por el mismo WhatsApp que el equipo ya tiene abierto.
+
+    Es best-effort: si el aviso falla, la pausa ya quedó puesta y el turno del
+    cliente no se cae por eso.
+    """
+    try:
+        config = AgentSettings.load()
+        numeros = sorted(config.owner_numbers())
+        if not numeros:
+            return
+        phone_number_id = contact.last_phone_number_id or (
+            settings.KAPSO_PHONE_NUMBER_IDS[0]
+            if settings.KAPSO_PHONE_NUMBER_IDS
+            else ""
+        )
+        if not phone_number_id:
+            return
+        quien = contact.customer_name or contact.profile_name or "un cliente"
+        aviso = (
+            f"🔔 {quien} ({contact.phone}) está esperando a una persona.\n"
+            f"Motivo: {motivo or 'sin motivo'}"
+        )
+        for numero in numeros:
+            if numero[-10:] == normalize_phone(contact.phone)[-10:]:
+                continue  # el dueño probando no se avisa a sí mismo
+            kapso.send_text(phone_number_id, numero, aviso)
+    except Exception:
+        logger.exception("No se pudo avisar al dueño de la escalada de %s", contact.phone)
+
+
 class ItemPedido(BaseModel):
     variante_id: int = Field(description="ID de la variante (sale de consultar_menu o consultar_producto)")
     cantidad: int = Field(1, ge=1, le=50, description="Cuántas unidades")
@@ -271,7 +412,7 @@ def build_tools(contact, turn=None):
         for category in categories:
             products = (
                 Product.objects.filter(category=category, is_active=True, is_coming_soon=False)
-                .prefetch_related("variants", "modifier_links__group")
+                .prefetch_related("variants", "modifier_links__group__options")
                 .order_by("name")
             )
             product_lines = []
@@ -280,10 +421,11 @@ def build_tools(contact, turn=None):
                 if not variants:
                     continue
                 prices = "; ".join(f"{v.name} {_cop(v.price)} [variante_id={v.id}]" for v in variants)
-                configurable = any(
-                    pm.is_active and pm.group.is_active for pm in product.modifier_links.all()
+                extra = (
+                    f" (personalizable, slug='{product.slug}')"
+                    if _es_personalizable(product)
+                    else ""
                 )
-                extra = f" (personalizable, slug='{product.slug}')" if configurable else ""
                 product_lines.append(f"  - {product.name}: {prices}{extra}")
             if product_lines:
                 lines.append(f"[{category.name} · {category.business.name}]")
@@ -320,6 +462,11 @@ def build_tools(contact, turn=None):
             if not pmg.is_active or not pmg.group.is_active:
                 continue
             group = pmg.group
+            ofrecibles = _opciones_ofrecibles(group)
+            if not ofrecibles:
+                # Grupo entero de opciones con recargo: no se ofrece ninguna
+                # (ver _opciones_ofrecibles), así que no hay grupo que mostrar.
+                continue
             min_sel, max_sel = pmg.effective_min, pmg.effective_max
             if min_sel == 0:
                 rule = f"opcional, hasta {max_sel}"
@@ -327,11 +474,7 @@ def build_tools(contact, turn=None):
                 rule = "elige 1"
             else:
                 rule = f"elige entre {min_sel} y {max_sel}"
-            options = ", ".join(
-                f"{opt.name}{' +' + _cop(opt.price_delta) if opt.price_delta else ''}"
-                for opt in group.options.all()
-                if opt.is_active
-            )
+            options = ", ".join(opt.name for opt in ofrecibles)
             lines.append(f"Opciones '{group.name}' ({rule}): {options}")
             lines.append(
                 "NOTA: las opciones elegidas van en el campo 'notas' del item al crear el pedido."
@@ -361,64 +504,55 @@ def build_tools(contact, turn=None):
                 category__business__is_active=True,
             )
             .select_related("category", "category__business")
-            .prefetch_related("variants", "modifier_links__group")
+            .prefetch_related("variants", "modifier_links__group__options")
         )
-        scored = []
-        for product in products:
-            variants = [v for v in product.variants.all() if v.is_active]
-            if not variants:
-                continue
-            # el peso dice qué tan directa es la coincidencia: el nombre manda,
-            # la categoría permite que "salchipapas" traiga todas las que hay
-            fuertes = (
-                (_tokens(product.name), 3),
-                (_tokens(product.category.name), 2),
-            )
-            # el tamaño y la descripción solo desempatan: "1 grande" o "personal"
-            # no nombran ningún producto, y por sí solos traerían medio menú
-            debiles = (
-                (_tokens(" ".join(v.name for v in variants)), 1),
-                (_tokens(product.description), 1),
-            )
-            score = 0
-            identificado = False
-            for word in words:
-                peso = max(
-                    (w for tokens, w in fuertes if any(_words_match(word, t) for t in tokens)),
-                    default=0,
-                )
-                if peso:
-                    identificado = True
-                else:
-                    peso = max(
-                        (w for tokens, w in debiles if any(_words_match(word, t) for t in tokens)),
-                        default=0,
-                    )
-                score += peso
-            if identificado:
-                scored.append((score, product, variants))
+        scored = _coincidencias(products, words)
 
         if not scored:
-            disponibles = list(
-                dict.fromkeys(
-                    Category.objects.filter(
-                        is_active=True,
-                        business__is_active=True,
-                        products__is_active=True,
-                        products__is_coming_soon=False,
-                    )
-                    .order_by("business__display_order", "display_order", "name")
-                    .values_list("name", flat=True)
-                )
+            # Dos cosas distintas que antes se decían igual y costaron ventas:
+            #
+            # 1. Lo que hoy no está pero SÍ es nuestro. El catálogo se apaga y
+            #    se enciende a diario según lo que se acaba: el 14/09 una
+            #    clienta mandó una foto de la carta preguntando el precio de la
+            #    salchipapa y se le contestó "no tenemos salchipapas", que ella
+            #    lee como "no venden eso", y se fue. Agotado no es inexistente.
+            # 2. Lo que está mal escrito. "pesera" no llega a "Pecera granizada"
+            #    (0,83 de parecido contra un umbral de 0,85) y ahí se fueron dos
+            #    peceras de $30.000. Eso NO se arregla bajando el umbral: el
+            #    criterio de si "pesera" es "pecera" lo pone el modelo, que para
+            #    eso lee esta respuesta. Aquí solo se le entrega la lista de lo
+            #    que hay —nombres, sin precios— para que decida.
+            agotados = _coincidencias(
+                Product.objects.filter(is_active=False)
+                .select_related("category", "category__business")
+                .prefetch_related("variants")
+                | Product.objects.filter(category__is_active=False)
+                .select_related("category", "category__business")
+                .prefetch_related("variants"),
+                words,
+                exigir_variantes=False,
             )
+            hoy = _catalogo_de_hoy()
+            if agotados:
+                nombres = ", ".join(p.name for _s, p, _v in agotados[:5])
+                return (
+                    f"'{texto}' SÍ es nuestro ({nombres}), pero HOY no está "
+                    "disponible: se acabó o no se preparó. Díselo así —que hoy no "
+                    "hay, NUNCA que no lo vendemos— y ofrécele lo que sí hay hoy.\n"
+                    f"{hoy}"
+                )
             return (
-                f"Sin coincidencias para '{texto}' en el menú. "
-                f"Categorías con productos hoy: {', '.join(disponibles)}. "
-                "Si lo que pidió el cliente encaja con alguna de esas categorías, "
-                "búscala por su nombre; si no encaja con ninguna, no lo vendemos."
+                f"Sin coincidencias literales para '{texto}'. Puede que el cliente "
+                "lo haya escrito distinto a como se llama en la carta: esto es TODO "
+                "lo que hay hoy.\n"
+                f"{hoy}\n"
+                "Si alguno de esos es lo que quiso decir, búscalo otra vez con ESE "
+                "nombre para obtener sus precios y su variante_id. Si ninguno encaja, "
+                "no lo vendemos. Y si lo que escribió no nombra ningún producto (solo "
+                "un tamaño, una cantidad o un saludo), pregúntale qué quiere: NO "
+                "elijas por él."
             )
 
-        scored.sort(key=lambda row: (-row[0], row[1].name))
         grouped = {}
         for _score, product, variants in scored[:_MAX_RESULTADOS]:
             grouped.setdefault(product.category, []).append((product, variants))
@@ -429,10 +563,11 @@ def build_tools(contact, turn=None):
                 prices = "; ".join(
                     f"{v.name} {_cop(v.price)} [variante_id={v.id}]" for v in variants
                 )
-                configurable = any(
-                    pm.is_active and pm.group.is_active for pm in product.modifier_links.all()
+                extra = (
+                    f" (personalizable, slug='{product.slug}')"
+                    if _es_personalizable(product)
+                    else ""
                 )
-                extra = f" (personalizable, slug='{product.slug}')" if configurable else ""
                 lines.append(f"  - {product.name}: {prices}{extra}")
         sobrantes = len(scored) - _MAX_RESULTADOS
         if sobrantes > 0:
@@ -968,8 +1103,20 @@ def build_tools(contact, turn=None):
         Args:
             motivo: por qué se necesita un humano
         """
-        contact.human_handoff = True
-        contact.save(update_fields=["human_handoff", "updated_at"])
+        # La pausa CADUCA a propósito. Antes esto encendía human_handoff, que no
+        # se apaga solo: tres clientes quedaron sin agente durante semanas (Anyi
+        # V escaló el 06/09 y el 15/09 nadie le respondió hasta que entró una
+        # persona 10 minutos después). Mientras el equipo atienda, cada mensaje
+        # suyo renueva la pausa por su cuenta (ver worker); si nadie entra, el
+        # agente vuelve solo en vez de dejar el chat mudo para siempre.
+        # human_handoff queda para el interruptor manual del panel.
+        pausa = timezone.now() + timedelta(
+            minutes=settings.WHATSAPP_HANDOFF_PAUSE_MINUTES
+        )
+        if not contact.human_until or contact.human_until < pausa:
+            contact.human_until = pausa
+            contact.save(update_fields=["human_until", "updated_at"])
+        _avisar_escalada(contact, motivo)
         return (
             "Listo: el agente queda en pausa para este cliente y el equipo verá la "
             "conversación. Despídete indicando que una persona le escribirá pronto."
