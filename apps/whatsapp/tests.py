@@ -24,6 +24,7 @@ from . import missing
 from . import mood
 from . import worker
 from . import banned
+from . import agent as agent_mod
 from .agent import AgentTurn, _for_whatsapp, _split_messages, build_system_prompt
 from .mood import StickerUrge
 from . import stickers as wa_stickers
@@ -3567,3 +3568,120 @@ class UbicacionQueSeRecuerdaTests(TestCase):
         prompt = build_system_prompt()
         self.assertIn("MIRA SI YA LA TIENES", prompt)
         self.assertIn("va al mismo sitio", prompt)
+
+
+class ResumenDeLaConversacionTests(TestCase):
+    """La conversación se resume cuando se hace larga, no se acarrea entera.
+
+    Jaime (15/09): "cuántos mensajes estamos teniendo en cuenta para el
+    contexto? no sería prudente poner toda la conversación de toda la vida,
+    pero sí quiero tener un resumen". Medido ese día contra producción: el hilo
+    se renueva cada día, y un día activo llega a 10.156 tokens de historial
+    (Daniel el 13/09), la mayor parte respuestas de tools —menús y búsquedas—
+    que ya no sirven una vez el pedido está armado.
+    """
+
+    def test_el_agente_lleva_el_middleware_de_resumen(self):
+        from langchain.agents.middleware import SummarizationMiddleware
+
+        middleware = agent_mod._summarization_middleware()
+        self.assertIsInstance(middleware, SummarizationMiddleware)
+
+    def test_resume_con_el_modelo_barato_y_no_con_el_del_agente(self):
+        """Condensar es trabajo mecánico: el modelo caro se reserva para atender."""
+        from django.conf import settings as dj
+
+        self.assertNotEqual(dj.WHATSAPP_SUMMARY_MODEL, dj.WHATSAPP_AGENT_MODEL)
+        middleware = agent_mod._summarization_middleware()
+        self.assertEqual(middleware.model.model_name, dj.WHATSAPP_SUMMARY_MODEL)
+
+    def test_conserva_literales_los_ultimos_mensajes(self):
+        """El tramo final es donde se cierra el pedido: ahí no se resume nada."""
+        middleware = agent_mod._summarization_middleware()
+        self.assertEqual(middleware.keep, ("messages", 14))
+
+    def test_el_prompt_del_resumen_protege_los_datos_del_pedido(self):
+        prompt = agent_mod.SUMMARY_PROMPT
+        self.assertIn("variante_id", prompt)
+        self.assertIn("EXACTOS", prompt)
+        self.assertIn("si el pedido ya se creó", prompt.lower())
+        self.assertIn("LO QUE PROMETIÓ EL EQUIPO", prompt)
+
+    def test_el_resumen_se_pide_en_espanol_y_sin_inventar(self):
+        prompt = agent_mod.SUMMARY_PROMPT
+        self.assertIn("en español", prompt)
+        self.assertIn("sin inventar nada", prompt)
+        self.assertNotIn("ARTIFACTS", prompt)  # el de fábrica es para agentes de código
+
+    def test_el_hilo_sigue_siendo_de_un_dia(self):
+        """Ni "toda la vida" ni una sola sesión: el día, como hasta ahora."""
+        contact = WhatsAppContact.objects.create(phone=PHONE)
+        self.assertEqual(
+            agent_mod._thread_id(contact),
+            f"wa:{PHONE}:{timezone.localdate().isoformat()}",
+        )
+
+
+class ResumenEnUnTurnoRealTests(TestCase):
+    """El resumen corriendo dentro de un turno, con modelos falsos.
+
+    Lo que hay que proteger no es la configuración sino que el turno siga
+    funcionando: si el middleware rompe el grafo, el agente deja de contestar.
+    """
+
+    def _grafo(self, respuesta="Listo, va un granizado."):
+        from langchain.agents import create_agent
+        from langchain_core.language_models.fake_chat_models import (
+            FakeMessagesListChatModel,
+        )
+        from langchain_core.messages import AIMessage
+
+        self.resumidor = FakeMessagesListChatModel(
+            responses=[AIMessage(content="QUIÉN ES: Prueba. QUÉ QUIERE: 1 granizado grande.")]
+        )
+        middleware = agent_mod._ResumenEnEspanol(
+            model=self.resumidor,
+            trigger=("tokens", 200),
+            keep=("messages", 4),
+            summary_prompt=agent_mod.SUMMARY_PROMPT,
+        )
+        return create_agent(
+            model=FakeMessagesListChatModel(responses=[AIMessage(content=respuesta)]),
+            tools=[],
+            system_prompt="eres frosty",
+            middleware=[middleware],
+        )
+
+    def _conversacion_larga(self):
+        from langchain_core.messages import AIMessage, HumanMessage
+
+        mensajes = []
+        for i in range(30):
+            mensajes.append(HumanMessage(content=f"mensaje del cliente numero {i} con relleno"))
+            mensajes.append(AIMessage(content=f"respuesta del agente numero {i} con relleno"))
+        return mensajes
+
+    def test_una_conversacion_larga_se_resume_y_el_turno_responde(self):
+        from langchain_core.messages import HumanMessage
+
+        entrada = self._conversacion_larga() + [HumanMessage(content="quiero un granizado")]
+        salida = self._grafo().invoke({"messages": entrada})
+        self.assertLess(len(salida["messages"]), len(entrada))
+        self.assertEqual(salida["messages"][-1].content, "Listo, va un granizado.")
+
+    def test_el_resumen_queda_en_el_hilo_presentado_en_espanol(self):
+        from langchain_core.messages import HumanMessage
+
+        entrada = self._conversacion_larga() + [HumanMessage(content="quiero un granizado")]
+        salida = self._grafo().invoke({"messages": entrada})
+        textos = [m.content for m in salida["messages"] if isinstance(m.content, str)]
+        resumen = next(t for t in textos if "QUIÉN ES" in t)
+        self.assertIn("Esto es lo que se ha hablado con el cliente", resumen)
+        self.assertNotIn("Here is a summary", resumen)
+
+    def test_una_conversacion_corta_no_gasta_el_resumidor(self):
+        from langchain_core.messages import HumanMessage
+
+        grafo = self._grafo()
+        grafo.invoke({"messages": [HumanMessage(content="hola")]})
+        self.assertEqual(len(self.resumidor.responses), 1, "no debió consumirse")

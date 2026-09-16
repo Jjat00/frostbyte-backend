@@ -456,6 +456,83 @@ def build_system_prompt(contact=None, turn=None):
     )
 
 
+from langchain.agents.middleware import SummarizationMiddleware
+
+SUMMARY_PROMPT = """Eres el que le toma nota a quien atiende un WhatsApp de pedidos \
+de comida y bebida. La conversación de abajo se va a BORRAR y en su lugar queda lo que \
+escribas: lo que no anotes, se pierde y quien siga atendiendo no lo va a saber.
+
+Escribe en español, en frases cortas, sin inventar nada que no esté en la conversación. \
+Si de algo no se habló, escribe "no se habló". No saludes ni te despidas: esto no lo lee \
+el cliente.
+
+QUIÉN ES: nombre con el que se le habla y lo que se sepa de él.
+QUÉ QUIERE: los productos pedidos hasta ahora, con su tamaño, su cantidad y su variante_id \
+EXACTOS tal como aparecen en la conversación. Estos datos son el pedido: cópialos, no los \
+resumas ni los redondees.
+CUÁNTO: el total que ya se le dijo al cliente, si se le dijo alguno, y con qué cifras.
+CÓMO PAGA: efectivo o Nequi, con qué billete, si mandó comprobante, si paga al recibir.
+A DÓNDE: domicilio o para recoger; si compartió ubicación, si es la de siempre o una nueva.
+EN QUÉ VA: si el pedido ya se creó (con su número) o si todavía está sin crear. Esto es lo \
+más importante de todo: decirle a un cliente que su pedido está tomado cuando no existe es \
+el peor error posible.
+QUÉ FALTA: lo que quedó pendiente de preguntarle o de confirmarle.
+LO QUE PROMETIÓ EL EQUIPO: si una persona del equipo entró al chat, qué le dijo o le \
+prometió al cliente. Eso no se puede contradecir después.
+
+Conversación:
+{messages}"""
+
+
+class _ResumenEnEspanol(SummarizationMiddleware):
+    """El resumen entra al hilo presentado en español.
+
+    La librería lo incrusta con un "Here is a summary of the conversation to
+    date" fijo en el código. Todo lo demás que lee el modelo está en español y
+    es lo que calca; una línea en inglés justo antes del resumen es la clase de
+    detalle que se le termina colando al cliente.
+    """
+
+    @staticmethod
+    def _build_new_messages(summary):
+        from langchain_core.messages import HumanMessage
+
+        return [
+            HumanMessage(
+                content=f"Esto es lo que se ha hablado con el cliente hasta ahora:\n\n{summary}"
+            )
+        ]
+
+
+def _summarization_middleware():
+    """Resume la conversación cuando se hace larga, en vez de acarrearla entera.
+
+    Un día de chat activo llega a 10.000 tokens de historial (medido el 15/09:
+    Daniel 13/09 y Lizeth 14/09), y lo que más pesa no es lo que se hablan sino
+    las respuestas de las tools —el menú, las búsquedas—, que además ya no
+    sirven de nada una vez el pedido está armado.
+
+    Resume el MODELO BARATO: condensar es trabajo mecánico y el caro se reserva
+    para atender. Los últimos mensajes se conservan tal cual: el tramo final es
+    donde se cierra el pedido y ahí no se puede perder una cifra.
+    """
+    from langchain_openai import ChatOpenAI
+
+    model = ChatOpenAI(
+        model=settings.WHATSAPP_SUMMARY_MODEL,
+        api_key=settings.OPENAI_API_KEY,
+        # Condensar no es opinar: temperatura baja y el mínimo de razonamiento
+        # que el modelo acepte (la visión de los comprobantes usa el mismo criterio).
+        **chat_model_params(settings.WHATSAPP_SUMMARY_MODEL, temperature=0, effort="low"),
+    )
+    return _ResumenEnEspanol(
+        model=model,
+        trigger=("tokens", settings.WHATSAPP_SUMMARY_TRIGGER_TOKENS),
+        keep=("messages", settings.WHATSAPP_SUMMARY_KEEP_MESSAGES),
+        summary_prompt=SUMMARY_PROMPT,
+    )
+
+
 def _build_agent(contact, turn=None):
     from langchain.agents import create_agent
     from langchain_openai import ChatOpenAI
@@ -469,6 +546,7 @@ def _build_agent(contact, turn=None):
         model=model,
         tools=build_tools(contact, turn),
         system_prompt=build_system_prompt(contact, turn),
+        middleware=[_summarization_middleware()],
         checkpointer=get_checkpointer(),
     )
 

@@ -402,6 +402,14 @@ WHATSAPP_AGENT_REASONING_EFFORT = os.getenv('WHATSAPP_AGENT_REASONING_EFFORT', '
 # y decidir. Un comprobante de pago sí se lee con visión buena: los montos.
 WHATSAPP_VISION_MODEL = os.getenv('WHATSAPP_VISION_MODEL', 'gpt-5.6-luna')
 WHATSAPP_TRANSCRIBE_MODEL = os.getenv('WHATSAPP_TRANSCRIBE_MODEL', 'gpt-4o-mini-transcribe')
+# Resumir la conversación cuando se hace larga también es trabajo mecánico: va
+# con el modelo barato. El hilo se renueva cada día, así que esto no acumula
+# "toda la vida" del cliente, solo evita acarrear un día entero de menús y
+# búsquedas. Un día activo llega a ~10.000 tokens de historial.
+WHATSAPP_SUMMARY_MODEL = os.getenv('WHATSAPP_SUMMARY_MODEL', 'gpt-5.6-luna')
+WHATSAPP_SUMMARY_TRIGGER_TOKENS = int(os.getenv('WHATSAPP_SUMMARY_TRIGGER_TOKENS', '6000'))
+# Los últimos mensajes se conservan literales: es donde se cierra el pedido.
+WHATSAPP_SUMMARY_KEEP_MESSAGES = int(os.getenv('WHATSAPP_SUMMARY_KEEP_MESSAGES', '14'))
 # Clasificar el género de un artista es trabajo mecánico y de una sola vez por
 # artista (el resultado se cachea en music.ArtistGenre): va con el modelo barato.
 MUSIC_GENRE_MODEL = os.getenv('MUSIC_GENRE_MODEL', 'gpt-5.6-luna')
