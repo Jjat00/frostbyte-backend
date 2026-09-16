@@ -3857,3 +3857,184 @@ class MensajeEntranteRepetidoTests(TestCase):
             self._procesar(webhook_payload("hola", message_id="wamid.uno"), "uno")
             self._procesar(webhook_payload("¿hay pecera?", message_id="wamid.dos"), "dos")
         self.assertEqual(encolar.call_count, 2)
+
+
+RESCATE = dict(
+    WHATSAPP_RESCUE_AFTER_MINUTES=3,
+    WHATSAPP_RESCUE_WINDOW_MINUTES=60,
+    WHATSAPP_AGENT_ENABLED=True,
+)
+
+
+@override_settings(**RESCATE)
+class VigiaDeClientesSinRespuestaTests(TestCase):
+    """El cliente que quedó esperando no tiene que volver a escribir.
+
+    La cola de turnos vive en la memoria del proceso: un despliegue en hora de
+    servicio se lleva por delante lo que esté dentro. El 16-09 hubo tres entre
+    las 22:47 y las 23:43. El barrido es la red debajo de eso.
+    """
+
+    def setUp(self):
+        from . import watchdog
+
+        self.watchdog = watchdog
+        worker._pending.clear()
+        worker._active.clear()
+        self.contact = WhatsAppContact.objects.create(
+            phone=PHONE,
+            last_phone_number_id=PHONE_NUMBER_ID,
+            last_message_at=timezone.now() - datetime.timedelta(minutes=10),
+        )
+        # El hilo del modelo no tiene el mensaje: es el caso del turno perdido
+        hilo = patch("apps.whatsapp.agent.ultimo_del_cliente", return_value="")
+        self.hilo = hilo.start()
+        self.addCleanup(hilo.stop)
+
+    def _mensaje(self, body="hay pecera granizada?", minutos=10, wamid="wamid.espera",
+                 direction=ChatMessage.Direction.INBOUND):
+        msg = ChatMessage.objects.create(
+            wamid=wamid, phone=PHONE, direction=direction, body=body,
+            author=(
+                ChatMessage.Author.CUSTOMER
+                if direction == ChatMessage.Direction.INBOUND
+                else ChatMessage.Author.AGENT
+            ),
+        )
+        cuando = timezone.now() - datetime.timedelta(minutes=minutos)
+        ChatMessage.objects.filter(pk=msg.pk).update(created_at=cuando)
+        msg.refresh_from_db()
+        return msg
+
+    def _barrer(self, replies=("Claro, sí hay. ¿Te la dejo lista?",)):
+        enviados = []
+        turn = AgentTurn(replies=replies, message_ids=(), mutated=False)
+        with patch("apps.whatsapp.agent.run_turn", return_value=turn) as correr, patch(
+            "apps.whatsapp.worker.MESSAGE_GAP_SECONDS", 0
+        ), patch(
+            "apps.whatsapp.kapso.send_text",
+            side_effect=lambda pid, to, text: enviados.append(text),
+        ):
+            rescatados = self.watchdog.barrer()
+        self.contact.refresh_from_db()
+        return rescatados, enviados, correr
+
+    def test_al_que_quedo_esperando_se_le_contesta(self):
+        self._mensaje()
+        rescatados, enviados, _ = self._barrer()
+        self.assertEqual(rescatados, 1)
+        self.assertEqual(enviados, ["Claro, sí hay. ¿Te la dejo lista?"])
+        self.assertEqual(self.contact.rescued_wamid, "wamid.espera")
+
+    def test_el_mensaje_perdido_se_le_entrega_al_agente(self):
+        self._mensaje()
+        _, _, correr = self._barrer()
+        texto = correr.call_args.args[1]
+        self.assertIn("hay pecera granizada?", texto)
+        self.assertIn("sin responder", texto)
+
+    def test_lo_que_el_hilo_ya_tiene_no_se_le_repite(self):
+        """El turno murió después de meter el mensaje: dárselo otra vez sería
+        contestarle dos veces lo mismo."""
+        self._mensaje()
+        self.hilo.return_value = "hay pecera granizada?"
+        _, _, correr = self._barrer()
+        texto = correr.call_args.args[1]
+        self.assertNotIn("hay pecera granizada?", texto)
+        self.assertIn("sigue esperando", texto)
+
+    def test_no_se_contesta_dos_veces_el_mismo_mensaje(self):
+        self._mensaje()
+        self._barrer()
+        rescatados, enviados, correr = self._barrer()
+        self.assertEqual(rescatados, 0)
+        self.assertEqual(enviados, [])
+        correr.assert_not_called()
+
+    def test_si_el_agente_decide_callarse_no_sale_nada(self):
+        """Un "gracias" no necesita respuesta, y el modelo es quien lo decide."""
+        self._mensaje(body="listo, gracias!")
+        rescatados, enviados, _ = self._barrer(replies=())
+        self.assertEqual(enviados, [])
+        self.assertEqual(rescatados, 1)  # atendido: no se vuelve a intentar
+
+    def test_si_ya_le_respondimos_no_hay_rescate(self):
+        self._mensaje(minutos=12)
+        self._mensaje(
+            body="Sí, tenemos", minutos=11, wamid="wamid.resp",
+            direction=ChatMessage.Direction.OUTBOUND,
+        )
+        self.assertEqual(self.watchdog.esperando(), [])
+
+    def test_no_se_pisa_a_la_persona_que_esta_atendiendo(self):
+        self._mensaje()
+        self.contact.human_until = timezone.now() + datetime.timedelta(minutes=5)
+        self.contact.save(update_fields=["human_until"])
+        self.assertEqual(self.watchdog.esperando(), [])
+
+    def test_el_interruptor_manual_del_panel_manda(self):
+        self._mensaje()
+        WhatsAppContact.objects.filter(pk=self.contact.pk).update(human_handoff=True)
+        self.assertEqual(self.watchdog.esperando(), [])
+
+    def test_la_pausa_vencida_deja_pasar_al_agente(self):
+        """Nadie del equipo volvió a escribir: el cliente sigue esperando."""
+        self._mensaje()
+        self.contact.human_until = timezone.now() - datetime.timedelta(minutes=1)
+        self.contact.save(update_fields=["human_until"])
+        self.assertEqual(len(self.watchdog.esperando()), 1)
+
+    def test_no_revive_una_conversacion_de_ayer(self):
+        self._mensaje(minutos=180)
+        WhatsAppContact.objects.filter(pk=self.contact.pk).update(
+            last_message_at=timezone.now() - datetime.timedelta(minutes=180)
+        )
+        self.assertEqual(self.watchdog.esperando(), [])
+
+    def test_el_turno_normal_tiene_su_oportunidad_primero(self):
+        """Recién llegado no es lo mismo que sin respuesta: el agrupado de
+        mensajes puede estar esperando todavía a que el cliente termine."""
+        self._mensaje(minutos=1)
+        WhatsAppContact.objects.filter(pk=self.contact.pk).update(
+            last_message_at=timezone.now() - datetime.timedelta(minutes=1)
+        )
+        self.assertEqual(self.watchdog.esperando(), [])
+
+    def test_no_se_mete_con_un_turno_vivo(self):
+        self._mensaje()
+        worker._active.add(PHONE)
+        self.addCleanup(worker._active.discard, PHONE)
+        self.assertEqual(self.watchdog.esperando(), [])
+
+    def test_el_contacto_bloqueado_sigue_ignorado(self):
+        self._mensaje()
+        WhatsAppContact.objects.filter(pk=self.contact.pk).update(is_blocked=True)
+        self.assertEqual(self.watchdog.esperando(), [])
+
+    def test_con_el_agente_apagado_no_barre(self):
+        self._mensaje()
+        with override_settings(WHATSAPP_AGENT_ENABLED=False):
+            rescatados, enviados, correr = self._barrer()
+        self.assertEqual(rescatados, 0)
+        correr.assert_not_called()
+
+    def test_un_sticker_tambien_cuenta_como_respuesta(self):
+        """Un turno puede contestar solo con un sticker o una foto: eso no deja
+        texto en el archivo, pero sí el wamid de lo enviado."""
+        ultimo = self._mensaje()
+        SentMessage.objects.create(wamid="wamid.sticker", to_phone=PHONE)
+        self.assertEqual(self.watchdog.esperando(), [])
+        SentMessage.objects.filter(wamid="wamid.sticker").update(
+            created_at=ultimo.created_at - datetime.timedelta(minutes=1)
+        )
+        self.assertEqual(len(self.watchdog.esperando()), 1)
+
+    def test_el_mensaje_que_llega_mientras_tanto_cancela_el_rescate(self):
+        """Entre el barrido y el turno el cliente escribió: lo atiende el
+        camino normal, con todo junto, y el vigía se aparta."""
+        ultimo = self._mensaje()
+        worker._active.add(PHONE)
+        self.addCleanup(worker._active.discard, PHONE)
+        with patch("apps.whatsapp.agent.run_turn") as correr:
+            self.assertIsNone(self.watchdog.rescatar(self.contact, ultimo))
+        correr.assert_not_called()

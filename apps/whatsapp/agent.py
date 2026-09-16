@@ -630,6 +630,29 @@ def record_messages(contact, entries):
         agent.update_state(config, {"messages": messages}, as_node="__start__")
 
 
+def ultimo_del_cliente(contact):
+    """El último mensaje que el hilo tiene como dicho por el cliente, o "".
+
+    Lo usa el vigía para no repetir lo que el modelo ya leyó: un turno puede
+    haberse quedado a medias después de meter el mensaje en el hilo (el envío
+    a Kapso falló, el proceso se reinició al terminar), y volver a metérselo
+    lo dejaría contestando dos veces lo mismo.
+    """
+    from langchain_core.messages import HumanMessage
+
+    try:
+        agent = _build_agent(contact)
+        state = agent.get_state({"configurable": {"thread_id": _thread_id(contact)}})
+    except Exception:
+        logger.exception("No se pudo leer el hilo de %s", contact.phone)
+        return ""
+    for message in reversed((state.values or {}).get("messages", []) or []):
+        if isinstance(message, HumanMessage):
+            content = message.content
+            return content if isinstance(content, str) else str(content)
+    return ""
+
+
 def _for_whatsapp(reply, already_answered=False, banned_words=(), silence_ok=False):
     """Texto plano listo para WhatsApp (no renderiza Markdown).
 

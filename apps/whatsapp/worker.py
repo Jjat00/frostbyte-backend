@@ -537,6 +537,16 @@ def _wait_and_drain(phone):
         time.sleep(min(target - now, 0.5))
 
 
+def turno_vivo(phone):
+    """True si ese contacto ya tiene mensajes en cola o un turno corriendo.
+
+    Lo consulta el vigía (watchdog.py) antes de rescatar a nadie: si el flujo
+    normal ya lo está atendiendo, meterse sería contestar dos veces.
+    """
+    with _pending_guard:
+        return phone in _active or phone in _pending
+
+
 def _has_pending(phone):
     with _pending_guard:
         slot = _pending.get(phone)

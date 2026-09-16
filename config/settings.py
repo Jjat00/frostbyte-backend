@@ -438,6 +438,17 @@ WHATSAPP_BATCH_WAIT_SECONDS = float(os.getenv('WHATSAPP_BATCH_WAIT_SECONDS', '10
 WHATSAPP_BATCH_MAX_WAIT_SECONDS = float(
     os.getenv('WHATSAPP_BATCH_MAX_WAIT_SECONDS', '40')
 )
+# Vigía de clientes sin respuesta (apps/whatsapp/watchdog.py). Barre cada
+# minuto buscando a quien escribió y sigue esperando, y deja que el agente
+# retome la conversación. La espera mínima tiene que ser mayor que el
+# agrupado de arriba o se metería encima de un turno que va a correr igual; la
+# ventana máxima impide revivir una conversación que ya quedó atrás.
+WHATSAPP_RESCUE_ENABLED = os.getenv('WHATSAPP_RESCUE_ENABLED', 'True').lower() == 'true'
+WHATSAPP_RESCUE_AFTER_MINUTES = int(os.getenv('WHATSAPP_RESCUE_AFTER_MINUTES', '3'))
+WHATSAPP_RESCUE_WINDOW_MINUTES = int(os.getenv('WHATSAPP_RESCUE_WINDOW_MINUTES', '60'))
+WHATSAPP_RESCUE_INTERVAL_SECONDS = int(
+    os.getenv('WHATSAPP_RESCUE_INTERVAL_SECONDS', '60')
+)
 BACKEND_PUBLIC_URL = os.getenv(
     'BACKEND_PUBLIC_URL', 'https://frostbyte-backend-production.up.railway.app'
 )

@@ -152,6 +152,17 @@ class WhatsAppContact(models.Model):
         blank=True,
         verbose_name="Último mensaje",
     )
+    rescued_wamid = models.CharField(
+        max_length=128,
+        blank=True,
+        editable=False,
+        verbose_name="Último mensaje rescatado",
+        help_text=(
+            "El mensaje del cliente que el vigía ya intentó contestar (ver "
+            "watchdog.py). Sin esto, un turno que decide callarse se volvería a "
+            "intentar cada minuto"
+        ),
+    )
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="Creado")
     updated_at = models.DateTimeField(auto_now=True, verbose_name="Actualizado")
 
