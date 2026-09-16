@@ -185,7 +185,6 @@ class StoreSettingsAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
         }),
         ("Atención al cliente", {
             "fields": (
-                "pickup_enabled",
                 "opening_time",
                 "eta_min_minutes",
                 "eta_max_minutes",

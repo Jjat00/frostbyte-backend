@@ -835,14 +835,6 @@ class StoreSettings(models.Model):
         verbose_name="Domicilios en línea activos",
         help_text="Interruptor general para habilitar/pausar los pedidos a domicilio del cliente",
     )
-    pickup_enabled = models.BooleanField(
-        default=True,
-        verbose_name="Pedidos para recoger activos",
-        help_text=(
-            "Independiente de los domicilios: con el domicilio pausado el cliente "
-            "puede seguir encargando y pasar por su pedido al local."
-        ),
-    )
     opening_time = models.TimeField(
         default=time(13, 30),
         verbose_name="Hora de apertura habitual",

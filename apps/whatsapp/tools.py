@@ -375,24 +375,22 @@ def build_tools(contact, turn=None):
                 "insiste o pregunta por otra cosa del local, pásale el número de "
                 "contacto."
             )
+        # Recoger no tiene interruptor: si el local está abierto, el cliente
+        # puede pasar por su pedido. Lo único que se prende y se apaga es el
+        # domicilio, que es el que cuesta un domiciliario.
         domicilios = "ACTIVOS" if cfg.customer_ordering_enabled else "SIN SERVICIO AHORA"
-        recoger = "ACTIVOS" if cfg.pickup_enabled else "SIN SERVICIO AHORA"
         lineas = [
-            f"Local ABIERTO. Domicilios: {domicilios}. Pedidos para recoger: {recoger}.",
+            f"Local ABIERTO. Domicilios: {domicilios}. Pedidos para recoger: SIEMPRE, "
+            "con el local abierto.",
             f"Tarifa de envío: {_cop(cfg.delivery_fee)} (para recoger no se cobra envío).",
             f"Puedes tomar pedidos A DOMICILIO: {'sí' if cfg.customer_ordering_enabled else 'NO'}.",
-            f"Puedes tomar pedidos PARA RECOGER: {'sí' if cfg.pickup_enabled else 'NO'}.",
+            "Puedes tomar pedidos PARA RECOGER: sí.",
         ]
-        if cfg.pickup_enabled and not cfg.customer_ordering_enabled:
+        if not cfg.customer_ordering_enabled:
             lineas.append(
-                "Ahora mismo no hay servicio de domicilios pero el local SÍ encarga para "
+                "Ahora mismo no hay servicio de domicilios, pero el local SÍ encarga para "
                 "recoger: dile al cliente 'justo en este momento no tenemos servicio de "
                 "domicilios' y ofrécele encargar y pasar por el pedido antes de despedir a nadie."
-            )
-        elif not cfg.pickup_enabled and not cfg.customer_ordering_enabled:
-            lineas.append(
-                "El local está abierto pero ningún canal recibe pedidos por WhatsApp: "
-                "díselo sin ofrecer el otro canal y pásale el número de contacto."
             )
         return " ".join(lineas)
 
@@ -739,21 +737,11 @@ def build_tools(contact, turn=None):
                 "de ningún tipo. Dile al cliente que está cerrado y que "
                 f"{cfg.reopening_hint()}; no le ofrezcas encargar ni recoger."
             )
-        if para_recoger and not cfg.pickup_enabled:
-            return (
-                "ERROR: justo en este momento no se reciben pedidos para recoger; "
-                "díselo al cliente con esas palabras."
-            )
         if not para_recoger and not cfg.customer_ordering_enabled:
             return (
                 "ERROR: justo en este momento no hay servicio de domicilios; "
-                "díselo al cliente con esas palabras."
-                + (
-                    " Sí puedes tomarlo PARA RECOGER (para_recoger=True): ofrécelo "
-                    "antes de despedir al cliente."
-                    if cfg.pickup_enabled
-                    else ""
-                )
+                "díselo al cliente con esas palabras. Sí puedes tomarlo PARA RECOGER "
+                "(para_recoger=True): ofrécelo antes de despedir al cliente."
             )
         if metodo_pago and metodo_pago not in Order.ACTIVE_PAYMENT_METHODS:
             return f"ERROR: metodo_pago inválido. Usa uno de: {', '.join(Order.ACTIVE_PAYMENT_METHODS)}."

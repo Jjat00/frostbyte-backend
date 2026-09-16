@@ -83,9 +83,9 @@ class OrderViewSet(viewsets.ModelViewSet):
         """Estado operativo del local para el staff (abierto/cerrado, domicilios).
 
         GET  -> estado actual.
-        PATCH-> actualiza `is_open`, `customer_ordering_enabled`,
-                `pickup_enabled`, `opening_time` y/o `delivery_radius_km`. Al cambiar
-                `is_open` se registra quién y cuándo; el radio solo lo puede cambiar un admin.
+        PATCH-> actualiza `is_open`, `customer_ordering_enabled`, `opening_time`
+                y/o `delivery_radius_km`. Al cambiar `is_open` se registra quién y
+                cuándo; el radio solo lo puede cambiar un admin.
         """
         cfg = StoreSettings.load()
 
@@ -103,11 +103,6 @@ class OrderViewSet(viewsets.ModelViewSet):
             if "customer_ordering_enabled" in request.data:
                 cfg.customer_ordering_enabled = bool(request.data.get("customer_ordering_enabled"))
                 update_fields.append("customer_ordering_enabled")
-
-            # Canal aparte: con el domicilio pausado el local sigue encargando
-            if "pickup_enabled" in request.data:
-                cfg.pickup_enabled = bool(request.data.get("pickup_enabled"))
-                update_fields.append("pickup_enabled")
 
             # Hora que el agente de WhatsApp le dice al cliente que escribe
             # con el local cerrado. No abre ni cierra nada.
@@ -172,9 +167,10 @@ class OrderViewSet(viewsets.ModelViewSet):
         return Response({
             "is_open": cfg.is_open,
             "customer_ordering_enabled": cfg.customer_ordering_enabled,
-            "pickup_enabled": cfg.pickup_enabled,
             "can_order": cfg.is_open and cfg.customer_ordering_enabled,
-            "can_pickup": cfg.is_open and cfg.pickup_enabled,
+            # Recoger no tiene interruptor propio: con el local abierto siempre
+            # se puede pasar por el pedido.
+            "can_pickup": cfg.is_open,
             "opening_time": cfg.opening_time.strftime("%H:%M"),
             "delivery_fee": str(cfg.delivery_fee),
             "delivery_radius_km": float(cfg.delivery_radius_km),
@@ -1632,8 +1628,7 @@ class CustomerOrderViewSet(mixins.CreateModelMixin,
             "is_open": cfg.is_open,
             "customer_ordering_enabled": cfg.customer_ordering_enabled,
             "can_order": cfg.is_open and cfg.customer_ordering_enabled,
-            "pickup_enabled": cfg.pickup_enabled,
-            "can_pickup": cfg.is_open and cfg.pickup_enabled,
+            "can_pickup": cfg.is_open,
             "delivery_fee": str(cfg.delivery_fee),
             # Con esto el checkout dibuja la zona y valida el pin: si hay
             # polígono manda él, y si viene vacío se usa el círculo.

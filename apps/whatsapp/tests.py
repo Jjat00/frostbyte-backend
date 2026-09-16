@@ -588,7 +588,6 @@ class PedidoParaRecogerTests(TestCase):
         self.cfg = StoreSettings.load()
         self.cfg.is_open = True
         self.cfg.customer_ordering_enabled = False  # domicilios pausados
-        self.cfg.pickup_enabled = True
         self.cfg.delivery_fee = 2000
         self.cfg.save()
 
@@ -623,10 +622,14 @@ class PedidoParaRecogerTests(TestCase):
     def test_el_domicilio_pausado_sugiere_recoger(self):
         self.assertIn("PARA RECOGER", self._crear(direccion="Carrera 11 #21-17"))
 
-    def test_recoger_pausado_no_crea_pedido(self):
-        self.cfg.pickup_enabled = False
-        self.cfg.save()
-        self.assertIn("ERROR", self._crear(para_recoger=True))
+    def test_recoger_no_se_puede_apagar(self):
+        """Jaime (15/09): "siempre que el local esté abierto es obvio que pueden
+        pasar a recoger". El interruptor sobraba; lo que se apaga es el
+        domicilio, que es el que cuesta un domiciliario."""
+        self.assertIn("PEDIDO CREADO", self._crear(para_recoger=True))
+        from apps.orders.models import StoreSettings
+
+        self.assertFalse(hasattr(StoreSettings.load(), "pickup_enabled"))
 
     def test_para_recoger_no_hace_falta_metodo_de_pago_ni_nada_mas(self):
         """Regla de Jaime (27/08): para recoger solo se confirma el total y se
@@ -716,8 +719,6 @@ class PedidoParaRecogerTests(TestCase):
             self.tools["consultar_estado_tienda"].invoke({}),
             self._crear(direccion="Carrera 11 #21-17"),
         ]
-        self.cfg.pickup_enabled = False
-        self.cfg.save()
         textos.append(self._crear(para_recoger=True))
         for texto in textos:
             self.assertNotIn("pausad", texto.lower())
@@ -742,7 +743,6 @@ class LocalCerradoTests(TestCase):
         self.cfg = StoreSettings.load()
         self.cfg.is_open = False
         self.cfg.customer_ordering_enabled = False
-        self.cfg.pickup_enabled = False
         self.cfg.opening_time = datetime.time(13, 30)
         self.cfg.save()
 
@@ -764,19 +764,20 @@ class LocalCerradoTests(TestCase):
 
     def test_con_el_local_abierto_si_se_ofrecen_los_canales(self):
         self.cfg.is_open = True
-        self.cfg.pickup_enabled = True
         self.cfg.save()
         estado = self.tools["consultar_estado_tienda"].invoke({})
         self.assertIn("Local ABIERTO", estado)
         self.assertIn("Puedes tomar pedidos PARA RECOGER: sí", estado)
         self.assertNotIn("LOCAL CERRADO", estado)
 
-    def test_abierto_sin_ningun_canal_no_ofrece_el_otro(self):
+    def test_abierto_sin_domicilios_sigue_ofreciendo_recoger(self):
+        """Abierto es abierto: el cliente puede venir por su pedido."""
         self.cfg.is_open = True
-        self.cfg.save()  # los dos canales siguen apagados
+        self.cfg.save()  # los domicilios siguen apagados
         estado = self.tools["consultar_estado_tienda"].invoke({})
-        self.assertIn("ningún canal recibe pedidos", estado)
-        self.assertNotIn("ofrécele encargar", estado)
+        self.assertIn("Puedes tomar pedidos PARA RECOGER: sí", estado)
+        self.assertIn("ofrécele encargar", estado)
+        self.assertNotIn("ningún canal", estado)
 
     def test_crear_pedido_cerrado_no_ofrece_recoger(self):
         error = self.tools["crear_pedido"].invoke(
@@ -832,12 +833,18 @@ class LocalCerradoTests(TestCase):
         self.assertIn("estamos por abrir", self._hint_a_las(13, 34))
         self.assertIn("mañana normalmente abrimos", self._hint_a_las(20, 0))
 
-    def test_el_prompt_ordena_local_domicilio_recoger(self):
+    def test_el_prompt_ordena_local_y_despues_domicilio(self):
         from apps.whatsapp.agent import SYSTEM_PROMPT
 
         self.assertIn("PRIMERO si el local está abierto o cerrado", SYSTEM_PROMPT)
         self.assertIn("Con el local CERRADO se acabó la conversación de pedidos", SYSTEM_PROMPT)
-        self.assertIn("normalmente sí se puede pasar a recoger", SYSTEM_PROMPT)
+        self.assertIn("Con el local ABIERTO siempre se puede pasar a recoger", SYSTEM_PROMPT)
+
+    def test_el_prompt_no_conoce_un_recoger_apagado(self):
+        """Ya no hay tal estado: si estamos abiertos, se puede recoger."""
+        from apps.whatsapp.agent import SYSTEM_PROMPT
+
+        self.assertNotIn("no estamos recibiendo pedidos para recoger", SYSTEM_PROMPT)
 
 
 class ArchivoDeConversacionTests(TestCase):
@@ -1040,7 +1047,6 @@ class ClienteSinNumeroPideCelularTests(TestCase):
         )
         cfg = StoreSettings.load()
         cfg.is_open = True
-        cfg.pickup_enabled = True
         cfg.customer_ordering_enabled = True
         cfg.save()
 
