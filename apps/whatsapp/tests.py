@@ -3770,3 +3770,90 @@ class ClienteQueVuelveTests(TestCase):
         prompt = build_system_prompt()
         self.assertIn("lo tratas como lo que es: alguien", prompt)
         self.assertIn("un pedido de otro día NO sigue vivo", prompt)
+
+
+class AcusesEnParaleloTests(TestCase):
+    """El acuse que llega mientras se procesa el primero tampoco es un mensaje.
+
+    Preguntar "¿ya lo tratamos?" y registrarlo eran dos operaciones separadas,
+    y los acuses del mismo mensaje llegan con uno o dos segundos de diferencia
+    a cuatro hilos del pool: los tres podían ver la tabla vacía y los tres
+    escribían. Aquí se anula el atajo para reproducir esa carrera; quien tiene
+    que cortarla es el unique de wamid (ChatMessage.claim).
+    """
+
+    def setUp(self):
+        self.contact = WhatsAppContact.objects.create(phone=BSUID, wa_user_id=BSUID)
+        atajo = patch("apps.whatsapp.worker._ya_tratado", return_value=False)
+        atajo.start()
+        self.addCleanup(atajo.stop)
+
+    def _procesar(self, payload, key):
+        from .worker import _handle_outbound, extract_outbound_messages
+
+        event = WebhookEvent.objects.create(
+            idempotency_key=key, payload=payload, event_type="whatsapp.message.sent"
+        )
+        _handle_outbound(event, extract_outbound_messages(payload))
+        self.contact.refresh_from_db()
+        event.refresh_from_db()
+        return event
+
+    def test_el_texto_entra_una_sola_vez_al_hilo(self):
+        payload = app_reply_payload("Paga en efectivo o nequi,?", wamid="wamid.carrera")
+        with patch("apps.whatsapp.agent.record_messages") as record:
+            self._procesar(payload, "carrera-1")
+            self._procesar(payload, "carrera-2")
+            self._procesar(payload, "carrera-3")
+        self.assertEqual(record.call_count, 1)
+        self.assertEqual(ChatMessage.objects.filter(wamid="wamid.carrera").count(), 1)
+
+    def test_el_acuse_no_renueva_la_pausa(self):
+        payload = app_reply_payload("Ya sale", wamid="wamid.carrera2")
+        with patch("apps.whatsapp.agent.record_messages"):
+            self._procesar(payload, "carrera2-1")
+            primera = self.contact.human_until
+            self._procesar(payload, "carrera2-2")
+        self.assertIsNotNone(primera)
+        self.assertEqual(self.contact.human_until, primera)
+
+    def test_el_evento_repetido_queda_marcado_como_acuse(self):
+        payload = app_reply_payload("Listo", wamid="wamid.carrera3")
+        with patch("apps.whatsapp.agent.record_messages"):
+            self._procesar(payload, "carrera3-1")
+            event = self._procesar(payload, "carrera3-2")
+        self.assertEqual(event.status, WebhookEvent.Status.IGNORED)
+        self.assertIn("acuses", event.error)
+
+
+class MensajeEntranteRepetidoTests(TestCase):
+    """El mismo mensaje del cliente en dos webhooks se contesta una vez.
+
+    Kapso reparte claves de idempotencia distintas, así que el filtro del
+    webhook no reconoce el reenvío; el wamid del mensaje sí. Sin esto, un
+    reenvío significaría dos turnos del agente sobre lo mismo.
+    """
+
+    def _procesar(self, payload, key):
+        from .worker import _process_event
+
+        event = WebhookEvent.objects.create(idempotency_key=key, payload=payload)
+        _process_event(event)
+        event.refresh_from_db()
+        return event
+
+    def test_el_segundo_webhook_no_encola_otro_turno(self):
+        payload = webhook_payload("hola, quiero pedir", message_id="wamid.repe")
+        with patch("apps.whatsapp.worker._enqueue_turn") as encolar, self.settings(**FAST):
+            self._procesar(payload, "repe-1")
+            evento = self._procesar(payload, "repe-2")
+        self.assertEqual(encolar.call_count, 1)
+        self.assertEqual(ChatMessage.objects.filter(wamid="wamid.repe").count(), 1)
+        self.assertEqual(evento.status, WebhookEvent.Status.IGNORED)
+        self.assertIn("recibido", evento.error)
+
+    def test_un_mensaje_nuevo_del_mismo_cliente_si_encola(self):
+        with patch("apps.whatsapp.worker._enqueue_turn") as encolar, self.settings(**FAST):
+            self._procesar(webhook_payload("hola", message_id="wamid.uno"), "uno")
+            self._procesar(webhook_payload("¿hay pecera?", message_id="wamid.dos"), "dos")
+        self.assertEqual(encolar.call_count, 2)

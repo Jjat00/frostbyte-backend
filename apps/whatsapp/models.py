@@ -265,10 +265,24 @@ class ChatMessage(models.Model):
         return f"{self.phone} · {self.get_author_display()} · {self.body[:40]}"
 
     @classmethod
-    def remember(cls, wamid, phone, direction, body, author=None):
-        """Guarda el texto de un mensaje si trae id y contenido."""
+    def claim(cls, wamid, phone, direction, body, author=None):
+        """Guarda el mensaje y dice si es la PRIMERA vez que lo vemos.
+
+        WhatsApp manda un webhook por cada estado del mismo mensaje (enviado,
+        entregado, leído) y Kapso los entrega con claves de idempotencia
+        distintas, así que el mismo wamid llega dos y tres veces. Preguntar
+        antes "¿ya lo tratamos?" con un exists() no alcanza: los acuses caen
+        con un segundo de diferencia en hilos distintos del pool y los dos ven
+        la tabla vacía. El unique de wamid es lo único que decide de verdad
+        quién llegó primero, así que la pregunta y el registro tienen que ser
+        la misma operación.
+
+        Devuelve (mensaje, es_nuevo). es_nuevo es True cuando no hay wamid o
+        no hay texto: sin id no hay forma de reconocer una copia, y perder un
+        mensaje del cliente es peor que atenderlo dos veces.
+        """
         if not wamid or not (body or "").strip():
-            return None
+            return None, True
         if author is None:
             author = (
                 cls.Author.CUSTOMER
@@ -283,7 +297,12 @@ class ChatMessage(models.Model):
                 "author": author,
                 "body": body.strip(),
             },
-        )[0]
+        )
+
+    @classmethod
+    def remember(cls, wamid, phone, direction, body, author=None):
+        """Guarda el texto de un mensaje si trae id y contenido."""
+        return cls.claim(wamid, phone, direction, body, author)[0]
 
     @classmethod
     def enrich(cls, wamid, body):

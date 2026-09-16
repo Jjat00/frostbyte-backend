@@ -595,6 +595,16 @@ def _find_contact(key, wa_user_id):
     return contact
 
 
+def _ya_tratado(wamid):
+    """True si ese wamid ya quedó registrado en la conversación.
+
+    Atajo barato para descartar los acuses repetidos antes de la espera de
+    gracia de _handle_outbound. Quien garantiza que no se dupliquen es
+    ChatMessage.claim, no esto.
+    """
+    return bool(wamid) and ChatMessage.objects.filter(wamid=wamid[:128]).exists()
+
+
 def _close_events(event_ids, status, error=""):
     WebhookEvent.objects.filter(pk__in=event_ids).update(status=status, error=error)
 
@@ -759,11 +769,13 @@ def _handle_outbound(event, outbounds):
             continue
         if msg["wamid"] and SentMessage.objects.filter(wamid=msg["wamid"]).exists():
             continue
-        if msg["wamid"] and ChatMessage.objects.filter(wamid=msg["wamid"]).exists():
+        if _ya_tratado(msg["wamid"]):
             # Ya lo tratamos: esto es un acuse (enviado/entregado/leído) del
             # MISMO mensaje. WhatsApp manda varios por mensaje —a un chat del
             # 15/09 le llegaron 38 del mismo wamid— y cada uno renovaba la
-            # pausa y metía otra copia del texto en el hilo del modelo.
+            # pausa y metía otra copia del texto en el hilo del modelo. Es un
+            # atajo, no la garantía: el acuse que llega mientras el primero
+            # se procesa ve la tabla vacía y sigue (ver ChatMessage.claim).
             continue
         if msg["origin"] == "business_app":
             human.append(msg)  # la app del celular siempre es un humano
@@ -795,28 +807,43 @@ def _handle_outbound(event, outbounds):
         if key:
             groups.setdefault(key, []).append(msg)
 
+    algo_nuevo = False
     for key, messages in groups.items():
         contact = _find_contact(key, messages[0]["wa_user_id"])
         phone = contact.phone
-        contact.human_until = timezone.now() + pause
-        contact.save(update_fields=["human_until", "updated_at"])
         event.contact_phone = phone
-        for msg in messages:
-            # El cliente también puede citar lo que dijo el humano del equipo
-            ChatMessage.remember(
+        # El cliente también puede citar lo que dijo el humano del equipo, y
+        # guardarlo es además lo que distingue el mensaje de su propio acuse:
+        # el que no logra crear la fila es una copia y no cuenta como turno
+        nuevos = [
+            msg
+            for msg in messages
+            if ChatMessage.claim(
                 msg["wamid"],
                 phone,
                 ChatMessage.Direction.OUTBOUND,
                 msg["text"],
                 author=ChatMessage.Author.HUMAN,
-            )
+            )[1]
+        ]
+        if not nuevos:
+            continue
+        algo_nuevo = True
+        contact.human_until = timezone.now() + pause
+        contact.save(update_fields=["human_until", "updated_at"])
         try:
             with _phone_lock(contact.phone):
                 record_messages(
-                    contact, [("assistant", m["text"]) for m in messages]
+                    contact, [("assistant", m["text"]) for m in nuevos]
                 )
         except Exception:
             logger.exception("No se pudo guardar el mensaje humano en el hilo de %s", phone)
+
+    if not algo_nuevo:
+        event.status = WebhookEvent.Status.IGNORED
+        event.error = "acuses de mensajes que ya habíamos tratado"
+        event.save(update_fields=["status", "error", "contact_phone"])
+        return
 
     # Los wamids de lo que enviamos solo sirven para reconocer nuestros propios
     # salientes, que llegan en segundos. La conversación (ChatMessage) NO se
@@ -921,15 +948,28 @@ def _process_event(event):
             event.save(update_fields=["status", "error", "contact_phone", "phone_number_id"])
             continue
 
-        for msg in messages:
-            # Para resolver la cita si el cliente responde a su propio mensaje
-            ChatMessage.remember(
+        # Guardarlos sirve para resolver la cita cuando el cliente responde
+        # deslizando, y de paso para reconocer el webhook repetido: el mensaje
+        # que no logra crear su fila ya lo recibimos antes, y volver a
+        # encolarlo sería contestar dos veces lo mismo
+        messages = [
+            msg
+            for msg in messages
+            if ChatMessage.claim(
                 msg["message_id"],
                 contact.phone,
                 ChatMessage.Direction.INBOUND,
                 msg["text"],
                 author=ChatMessage.Author.CUSTOMER,
+            )[1]
+        ]
+        if not messages:
+            event.status = WebhookEvent.Status.IGNORED
+            event.error = "mensajes que ya habíamos recibido"
+            event.save(
+                update_fields=["status", "error", "contact_phone", "phone_number_id"]
             )
+            continue
 
         paused_by_human = contact.human_until and contact.human_until > timezone.now()
         if contact.human_handoff or paused_by_human:
