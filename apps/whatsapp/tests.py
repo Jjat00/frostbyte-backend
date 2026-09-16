@@ -898,8 +898,12 @@ def bsuid_payload(text, sequence=1):
     return payload
 
 
-def app_reply_payload(text, wamid="wamid.app1"):
-    """Saliente desde la app de WhatsApp Business a un cliente sin número."""
+def app_reply_payload(text, wamid="wamid.app1", sent_at=None):
+    """Saliente desde la app de WhatsApp Business a un cliente sin número.
+
+    `sent_at` es cuándo se escribió (datetime); por defecto, ahora mismo.
+    """
+    momento = sent_at or timezone.now()
     return {
         "type": "whatsapp.message.sent",
         "data": [
@@ -912,6 +916,7 @@ def app_reply_payload(text, wamid="wamid.app1"):
                     "from": "573117814338",
                     "type": "text",
                     "text": {"body": text},
+                    "timestamp": str(int(momento.timestamp())),
                     "kapso": {"direction": "outbound", "origin": "business_app"},
                 },
                 "conversation": {"phone_number": None, "business_scoped_user_id": BSUID},
@@ -3372,3 +3377,58 @@ class OpcionesQueNoSeCobranTests(TestCase):
         resultado = self.tools["buscar_producto"].invoke({"texto": "salchipapa con queso"})
         self.assertIn("Salchipapa con Queso", resultado)
         self.assertNotIn("personalizable", resultado)
+
+
+class MensajeViejoQueSeRelleTests(TestCase):
+    """Abrir el chat en la app no es escribir en él.
+
+    Chat real del 13/09: a las 15:15 llegó un webhook con un saliente del
+    equipo… escrito el 1 de septiembre, doce días antes. Alguien abrió la
+    conversación en la app de WhatsApp Business, el mensaje pasó a "leído" y
+    Kapso lo reenvió con su texto original. El backend lo leyó como que un
+    humano acababa de intervenir y pausó al agente treinta minutos. Un minuto
+    después Natalia escribió "Buenas tardes, quiero realizar un pedido" y sus
+    cinco mensajes quedaron sin respuesta hasta que una persona la atendió.
+    """
+
+    def setUp(self):
+        self.contact = WhatsAppContact.objects.create(phone=BSUID, wa_user_id=BSUID)
+
+    def _procesar(self, payload, key):
+        from .worker import _handle_outbound, extract_outbound_messages
+
+        event = WebhookEvent.objects.create(
+            idempotency_key=key, payload=payload, event_type="whatsapp.message.sent"
+        )
+        _handle_outbound(event, extract_outbound_messages(payload))
+        self.contact.refresh_from_db()
+        return event
+
+    def test_un_mensaje_de_hace_dias_no_pausa_al_agente(self):
+        viejo = timezone.now() - datetime.timedelta(days=12)
+        self._procesar(app_reply_payload("Su pedido va en camino", sent_at=viejo), "viejo-1")
+        self.assertIsNone(self.contact.human_until)
+
+    def test_el_mensaje_viejo_tampoco_entra_al_hilo_otra_vez(self):
+        viejo = timezone.now() - datetime.timedelta(days=12)
+        with patch("apps.whatsapp.agent.record_messages") as record:
+            self._procesar(app_reply_payload("Su pedido va en camino", sent_at=viejo), "viejo-2")
+        record.assert_not_called()
+
+    def test_lo_que_el_equipo_acaba_de_escribir_sigue_pausando(self):
+        self._procesar(app_reply_payload("Buenas tardes si señor"), "nuevo-1")
+        self.assertIsNotNone(self.contact.human_until)
+        self.assertGreater(self.contact.human_until, timezone.now())
+
+    def test_un_retraso_normal_de_kapso_sigue_contando_como_intervencion(self):
+        """Kapso entrega en segundos y se le han visto 3 min de retraso."""
+        hace_poco = timezone.now() - datetime.timedelta(minutes=3)
+        self._procesar(app_reply_payload("Ya va en camino", sent_at=hace_poco), "nuevo-2")
+        self.assertIsNotNone(self.contact.human_until)
+
+    def test_un_saliente_sin_timestamp_se_sigue_tratando_como_humano(self):
+        """Si Kapso no manda la hora, no se puede descartar: pausa."""
+        payload = app_reply_payload("Ubicación porfa")
+        del payload["data"][0]["message"]["timestamp"]
+        self._procesar(payload, "sin-hora")
+        self.assertIsNotNone(self.contact.human_until)

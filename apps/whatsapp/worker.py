@@ -18,7 +18,7 @@ import threading
 import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone as dt_timezone
 from decimal import Decimal
 
 from django.conf import settings
@@ -63,6 +63,14 @@ MAX_ABORTS = 2
 # sticker que lo remata). Sin ella llegan pegados en el mismo segundo y se leen
 # como una ráfaga de bot; con ella se leen como alguien que sigue escribiendo.
 MESSAGE_GAP_SECONDS = 0.9
+
+# Cuánto puede tardar un saliente en llegarnos y seguir siendo "acaba de
+# pasar". Kapso entrega en 6-9 s y se le han visto 3 min de retraso, pero
+# también reenvía mensajes VIEJOS cuando cambian de estado: abrir la
+# conversación en la app de WhatsApp Business los marca como leídos y el
+# webhook llega con el texto original. Uno de hace 11 días pausó al agente
+# justo antes de que Natalia escribiera (13/09), y la atendió una persona.
+OUTBOUND_FRESH_WINDOW = timedelta(minutes=10)
 
 # Tope del archivo que el dueño manda para volver sticker. Un video de sticker
 # es un bucle de segundos; lo que pase de aquí no iba a caber igual.
@@ -235,6 +243,14 @@ def extract_inbound_messages(payload):
     return results
 
 
+def _epoch(value):
+    """El timestamp de WhatsApp (segundos epoch) como datetime; None si no viene."""
+    try:
+        return datetime.fromtimestamp(int(value), dt_timezone.utc)
+    except (TypeError, ValueError, OSError, OverflowError):
+        return None
+
+
 def extract_outbound_messages(payload):
     """Extrae los mensajes salientes (whatsapp.message.sent) de un webhook.
 
@@ -283,6 +299,7 @@ def extract_outbound_messages(payload):
                 "wa_user_id": wa_user_id,
                 "wamid": message.get("id") or "",
                 "origin": kapso_meta.get("origin") or "",
+                "sent_at": _epoch(message.get("timestamp")),
                 "text": text.strip(),
                 "phone_number_id": str(
                     entry.get("phone_number_id")
@@ -723,8 +740,14 @@ def _handle_outbound(event, outbounds):
     guardado en el hilo como respuesta del asistente.
     """
     human, unmatched = [], []
+    ahora = timezone.now()
     for msg in outbounds:
         if msg["origin"] == "history_sync":
+            continue
+        if msg["sent_at"] and ahora - msg["sent_at"] > OUTBOUND_FRESH_WINDOW:
+            # No es alguien escribiendo: es un mensaje viejo que cambió de
+            # estado (lo leyeron en la app). Pausar por esto deja al cliente
+            # sin agente media hora por haber abierto su chat.
             continue
         if msg["wamid"] and SentMessage.objects.filter(wamid=msg["wamid"]).exists():
             continue
@@ -745,7 +768,7 @@ def _handle_outbound(event, outbounds):
 
     if not human:
         event.status = WebhookEvent.Status.IGNORED
-        event.error = "salientes del propio sistema"
+        event.error = "salientes del propio sistema o cambios de estado"
         event.save(update_fields=["status", "error"])
         return
 
