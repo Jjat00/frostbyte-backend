@@ -3497,3 +3497,73 @@ class PausaCortaTests(TestCase):
 
         self.assertGreater(dj.WHATSAPP_HANDOFF_PAUSE_MINUTES, dj.WHATSAPP_HUMAN_PAUSE_MINUTES)
         self.assertLessEqual(dj.WHATSAPP_HANDOFF_PAUSE_MINUTES, 12 * 60)
+
+
+class UbicacionQueSeRecuerdaTests(TestCase):
+    """Al que ya nos dio su ubicación no se le pide otra vez.
+
+    Jaime (15/09): "quiero que la ubicación se guarde y, cuando alguien vuelve
+    a pedir, decir a la misma o a otra; si dice a la misma, ya no decir que
+    envíe la ubicación".
+    """
+
+    def setUp(self):
+        from django.conf import settings as dj_settings
+
+        self.contact = WhatsAppContact.objects.create(phone=PHONE, customer_name="Daniel")
+        self.centro = (dj_settings.DELIVERY_CENTER_LAT, dj_settings.DELIVERY_CENTER_LNG)
+        self.tools = {t.name: t for t in build_tools(self.contact)}
+
+    def _con_ubicacion(self, label="", dias=0):
+        self.contact.last_location_lat = Decimal(str(round(self.centro[0], 7)))
+        self.contact.last_location_lng = Decimal(str(round(self.centro[1], 7)))
+        self.contact.last_location_at = timezone.now() - datetime.timedelta(days=dias)
+        self.contact.last_location_label = label
+        self.contact.save()
+
+    def test_la_ubicacion_compartida_guarda_como_se_llama(self):
+        from .worker import extract_inbound_messages
+
+        payload = webhook_payload("", 1)
+        payload["data"][0]["message"]["type"] = "location"
+        payload["data"][0]["message"]["location"] = {
+            "latitude": self.centro[0],
+            "longitude": self.centro[1],
+            "name": "Mundo Fotográfico",
+            "address": "Cl. 19 #10-7",
+        }
+        del payload["data"][0]["message"]["text"]
+        mensajes = extract_inbound_messages(payload)
+        self.assertEqual(
+            mensajes[0]["location"]["label"], "Mundo Fotográfico · Cl. 19 #10-7"
+        )
+
+    def test_el_historial_dice_que_no_se_la_vuelva_a_pedir(self):
+        self._con_ubicacion(label="Mundo Fotográfico · Cl. 19 #10-7", dias=2)
+        historial = self.tools["consultar_historial_cliente"].invoke({})
+        self.assertIn("Mundo Fotográfico", historial)
+        self.assertIn("NO le pidas que la comparta otra vez", historial)
+        self.assertIn("mismo sitio", historial)
+
+    def test_sin_ubicacion_guardada_no_se_inventa_nada(self):
+        historial = self.tools["consultar_historial_cliente"].invoke({})
+        self.assertNotIn("Ubicación guardada", historial)
+
+    def test_una_ubicacion_sin_nombre_tambien_se_ofrece(self):
+        """WhatsApp casi nunca manda nombre ni dirección: igual la tenemos."""
+        self._con_ubicacion(label="", dias=3)
+        historial = self.tools["consultar_historial_cliente"].invoke({})
+        self.assertIn("Ubicación guardada: la que compartió", historial)
+
+    def test_la_cobertura_de_otro_dia_pregunta_en_vez_de_pedir(self):
+        self._con_ubicacion(label="Mundo Fotográfico", dias=4)
+        with patch("apps.whatsapp.tools.kapso.recent_undelivered", return_value=[]):
+            resultado = self.tools["verificar_cobertura"].invoke({})
+        self.assertIn("Mundo Fotográfico", resultado)
+        self.assertIn("NO le pidas que la comparta de nuevo", resultado)
+        self.assertIn("DENTRO de la zona", resultado)
+
+    def test_el_prompt_manda_mirar_antes_de_pedir(self):
+        prompt = build_system_prompt()
+        self.assertIn("MIRA SI YA LA TIENES", prompt)
+        self.assertIn("va al mismo sitio", prompt)

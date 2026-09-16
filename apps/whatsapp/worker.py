@@ -158,6 +158,14 @@ def extract_inbound_messages(payload):
                 location_coords = {
                     "lat": float(location["latitude"]),
                     "lng": float(location["longitude"]),
+                    # Cómo llamarla después. Sin esto, al cliente que vuelve
+                    # solo se le puede ofrecer "la misma ubicación de la última
+                    # vez"; con esto, "¿a Mundo Fotográfico otra vez?".
+                    "label": " · ".join(
+                        parte
+                        for parte in (location.get("name"), location.get("address"))
+                        if (parte or "").strip()
+                    )[:200],
                 }
             except (KeyError, TypeError, ValueError):
                 location_coords = None
@@ -886,7 +894,13 @@ def _process_event(event):
             contact.last_location_lat = Decimal(str(round(location["lat"], 7)))
             contact.last_location_lng = Decimal(str(round(location["lng"], 7)))
             contact.last_location_at = timezone.now()
-            updates += ["last_location_lat", "last_location_lng", "last_location_at"]
+            contact.last_location_label = location.get("label") or ""
+            updates += [
+                "last_location_lat",
+                "last_location_lng",
+                "last_location_at",
+                "last_location_label",
+            ]
         contact.save(update_fields=updates)
         if location:
             # El pedido pudo tomarse sin ella (ver missing.py): si llega ahora,

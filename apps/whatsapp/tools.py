@@ -217,6 +217,28 @@ def _coincidencias(products, words, exigir_variantes=True):
     return scored
 
 
+def _ubicacion_guardada(contact):
+    """Cómo nombrarle al cliente la ubicación que ya tenemos suya, o "".
+
+    Un cliente que vuelve no tiene por qué mandar otra vez su ubicación: ya la
+    dio. Lo que toca es preguntarle si es al mismo sitio (Jaime, 15/09), y para
+    eso hay que poder nombrarlo.
+    """
+    if contact.last_location_lat is None or contact.last_location_lng is None:
+        return ""
+    if contact.last_location_at:
+        cuando = timezone.localtime(contact.last_location_at)
+        fecha = (
+            "hoy"
+            if cuando.date() == timezone.localdate()
+            else f"del {cuando.strftime('%d/%m')}"
+        )
+    else:
+        fecha = "de otra vez"
+    sitio = (contact.last_location_label or "").strip()
+    return f"{sitio} ({fecha})" if sitio else f"la que compartió {fecha}"
+
+
 def _opciones_ofrecibles(group):
     """Las opciones del grupo que el agente puede ofrecer de verdad.
 
@@ -587,16 +609,31 @@ def build_tools(contact, turn=None):
             .order_by("-created_at")[:5]
         )
         known_name = contact.customer_name or contact.profile_name
+        ubicacion = _ubicacion_guardada(contact)
+        aviso_ubicacion = (
+            f"Ubicación guardada: {ubicacion}. NO le pidas que la comparta otra vez: "
+            "pregúntale si el domicilio va al mismo sitio. Si dice que sí, sigue sin "
+            "pedirle nada más; solo si te dice que es a otro lado le pides la ubicación nueva."
+            if ubicacion
+            else ""
+        )
         if not orders:
+            partes = []
             if known_name:
-                return (
+                partes.append(
                     f"Este cliente no tiene pedidos anteriores, pero su nombre de perfil "
                     f"de WhatsApp es: {known_name}."
                 )
-            return "Este cliente no tiene pedidos anteriores registrados."
+            else:
+                partes.append("Este cliente no tiene pedidos anteriores registrados.")
+            if aviso_ubicacion:
+                partes.append(aviso_ubicacion)
+            return " ".join(partes)
         lines = []
         if known_name:
             lines.append(f"Nombre conocido: {known_name}")
+        if aviso_ubicacion:
+            lines.append(aviso_ubicacion)
         if contact.default_address:
             lines.append(
                 f"Dirección habitual: {contact.default_address}"
@@ -1075,10 +1112,13 @@ def build_tools(contact, turn=None):
             contact.last_location_at
         ).date() < timezone.localdate():
             fecha = timezone.localtime(contact.last_location_at).strftime("%d/%m/%Y")
+            sitio = (contact.last_location_label or "").strip()
+            donde = f" ({sitio})" if sitio else ""
             lines.append(
-                f"OJO: la ubicación es del {fecha} (conversación anterior). Confirma "
-                "con el cliente que la entrega es en ese mismo punto; si es otro "
-                "lugar, pídele que comparta la ubicación nueva."
+                f"OJO: la ubicación es del {fecha}{donde}, de una conversación "
+                "anterior. NO le pidas que la comparta de nuevo: pregúntale si el "
+                "pedido va al mismo sitio y, si dice que sí, sigue. Solo si es otro "
+                "lugar le pides la ubicación nueva."
             )
         return "\n".join(lines)
 

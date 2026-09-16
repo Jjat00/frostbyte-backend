@@ -106,6 +106,17 @@ class WhatsAppContact(models.Model):
         blank=True,
         verbose_name="Ubicación compartida el",
     )
+    last_location_label = models.CharField(
+        max_length=200,
+        blank=True,
+        verbose_name="Cómo se llama esa ubicación",
+        help_text=(
+            "Nombre y dirección que WhatsApp mandó con la ubicación (ej. 'Mundo "
+            "Fotográfico · Cl. 19 #10-7'). Sirve para que el agente le pregunte al "
+            "cliente que vuelve si es al mismo sitio, en vez de pedirle otra vez "
+            "que comparta la ubicación"
+        ),
+    )
     human_handoff = models.BooleanField(
         default=False,
         verbose_name="Atendido por humano",
