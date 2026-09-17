@@ -167,7 +167,12 @@ class StoreSettingsAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
         "customer_ordering_enabled",
         "updated_at",
     ]
-    readonly_fields = ["status_changed_at", "status_changed_by", "updated_at"]
+    readonly_fields = [
+        "status_changed_at",
+        "status_changed_by",
+        "ordering_changed_at",
+        "updated_at",
+    ]
 
     fieldsets = (
         ("Estado del local", {"fields": ("is_open", "status_changed_at", "status_changed_by")}),
@@ -177,6 +182,7 @@ class StoreSettingsAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
                 "delivery_radius_km",
                 "delivery_area",
                 "customer_ordering_enabled",
+                "ordering_changed_at",
             ),
             "description": (
                 "La zona se dibuja desde el dashboard; el JSON de aquí es para "

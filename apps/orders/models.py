@@ -859,6 +859,16 @@ class StoreSettings(models.Model):
         verbose_name="Demora máxima (minutos)",
         help_text="El otro extremo del rango. Igual al mínimo = un solo número.",
     )
+    ordering_changed_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name="Domicilios cambiados el",
+        help_text=(
+            "Última vez que se prendieron o se apagaron los domicilios. Lo mira el "
+            "vigía de WhatsApp para avisarle al cliente que se quedó sin domicilio "
+            "mientras estaban apagados (ver whatsapp/domicilios.py)."
+        ),
+    )
     status_changed_at = models.DateTimeField(
         null=True,
         blank=True,
@@ -883,10 +893,27 @@ class StoreSettings(models.Model):
         estado = "abierto" if self.is_open else "cerrado"
         return f"Configuración de la tienda ({estado})"
 
+    @classmethod
+    def from_db(cls, db, field_names, values):
+        # Se recuerda cómo estaban los domicilios al leer la fila para poder
+        # fechar el cambio en save(), venga de donde venga: el panel, el admin
+        # de Django o un shell. Si el aviso dependiera de la vista del panel,
+        # prenderlos desde el admin no avisaría a nadie.
+        obj = super().from_db(db, field_names, values)
+        obj._ordering_was = obj.customer_ordering_enabled
+        return obj
+
     def save(self, *args, **kwargs):
         # Fuerza singleton: siempre la misma fila
         self.pk = 1
+        antes = getattr(self, "_ordering_was", None)
+        if antes is not None and antes != self.customer_ordering_enabled:
+            self.ordering_changed_at = timezone.now()
+            update_fields = kwargs.get("update_fields")
+            if update_fields is not None:
+                kwargs["update_fields"] = list(update_fields) + ["ordering_changed_at"]
         super().save(*args, **kwargs)
+        self._ordering_was = self.customer_ordering_enabled
 
     def eta_label(self):
         """Cuánto nos demoramos, en palabras, para decírselo a un cliente.
