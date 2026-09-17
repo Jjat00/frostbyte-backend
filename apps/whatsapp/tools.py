@@ -22,6 +22,7 @@ from apps.orders.coverage import coverage_label, is_within_delivery_area
 from apps.orders.models import Order, OrderItem, StoreSettings
 from apps.products.models import Category, Product, ProductVariant
 
+from . import domicilios
 from . import kapso
 from . import missing
 from . import stickers as stickers_media
@@ -426,15 +427,19 @@ def build_tools(contact, turn=None):
         # Recoger no tiene interruptor: si el local está abierto, el cliente
         # puede pasar por su pedido. Lo único que se prende y se apaga es el
         # domicilio, que es el que cuesta un domiciliario.
-        domicilios = "ACTIVOS" if cfg.customer_ordering_enabled else "SIN SERVICIO AHORA"
+        servicio = "ACTIVOS" if cfg.customer_ordering_enabled else "SIN SERVICIO AHORA"
         lineas = [
-            f"Local ABIERTO. Domicilios: {domicilios}. Pedidos para recoger: SIEMPRE, "
+            f"Local ABIERTO. Domicilios: {servicio}. Pedidos para recoger: SIEMPRE, "
             "con el local abierto.",
             f"Tarifa de envío: {_cop(cfg.delivery_fee)} (para recoger no se cobra envío).",
             f"Puedes tomar pedidos A DOMICILIO: {'sí' if cfg.customer_ordering_enabled else 'NO'}.",
             "Puedes tomar pedidos PARA RECOGER: sí.",
         ]
         if not cfg.customer_ordering_enabled:
+            # Queda anotado que este cliente llegó con la puerta cerrada: si los
+            # domicilios vuelven dentro de la ventana, el vigía mira el hilo y
+            # decide si hay algo que retomar (ver domicilios.py)
+            domicilios.anotar(contact)
             lineas.append(
                 "Ahora mismo no hay servicio de domicilios, pero el local SÍ encarga para "
                 "recoger: dile al cliente 'justo en este momento no tenemos servicio de "
@@ -804,6 +809,8 @@ def build_tools(contact, turn=None):
                 f"{cfg.reopening_hint()}; no le ofrezcas encargar ni recoger."
             )
         if not para_recoger and not cfg.customer_ordering_enabled:
+            # Ya no es que preguntara: tenía el pedido armado y se quedó sin él
+            domicilios.anotar(contact)
             return (
                 "ERROR: justo en este momento no hay servicio de domicilios; "
                 "díselo al cliente con esas palabras. Sí puedes tomarlo PARA RECOGER "
@@ -924,6 +931,9 @@ def build_tools(contact, turn=None):
             order.calculate_totals()
             order.save()
 
+        # Hizo su pedido (a domicilio o para recoger): ya no se quedó esperando
+        # nada, así que si los domicilios vuelven no hay que avisarle de ellos
+        domicilios.olvidar(contact)
         contact.customer_name = nombre
         campos = ["customer_name", "updated_at"]
         if celular and contact.contact_phone != celular:

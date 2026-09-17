@@ -163,6 +163,28 @@ class WhatsAppContact(models.Model):
             "intentar cada minuto"
         ),
     )
+    delivery_missed_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        editable=False,
+        verbose_name="Se quedó sin domicilio el",
+        help_text=(
+            "La última vez que este contacto escribió con los domicilios apagados. "
+            "Cuando vuelven a prenderse, el vigía mira la conversación y le avisa si "
+            "se quedó sin su pedido por eso (ver domicilios.py). Se borra en cuanto "
+            "hace un pedido"
+        ),
+    )
+    delivery_notified_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        editable=False,
+        verbose_name="Avisado de los domicilios el",
+        help_text=(
+            "Cuándo se le avisó que los domicilios volvieron. Sin esto, cada barrido "
+            "volvería a intentarlo mientras siguieran activos"
+        ),
+    )
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="Creado")
     updated_at = models.DateTimeField(auto_now=True, verbose_name="Actualizado")
 
