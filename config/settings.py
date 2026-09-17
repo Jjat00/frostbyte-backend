@@ -449,6 +449,26 @@ WHATSAPP_RESCUE_WINDOW_MINUTES = int(os.getenv('WHATSAPP_RESCUE_WINDOW_MINUTES',
 WHATSAPP_RESCUE_INTERVAL_SECONDS = int(
     os.getenv('WHATSAPP_RESCUE_INTERVAL_SECONDS', '60')
 )
+# Aviso a quien se quedó sin domicilio (apps/whatsapp/domicilios.py). El mismo
+# barrido mira si los domicilios volvieron a prenderse y, si alguien escribió
+# mientras estaban apagados, deja que el agente le cuente que ya hay servicio.
+# La ventana se mide desde que ese cliente escribió y NO puede pasar de 24
+# horas: fuera de esa ventana WhatsApp solo deja escribir primero con una
+# plantilla aprobada, y la cuenta todavía no las tiene.
+WHATSAPP_DELIVERY_REENGAGE_ENABLED = (
+    os.getenv('WHATSAPP_DELIVERY_REENGAGE_ENABLED', 'True').lower() == 'true'
+)
+WHATSAPP_DELIVERY_REENGAGE_WINDOW_HOURS = int(
+    os.getenv('WHATSAPP_DELIVERY_REENGAGE_WINDOW_HOURS', '12')
+)
+# Margen desde que se prenden hasta el primer aviso: si fue un toque por error
+# y se apagan otra vez, nadie recibió nada.
+WHATSAPP_DELIVERY_REENGAGE_AFTER_MINUTES = int(
+    os.getenv('WHATSAPP_DELIVERY_REENGAGE_AFTER_MINUTES', '2')
+)
+# Tope por reactivación, no por barrido: es el corte que en Ungga faltó, donde
+# la primera corrida habría mandado 80 avisos de golpe.
+WHATSAPP_DELIVERY_REENGAGE_MAX = int(os.getenv('WHATSAPP_DELIVERY_REENGAGE_MAX', '10'))
 BACKEND_PUBLIC_URL = os.getenv(
     'BACKEND_PUBLIC_URL', 'https://frostbyte-backend-production.up.railway.app'
 )

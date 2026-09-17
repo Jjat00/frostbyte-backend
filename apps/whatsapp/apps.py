@@ -18,6 +18,7 @@ _SKIP_WATCHDOG_COMMANDS = {
     "dumpdata",
     "check",
     "rescatar_esperando",
+    "avisar_domicilios",
 }
 
 

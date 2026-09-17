@@ -24,6 +24,10 @@ Corre en un hilo del propio proceso (como el sync de Spotify en apps.music) y
 no en un servicio cron aparte: es una consulta por minuto. Si algún día el
 backend corre con réplicas hay que moverlo a un command con lock, o dos
 procesos contestarían lo mismo.
+
+El mismo barrido lleva encima el aviso de los domicilios que vuelven a
+prenderse (domicilios.py): es otra forma del mismo cliente esperando algo que
+nunca llega.
 """
 
 import logging
@@ -193,10 +197,18 @@ def barrer(ahora=None):
 
 
 def _loop():
+    from . import domicilios
+
     time.sleep(ARRANQUE_GRACIA_SECONDS)
     while True:
         try:
             close_old_connections()
+            # Primero el aviso de los domicilios y después el rescate: los dos
+            # pueden querer escribirle al mismo cliente, y el aviso es el que
+            # sabe más (retoma el pedido Y cuenta que ya hay servicio). Lo que
+            # sale por ahí queda en SentMessage, así que el rescate lo ve como
+            # una respuesta ya dada y se aparta solo.
+            domicilios.barrer()
             barrer()
         except Exception:
             logger.exception("Error en el barrido del vigía")

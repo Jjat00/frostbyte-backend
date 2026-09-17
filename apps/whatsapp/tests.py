@@ -4038,3 +4038,294 @@ class VigiaDeClientesSinRespuestaTests(TestCase):
         with patch("apps.whatsapp.agent.run_turn") as correr:
             self.assertIsNone(self.watchdog.rescatar(self.contact, ultimo))
         correr.assert_not_called()
+
+
+class DomiciliosQueVuelvenTests(TestCase):
+    """Al que se quedó sin domicilio se le avisa cuando vuelven a haberlos.
+
+    Chat real 2026-08-19 y el mismo patrón varias veces más: el cliente pide un
+    domicilio, están apagados porque no hay domiciliario, Frosty se lo dice, el
+    cliente contesta "ah bueno, gracias" y ahí muere la venta. Media hora
+    después vuelve a haber quien lo lleve y nadie se lo cuenta.
+    """
+
+    def setUp(self):
+        from apps.orders.models import StoreSettings
+
+        from . import domicilios
+
+        self.domicilios = domicilios
+        worker._pending.clear()
+        worker._active.clear()
+        self.cfg = StoreSettings.load()
+        self.cfg.is_open = True
+        self.cfg.customer_ordering_enabled = True
+        self.cfg.save()
+        self.cfg.ordering_changed_at = timezone.now() - datetime.timedelta(minutes=30)
+        self.cfg.save(update_fields=["ordering_changed_at"])
+        self.contact = WhatsAppContact.objects.create(
+            phone=PHONE,
+            profile_name="Anyi V",
+            last_phone_number_id=PHONE_NUMBER_ID,
+            last_message_at=timezone.now() - datetime.timedelta(hours=2),
+            delivery_missed_at=timezone.now() - datetime.timedelta(hours=2),
+        )
+
+    def _barrer(self, replies=("¡Ya tenemos domicilios! ¿Te mando la pecera?",)):
+        enviados = []
+        turn = AgentTurn(replies=replies, message_ids=(), mutated=False)
+        with patch("apps.whatsapp.agent.run_turn", return_value=turn) as correr, patch(
+            "apps.whatsapp.worker.MESSAGE_GAP_SECONDS", 0
+        ), patch(
+            "apps.whatsapp.kapso.send_text",
+            side_effect=lambda pid, to, text: enviados.append(text),
+        ):
+            avisados = self.domicilios.barrer()
+        self.contact.refresh_from_db()
+        return avisados, enviados, correr
+
+    # --- el aviso ---
+
+    def test_al_que_se_quedo_sin_domicilio_se_le_avisa(self):
+        avisados, enviados, _ = self._barrer()
+        self.assertEqual(avisados, 1)
+        self.assertEqual(enviados, ["¡Ya tenemos domicilios! ¿Te mando la pecera?"])
+        self.assertIsNotNone(self.contact.delivery_notified_at)
+
+    def test_el_agente_recibe_el_contexto_y_la_licencia_para_callarse(self):
+        _, _, correr = self._barrer()
+        texto = correr.call_args.args[1]
+        self.assertIn("NO había servicio de domicilios", texto)
+        self.assertIn("ya volvió a haberlo", texto)
+        self.assertIn("NO escribas nada", texto)
+        self.assertTrue(correr.call_args.kwargs["silence_ok"])
+
+    def test_si_no_esperaba_ningun_domicilio_no_sale_nada(self):
+        """Preguntó la dirección, no un domicilio: el modelo lee el hilo y calla."""
+        avisados, enviados, _ = self._barrer(replies=())
+        self.assertEqual(enviados, [])
+        self.assertEqual(avisados, 1)  # atendido: no se vuelve a intentar
+
+    def test_no_se_avisa_dos_veces_por_la_misma_reactivacion(self):
+        self._barrer()
+        avisados, enviados, correr = self._barrer()
+        self.assertEqual(avisados, 0)
+        self.assertEqual(enviados, [])
+        correr.assert_not_called()
+
+    def test_si_los_domicilios_vuelven_a_caerse_y_a_volver_sí_se_avisa(self):
+        """Otra tanda apagada es otro cliente esperando: la marca es nueva."""
+        self._barrer()
+        self.contact.delivery_missed_at = timezone.now()
+        self.contact.save(update_fields=["delivery_missed_at"])
+        self.cfg.ordering_changed_at = timezone.now()
+        self.cfg.save(update_fields=["ordering_changed_at"])
+        with override_settings(WHATSAPP_DELIVERY_REENGAGE_AFTER_MINUTES=0):
+            avisados, enviados, _ = self._barrer()
+        self.assertEqual(avisados, 1)
+        self.assertEqual(len(enviados), 1)
+
+    # --- quién no entra ---
+
+    def test_el_que_escribio_con_los_domicilios_ya_activos_no_entra(self):
+        self.contact.delivery_missed_at = timezone.now()
+        self.contact.save(update_fields=["delivery_missed_at"])
+        self.assertEqual(self.domicilios.pendientes(), [])
+
+    def test_fuera_de_la_ventana_no_se_le_escribe(self):
+        """Pasado ese punto el aviso es una interrupción, y WhatsApp además solo
+        deja escribir primero dentro de las 24 h del mensaje del cliente."""
+        self.contact.delivery_missed_at = timezone.now() - datetime.timedelta(hours=20)
+        self.contact.save(update_fields=["delivery_missed_at"])
+        self.assertEqual(self.domicilios.pendientes(), [])
+
+    def test_recien_prendidos_no_se_avisa_todavia(self):
+        """Por si fue un toque sin querer: apagarlos otra vez no cuesta nada."""
+        self.cfg.ordering_changed_at = timezone.now()
+        self.cfg.save(update_fields=["ordering_changed_at"])
+        self.assertEqual(self.domicilios.pendientes(), [])
+
+    def test_con_los_domicilios_apagados_no_hay_nada_que_avisar(self):
+        self.cfg.customer_ordering_enabled = False
+        self.cfg.save()
+        self.assertIsNone(self.domicilios.reactivacion())
+
+    def test_con_el_local_cerrado_tampoco(self):
+        self.cfg.is_open = False
+        self.cfg.save()
+        self.assertIsNone(self.domicilios.reactivacion())
+
+    def test_sin_marca_nadie_entra(self):
+        """El campo nace vacío: el día del despliegue no se barre el pasado."""
+        self.contact.delivery_missed_at = None
+        self.contact.save(update_fields=["delivery_missed_at"])
+        self.assertEqual(self.domicilios.pendientes(), [])
+
+    def test_el_contacto_bloqueado_sigue_ignorado(self):
+        WhatsAppContact.objects.filter(pk=self.contact.pk).update(is_blocked=True)
+        self.assertEqual(self.domicilios.pendientes(), [])
+
+    def test_no_se_pisa_a_la_persona_que_esta_atendiendo(self):
+        self.contact.human_until = timezone.now() + datetime.timedelta(minutes=5)
+        self.contact.save(update_fields=["human_until"])
+        self.assertEqual(self.domicilios.pendientes(), [])
+
+    def test_el_interruptor_manual_del_panel_manda(self):
+        WhatsAppContact.objects.filter(pk=self.contact.pk).update(human_handoff=True)
+        self.assertEqual(self.domicilios.pendientes(), [])
+
+    def test_no_se_mete_con_un_turno_vivo(self):
+        worker._active.add(PHONE)
+        self.addCleanup(worker._active.discard, PHONE)
+        self.assertEqual(self.domicilios.pendientes(), [])
+
+    def test_sin_numero_por_donde_escribirle_no_hay_aviso(self):
+        self.contact.last_phone_number_id = ""
+        self.contact.save(update_fields=["last_phone_number_id"])
+        self.assertEqual(self.domicilios.pendientes(), [])
+
+    def test_el_tope_por_reactivacion_corta_la_tanda(self):
+        """El corte que en Ungga faltó: la primera corrida habría mandado
+        ochenta avisos de golpe."""
+        for i in range(4):
+            WhatsAppContact.objects.create(
+                phone=f"57300111000{i}",
+                last_phone_number_id=PHONE_NUMBER_ID,
+                delivery_missed_at=timezone.now() - datetime.timedelta(hours=1),
+            )
+        with override_settings(WHATSAPP_DELIVERY_REENGAGE_MAX=2):
+            self.assertEqual(len(self.domicilios.pendientes()), 2)
+            avisados, _, _ = self._barrer()
+            self.assertEqual(avisados, 2)
+            self.assertEqual(self.domicilios.pendientes(), [])
+
+    def test_con_el_aviso_apagado_no_barre(self):
+        with override_settings(WHATSAPP_DELIVERY_REENGAGE_ENABLED=False):
+            avisados, enviados, correr = self._barrer()
+        self.assertEqual(avisados, 0)
+        correr.assert_not_called()
+
+    def test_con_el_agente_apagado_no_barre(self):
+        with override_settings(WHATSAPP_AGENT_ENABLED=False):
+            avisados, enviados, correr = self._barrer()
+        self.assertEqual(avisados, 0)
+        correr.assert_not_called()
+
+    def test_el_mensaje_que_llega_mientras_tanto_cancela_el_aviso(self):
+        """Entre el barrido y el turno el cliente escribió: lo atiende el camino
+        normal, que además ya sabe que hay domicilios."""
+        worker._active.add(PHONE)
+        self.addCleanup(worker._active.discard, PHONE)
+        with patch("apps.whatsapp.agent.run_turn") as correr:
+            self.assertIsNone(self.domicilios.avisar(self.contact))
+        correr.assert_not_called()
+
+
+class MarcaDeDomicilioPerdidoTests(TestCase):
+    """La marca la ponen las tools, no el modelo: pedírsela a él sería confiar
+    en que se acuerde (ver la regla de las palabras vetadas)."""
+
+    def setUp(self):
+        from apps.business.models import Business
+        from apps.orders.models import StoreSettings
+        from apps.products.models import Category, Product, ProductVariant
+
+        food, _ = Business.objects.get_or_create(
+            slug="frostbyte-food", defaults={"name": "Frostbyte Food"}
+        )
+        categoria = Category.objects.create(name="Granizados", slug="granizados", business=food)
+        producto = Product.objects.create(name="Pecera", category=categoria, business=food)
+        self.variante = ProductVariant.objects.create(
+            product=producto, name="Personal", sku="PEC-1", price=18000
+        )
+        self.cfg = StoreSettings.load()
+        self.cfg.is_open = True
+        self.cfg.customer_ordering_enabled = False
+        self.cfg.save()
+        self.contact = WhatsAppContact.objects.create(phone=PHONE)
+        self.tools = {t.name: t for t in build_tools(self.contact)}
+
+    def test_la_puerta_cerrada_queda_anotada(self):
+        self.tools["consultar_estado_tienda"].invoke({})
+        self.contact.refresh_from_db()
+        self.assertIsNotNone(self.contact.delivery_missed_at)
+
+    def test_con_domicilios_activos_no_se_marca_a_nadie(self):
+        self.cfg.customer_ordering_enabled = True
+        self.cfg.save()
+        self.tools["consultar_estado_tienda"].invoke({})
+        self.contact.refresh_from_db()
+        self.assertIsNone(self.contact.delivery_missed_at)
+
+    def test_el_local_cerrado_no_es_un_domicilio_perdido(self):
+        """Cerrado no hay ningún canal: ese cliente no se quedó sin domicilio,
+        se quedó sin local."""
+        self.cfg.is_open = False
+        self.cfg.save()
+        self.tools["consultar_estado_tienda"].invoke({})
+        self.contact.refresh_from_db()
+        self.assertIsNone(self.contact.delivery_missed_at)
+
+    def test_el_pedido_rechazado_por_no_haber_domicilios_tambien_marca(self):
+        resultado = self.tools["crear_pedido"].invoke({
+            "items": [{"variante_id": self.variante.id, "cantidad": 1, "notas": ""}],
+            "nombre_cliente": "Anyi",
+            "para_recoger": False,
+        })
+        self.assertIn("ERROR", resultado)
+        self.contact.refresh_from_db()
+        self.assertIsNotNone(self.contact.delivery_missed_at)
+
+    def test_el_pedido_creado_borra_la_marca(self):
+        """Pasó a recoger: su caso está cerrado y no hay nada que avisarle."""
+        self.tools["consultar_estado_tienda"].invoke({})
+        self.tools["crear_pedido"].invoke({
+            "items": [{"variante_id": self.variante.id, "cantidad": 1, "notas": ""}],
+            "nombre_cliente": "Anyi",
+            "para_recoger": True,
+        })
+        self.contact.refresh_from_db()
+        self.assertIsNone(self.contact.delivery_missed_at)
+
+
+class FechaDeLosDomiciliosTests(TestCase):
+    """Prender los domicilios queda fechado venga de donde venga.
+
+    Si el aviso dependiera de la vista del panel, prenderlos desde el admin de
+    Django o desde un shell no le avisaría a nadie.
+    """
+
+    def setUp(self):
+        from apps.orders.models import StoreSettings
+
+        self.StoreSettings = StoreSettings
+        cfg = StoreSettings.load()
+        cfg.is_open = True
+        cfg.customer_ordering_enabled = False
+        cfg.save()
+
+    def test_prenderlos_queda_fechado(self):
+        cfg = self.StoreSettings.load()
+        cfg.customer_ordering_enabled = True
+        cfg.save(update_fields=["customer_ordering_enabled"])
+        self.assertIsNotNone(self.StoreSettings.load().ordering_changed_at)
+
+    def test_guardar_otra_cosa_no_mueve_la_fecha(self):
+        cfg = self.StoreSettings.load()
+        cfg.customer_ordering_enabled = True
+        cfg.save()
+        antes = self.StoreSettings.load().ordering_changed_at
+        cfg = self.StoreSettings.load()
+        cfg.delivery_fee = Decimal("3000.00")
+        cfg.save()
+        self.assertEqual(self.StoreSettings.load().ordering_changed_at, antes)
+
+    def test_apagarlos_tambien_queda_fechado(self):
+        cfg = self.StoreSettings.load()
+        cfg.customer_ordering_enabled = True
+        cfg.save()
+        primera = self.StoreSettings.load().ordering_changed_at
+        cfg = self.StoreSettings.load()
+        cfg.customer_ordering_enabled = False
+        cfg.save()
+        self.assertGreater(self.StoreSettings.load().ordering_changed_at, primera)
