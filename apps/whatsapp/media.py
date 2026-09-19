@@ -41,8 +41,9 @@ IMAGE_PROMPT = """Un cliente envió esta imagen por WhatsApp a Frostbyte, un neg
 granizados, cocteles y comida rápida en Colombia. Descríbela breve y fielmente en español.
 
 - Si es un comprobante de pago o transferencia (Nequi, Daviplata, Bancolombia, etc.), \
-extrae con exactitud: monto, fecha y hora, nombre del remitente, destinatario y número de \
-referencia o comprobante. No inventes datos que no se lean.
+empieza la descripción con "COMPROBANTE DE PAGO:" tal cual, en mayúsculas, y sigue con el \
+monto, la fecha y hora, el nombre del remitente, el destinatario y el número de referencia, \
+extraídos con exactitud. No inventes datos que no se lean.
 - Si es una foto de comida, un menú o un pantallazo de la carta, di qué productos se ven.
 - Si es una captura de una conversación o un pedido, resume qué dice.
 - Cualquier otra cosa: descríbela en una o dos frases.
