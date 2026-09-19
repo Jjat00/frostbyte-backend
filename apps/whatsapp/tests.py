@@ -681,7 +681,7 @@ class PedidoParaRecogerTests(TestCase):
         self.assertIn("Solo para domicilio: pregunta el método de pago", prompt)
         # Regla de Jaime: items + total, el cliente confirma, y solo ahí se crea
         self.assertIn("muestra items y TOTAL, y espera su", prompt)
-        self.assertIn('espera un "sí" explícito', prompt)
+        self.assertIn("confirma y espera su respuesta", prompt)
         self.assertNotIn("DE INMEDIATO", prompt)
 
     def test_el_local_cerrado_manda_sobre_los_dos_canales(self):
@@ -730,6 +730,54 @@ class PedidoParaRecogerTests(TestCase):
 
         self.assertIn("justo en este momento no tenemos servicio de domicilios", SYSTEM_PROMPT)
         self.assertIn("NUNCA digas al cliente que un servicio está \"pausado\"", SYSTEM_PROMPT)
+
+
+class PreguntasDeMasTests(TestCase):
+    """Chats reales del 18-09 revisados por Jaime: el agente gastaba turnos
+    preguntando lo que el cliente acababa de decir.
+
+    A las 19:32 Natt pidió "un granizado especial con alcohol" y, tras elegir
+    "para uno por favor", el agente contestó "¿Te preparo uno?" y el chat quedó
+    ocho minutos parado. A las 18:56 Alexander dijo "de blue berry el tamaño grande" y
+    recibió "¿Te preparo uno grande?"; a las 21:57 Johana pidió "de 14 con un
+    poco de Tajín" y recibió "¿Te preparo uno?" en vez de la pregunta que
+    faltaba (domicilio o recogida). El 06-09 Anyi dijo "Ok" a la cotización y el
+    agente le pidió "¿me confirmas con un sí?"; el 18-09 Sofía mandó el
+    comprobante Nequi por los $26.000 exactos y aun así le preguntaron
+    "¿confirmas que creemos el pedido?".
+    """
+
+    def test_la_cantidad_dicha_no_se_vuelve_a_preguntar(self):
+        from apps.whatsapp.agent import SYSTEM_PROMPT
+
+        self.assertIn("La cantidad es otra cosa: NO la preguntes si ya está dicha", SYSTEM_PROMPT)
+        self.assertIn("un pedido sin número es de UNO", SYSTEM_PROMPT)
+        self.assertNotIn("Confirma también la cantidad", SYSTEM_PROMPT)
+
+    def test_el_prompt_manda_mirar_el_chat_antes_de_preguntar(self):
+        from apps.whatsapp.agent import SYSTEM_PROMPT
+
+        self.assertIn("ANTES DE CADA PREGUNTA MIRA LO QUE YA TE DIJO", SYSTEM_PROMPT)
+        self.assertIn("ni disfrazado de confirmación", SYSTEM_PROMPT)
+
+    def test_un_ok_ya_es_un_si(self):
+        from apps.whatsapp.agent import SYSTEM_PROMPT
+
+        self.assertIn("Vale CUALQUIER afirmación clara", SYSTEM_PROMPT)
+        self.assertIn('un "ok" ya es un sí', SYSTEM_PROMPT)
+
+    def test_el_comprobante_del_total_confirma_el_pedido(self):
+        from apps.whatsapp.agent import SYSTEM_PROMPT
+
+        self.assertIn("manda el comprobante del pago por el total que", SYSTEM_PROMPT)
+        self.assertIn("creas el pedido, no le preguntas si lo", SYSTEM_PROMPT)
+
+    def test_sigue_haciendo_falta_una_confirmacion(self):
+        """Aflojar qué cuenta como sí no es crear el pedido sin que confirme."""
+        from apps.whatsapp.agent import SYSTEM_PROMPT
+
+        self.assertIn("Lo único que no confirma es el silencio", SYSTEM_PROMPT)
+        self.assertIn("un pedido existe SOLO cuando crear_pedido responde", SYSTEM_PROMPT)
 
 
 class LocalCerradoTests(TestCase):
