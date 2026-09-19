@@ -14,6 +14,7 @@ el agente escribe y la dejaba viva justo aquí, que es donde el negocio la vio.
 
 import logging
 import threading
+from datetime import timedelta
 
 from django.db.models.signals import post_save, pre_save
 from django.dispatch import receiver
@@ -50,6 +51,40 @@ PICKUP_MESSAGES = {
         "✅ Pedido {order_number} entregado. ¡Que lo disfrutes y gracias por pedir en Frostbyte! 💙"
     ),
 }
+
+
+# El comprobante no se guarda en el pedido: llega como imagen y lo único que
+# queda de él es la descripción que la visión dejó en el archivo de la
+# conversación. Por eso IMAGE_PROMPT la hace empezar con este marcador, en
+# mayúsculas para no confundirlo con el texto de respaldo de una imagen que no
+# se pudo leer ("si esperabas un comprobante de pago...").
+PROOF_MARKER = "COMPROBANTE DE PAGO:"
+
+# El cliente casi siempre paga mientras le estamos tomando el pedido, así que
+# el comprobante suele ser anterior al pedido mismo.
+PROOF_WINDOW = timedelta(minutes=30)
+
+
+def _proof_received(order):
+    """¿El cliente ya nos mandó el comprobante de este pedido?
+
+    Chat real del 18-09: Natt pagó por Nequi a las 19:43 y el agente le
+    contestó "recibimos el comprobante por $22.000"; a las 19:54 el aviso
+    automático de salida le pidió el comprobante otra vez, como si nadie
+    estuviera mirando.
+    """
+    from .models import ChatMessage
+
+    contact, _ = _destination(order.customer_phone)
+    phone = contact.phone if contact else order.customer_phone
+    if not phone:
+        return False
+    return ChatMessage.objects.filter(
+        phone=phone,
+        direction=ChatMessage.Direction.INBOUND,
+        created_at__gte=order.created_at - PROOF_WINDOW,
+        body__contains=PROOF_MARKER,
+    ).exists()
 
 
 def _destination(phone):
@@ -99,6 +134,8 @@ def message_for(order):
         payment_line = "Ten listico el efectivo, porfa."
     elif order.is_paid:
         payment_line = "Tu pago ya quedó confirmado."
+    elif _proof_received(order):
+        payment_line = "Ya tenemos tu comprobante; el equipo lo está verificando."
     elif order.order_type == Order.OrderType.PICKUP and not order.payment_method:
         payment_line = "Pagas al recogerlo."
     elif not order.payment_method:

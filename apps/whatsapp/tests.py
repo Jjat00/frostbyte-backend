@@ -2986,6 +2986,96 @@ class AvisosDeEstadoTests(TestCase):
     def test_un_estado_sin_aviso_no_manda_nada(self):
         self.assertEqual(self._aviso(Order.Status.PENDING), "")
 
+    def _comprobante(self, body, wamid="wamid.img", minutos=0):
+        """Archiva una imagen entrante como la dejó la visión."""
+        msg = ChatMessage.objects.create(
+            wamid=wamid,
+            phone=PHONE,
+            direction=ChatMessage.Direction.INBOUND,
+            body=body,
+        )
+        if minutos:
+            ChatMessage.objects.filter(pk=msg.pk).update(
+                created_at=msg.created_at - datetime.timedelta(minutes=minutos)
+            )
+        return msg
+
+    def test_el_comprobante_ya_recibido_no_se_vuelve_a_pedir(self):
+        """Chat real del 18-09 (Natt, +57 318 797 7295): pagó por Nequi a las
+        19:43 y el agente le contestó "recibimos el comprobante por $22.000";
+        a las 19:54 el aviso de salida le pidió el comprobante otra vez."""
+        from .signals import PROOF_MARKER
+
+        self._comprobante(
+            f"[El cliente envió una imagen. Contenido: {PROOF_MARKER} Nequi por $22.000,00 "
+            "a Jaimen Aza el 18 de septiembre de 2026 a las 07:42 p. m. Referencia M25077102.]"
+        )
+        aviso = self._aviso(Order.Status.READY)
+        self.assertNotIn("mándanos el comprobante", aviso)
+        self.assertIn("Ya tenemos tu comprobante", aviso)
+
+    def test_sin_comprobante_el_aviso_sigue_pidiéndolo(self):
+        """Aflojarlo para quien ya pagó no puede callarlo para quien no."""
+        aviso = self._aviso(Order.Status.READY)
+        self.assertIn("Si todavía no has pagado, mándanos el comprobante.", aviso)
+
+    def test_una_foto_cualquiera_no_cuenta_como_comprobante(self):
+        self._comprobante(
+            "[El cliente envió una imagen. Contenido: Fotografía de una calle lluviosa "
+            "con motos parqueadas frente a un local.]"
+        )
+        self.assertIn("mándanos el comprobante", self._aviso(Order.Status.READY))
+
+    def test_la_imagen_que_no_se_pudo_leer_tampoco_cuenta(self):
+        """Su texto de respaldo nombra el comprobante en minúsculas, y el
+        marcador va en mayúsculas justo para no confundirse con él."""
+        self._comprobante(
+            "[El cliente envió un(a) imagen que no puedes ver. Si esperabas un comprobante "
+            "de pago, dile que el equipo lo verificará.]"
+        )
+        self.assertIn("mándanos el comprobante", self._aviso(Order.Status.READY))
+
+    def test_el_comprobante_de_hace_horas_no_paga_este_pedido(self):
+        """Era de otro pedido: el cliente pide dos veces la misma noche."""
+        from .signals import PROOF_MARKER
+
+        self._comprobante(
+            f"[El cliente envió una imagen. Contenido: {PROOF_MARKER} Nequi por $38.000,00.]",
+            minutos=180,
+        )
+        self.assertIn("mándanos el comprobante", self._aviso(Order.Status.READY))
+
+    def test_el_comprobante_de_hace_un_rato_sí_es_de_este_pedido(self):
+        """Casi siempre paga mientras le tomamos el pedido, antes de crearlo."""
+        from .signals import PROOF_MARKER
+
+        self._comprobante(
+            f"[El cliente envió una imagen. Contenido: {PROOF_MARKER} Nequi por $22.000,00.]",
+            minutos=10,
+        )
+        self.assertIn("Ya tenemos tu comprobante", self._aviso(Order.Status.READY))
+
+    def test_el_efectivo_no_sabe_de_comprobantes(self):
+        from .signals import PROOF_MARKER
+
+        self._comprobante(f"[El cliente envió una imagen. Contenido: {PROOF_MARKER} $22.000.]")
+        self.order.payment_method = Order.PaymentMethod.CASH
+        self.assertIn("Ten listico el efectivo", self._aviso(Order.Status.READY))
+
+    def test_el_pago_ya_confirmado_manda_sobre_el_comprobante(self):
+        from .signals import PROOF_MARKER
+
+        self._comprobante(f"[El cliente envió una imagen. Contenido: {PROOF_MARKER} $22.000.]")
+        self.order.is_paid = True
+        self.assertIn("Tu pago ya quedó confirmado", self._aviso(Order.Status.READY))
+
+    def test_la_visión_marca_los_comprobantes_para_que_se_reconozcan(self):
+        """Sin el marcador en el prompt, el archivo no distingue una foto."""
+        from .media import IMAGE_PROMPT
+        from .signals import PROOF_MARKER
+
+        self.assertIn(f'empieza la descripción con "{PROOF_MARKER}"', IMAGE_PROMPT)
+
 
 class UbicacionQueLlegaTardeTests(TestCase):
     """El pedido se toma sin ubicación y el cliente la manda después.
