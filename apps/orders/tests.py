@@ -18,7 +18,8 @@ from django.urls import reverse
 
 from apps.accounts.models import User
 from apps.business.models import Business
-from apps.orders.models import Order, OrderItem, StoreSettings
+from apps.orders.models import Order, OrderItem, StoreSettings, Table
+from apps.orders.serializers import OrderCreateSerializer
 from apps.products.models import Category, Product, ProductVariant
 
 
@@ -145,3 +146,104 @@ class DemoraEstimadaTests(TestCase):
         cfg = StoreSettings.load()
         cfg.eta_min_minutes, cfg.eta_max_minutes = 30, 15
         self.assertEqual(cfg.eta_label(), "de 15 a 30 minutos")
+
+
+class DomicilioTomadoEnElLocalTests(TestCase):
+    """El pedido que se encarga en el local pero se entrega en una casa.
+
+    Pasa poco -alguien llega, pide y dice que se lo lleven- pero hasta ahora
+    no habia forma de tomarlo: el panel exigia mesa siempre y la direccion no
+    tenia donde escribirse, asi que terminaba de pedido de mesa con la
+    direccion metida en las notas.
+    """
+
+    def setUp(self):
+        business = Business.objects.create(name="Negocio del domicilio")
+        category = Category.objects.create(
+            business=business, name="Categoria del domicilio")
+        product = Product.objects.create(
+            business=business, category=category, name="Producto del domicilio",
+            description="para la prueba",
+        )
+        self.variant = ProductVariant.objects.create(
+            product=product, name="Personal", sku="DOM-PE", price=Decimal("12000"),
+        )
+        self.table = Table.objects.create(
+            table_number=7, floor=2, table_name="Mesa 7")
+        StoreSettings.load()  # singleton con la tarifa por defecto
+
+    def _datos(self, **extra):
+        datos = {
+            "customer_name": "Quien encarga",
+            "items": [{"product_variant_id": self.variant.id, "quantity": 1}],
+        }
+        datos.update(extra)
+        return datos
+
+    def _crear(self, **extra):
+        serializer = OrderCreateSerializer(data=self._datos(**extra))
+        serializer.is_valid(raise_exception=True)
+        return serializer.save()
+
+    def test_el_domicilio_se_crea_sin_mesa_y_con_la_tarifa_del_local(self):
+        order = self._crear(
+            order_type="delivery",
+            customer_phone="3117814338",
+            delivery_address="Calle 10 # 5-20",
+            delivery_reference="Casa blanca, porton verde",
+        )
+
+        self.assertEqual(order.order_type, Order.OrderType.DELIVERY)
+        self.assertIsNone(order.table_id)
+        self.assertIsNone(order.table_number)
+        self.assertIsNone(order.table_floor)
+        self.assertEqual(order.delivery_address, "Calle 10 # 5-20")
+        self.assertEqual(order.delivery_fee, StoreSettings.load().delivery_fee)
+        # El envio entra en el total, no se regala.
+        self.assertEqual(
+            order.total, Decimal("12000") + StoreSettings.load().delivery_fee)
+
+    def test_la_tarifa_que_pone_el_staff_manda_sobre_la_del_local(self):
+        order = self._crear(
+            order_type="delivery",
+            customer_phone="3117814338",
+            delivery_address="Calle 10 # 5-20",
+            delivery_fee="0",
+        )
+
+        self.assertEqual(order.delivery_fee, Decimal("0.00"))
+        self.assertEqual(order.total, Decimal("12000"))
+
+    def test_un_domicilio_sin_direccion_no_se_crea(self):
+        serializer = OrderCreateSerializer(data=self._datos(
+            order_type="delivery", customer_phone="3117814338"))
+
+        self.assertFalse(serializer.is_valid())
+        self.assertIn("delivery_address", serializer.errors)
+
+    def test_un_domicilio_sin_telefono_no_se_crea(self):
+        serializer = OrderCreateSerializer(data=self._datos(
+            order_type="delivery", delivery_address="Calle 10 # 5-20"))
+
+        self.assertFalse(serializer.is_valid())
+        self.assertIn("customer_phone", serializer.errors)
+
+    def test_el_pedido_de_mesa_sigue_exigiendo_mesa(self):
+        serializer = OrderCreateSerializer(data=self._datos())
+
+        self.assertFalse(serializer.is_valid())
+        self.assertIn("table_id", serializer.errors)
+
+    def test_el_pedido_de_mesa_no_se_queda_con_datos_de_domicilio(self):
+        """El checkbox se marca, se escribe la direccion y se desmarca."""
+        order = self._crear(
+            table_id=self.table.id,
+            delivery_address="Calle 10 # 5-20",
+            delivery_fee="3000",
+        )
+
+        self.assertEqual(order.order_type, Order.OrderType.DINE_IN)
+        self.assertEqual(order.table_id, self.table.id)
+        self.assertEqual(order.delivery_address, "")
+        self.assertEqual(order.delivery_fee, Decimal("0.00"))
+        self.assertEqual(order.total, Decimal("12000"))
