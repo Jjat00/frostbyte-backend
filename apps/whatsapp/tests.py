@@ -4891,6 +4891,31 @@ class DomiciliosQueVuelvenTests(TestCase):
         self.assertEqual(enviados, [])
         descartar.assert_called_once()
 
+    def test_el_aviso_se_piensa_sin_poder_mandar_nada(self):
+        """Una foto o unos botones salen en el momento en que el modelo los pide.
+
+        Y este aviso todavía puede descartarse entero después de pensarlo: si
+        el turno hubiera podido mandar algo, el cliente se quedaría con la foto
+        de un domicilio que al final no se le ofrece. Se le quita el
+        phone_number_id, que es lo que enciende esas tools; el texto se
+        entrega después, cuando ya se sabe que el aviso sigue siendo verdad.
+        """
+        vistos = []
+
+        def mirar(contact, texto, **kwargs):
+            vistos.append(kwargs)
+            return AgentTurn(
+                replies=("¡Ya tenemos domicilios!",), message_ids=("m1",), mutated=False
+            )
+
+        with patch("apps.whatsapp.agent.run_turn", side_effect=mirar), patch(
+            "apps.whatsapp.worker.MESSAGE_GAP_SECONDS", 0
+        ), patch("apps.whatsapp.kapso.send_text"):
+            self.domicilios.barrer()
+        self.assertEqual(len(vistos), 1, vistos)
+        self.assertFalse(vistos[0].get("phone_number_id"), vistos[0])
+        self.assertTrue(vistos[0].get("silence_ok"), vistos[0])
+
     def test_al_que_acaba_de_escribir_no_se_le_manda_encima(self):
         """Tiene un turno corriendo ahora mismo, y puede ser el de otro proceso.
         Lo tapa la misma regla: los domicilios llevan prendidos al menos el

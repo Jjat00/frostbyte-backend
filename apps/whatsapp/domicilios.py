@@ -376,7 +376,13 @@ def avisar(contact, ahora=None):
         turn = run_turn(
             contact,
             nota,
-            phone_number_id=phone_number_id,
+            # A propósito SIN phone_number_id, que es lo que le daría al modelo
+            # las tools de mandar foto, botones o sticker: esas salen al
+            # teléfono en el momento en que las llama, y este aviso todavía
+            # puede descartarse entero después de pensarlo (más abajo). Un
+            # turno que ya mandó algo no se puede deshacer, y el cliente se
+            # quedaría con la foto de un domicilio que no le vamos a ofrecer.
+            # Para entregar el texto sí se usa, en _deliver.
             # Nadie preguntó nada ahora mismo: el modelo puede mirar el hilo y
             # decidir que este cliente no se quedó esperando ningún domicilio
             silence_ok=True,
