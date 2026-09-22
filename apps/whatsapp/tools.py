@@ -438,8 +438,13 @@ def build_tools(contact, turn=None):
         if not cfg.customer_ordering_enabled:
             # Queda anotado que este cliente llegó con la puerta cerrada: si los
             # domicilios vuelven dentro de la ventana, el vigía mira el hilo y
-            # decide si hay algo que retomar (ver domicilios.py)
-            domicilios.anotar(contact)
+            # decide si hay algo que retomar (ver domicilios.py). Es una nota
+            # al margen de una tool de solo lectura: si la escritura falla, el
+            # cliente pierde un aviso, no su respuesta
+            try:
+                domicilios.anotar(contact)
+            except Exception:
+                logger.exception("No se pudo anotar el domicilio perdido de %s", contact.phone)
             lineas.append(
                 "Ahora mismo no hay servicio de domicilios, pero el local SÍ encarga para "
                 "recoger: dile al cliente 'justo en este momento no tenemos servicio de "
@@ -810,7 +815,10 @@ def build_tools(contact, turn=None):
             )
         if not para_recoger and not cfg.customer_ordering_enabled:
             # Ya no es que preguntara: tenía el pedido armado y se quedó sin él
-            domicilios.anotar(contact)
+            try:
+                domicilios.anotar(contact)
+            except Exception:
+                logger.exception("No se pudo anotar el domicilio perdido de %s", contact.phone)
             return (
                 "ERROR: justo en este momento no hay servicio de domicilios; "
                 "díselo al cliente con esas palabras. Sí puedes tomarlo PARA RECOGER "

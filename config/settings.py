@@ -458,6 +458,8 @@ WHATSAPP_RESCUE_INTERVAL_SECONDS = int(
 WHATSAPP_DELIVERY_REENGAGE_ENABLED = (
     os.getenv('WHATSAPP_DELIVERY_REENGAGE_ENABLED', 'True').lower() == 'true'
 )
+# El tope duro vive en domicilios.VENTANA_MAXIMA_HORAS y manda sobre esto: una
+# variable mal puesta en Railway no puede hacernos escribir fuera de la ventana.
 WHATSAPP_DELIVERY_REENGAGE_WINDOW_HOURS = int(
     os.getenv('WHATSAPP_DELIVERY_REENGAGE_WINDOW_HOURS', '12')
 )

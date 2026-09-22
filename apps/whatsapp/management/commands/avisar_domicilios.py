@@ -1,4 +1,10 @@
-"""A mano: a quién se le avisaría que los domicilios ya están activos."""
+"""A mano: a quién se le avisaría que los domicilios ya están activos.
+
+Solo mira. El vigía del servidor barre cada minuto y es quien escribe: este
+proceso no ve sus turnos vivos —son memoria del otro—, así que mandar desde
+aquí podría escribirle encima a una conversación que el agente está
+contestando ahora mismo.
+"""
 
 from django.core.management.base import BaseCommand
 from django.utils import timezone
@@ -7,13 +13,13 @@ from apps.whatsapp import domicilios
 
 
 class Command(BaseCommand):
-    help = "Avisa a los clientes que se quedaron sin domicilio mientras estaba apagado"
+    help = "Lista los clientes que se quedaron sin domicilio mientras estaba apagado"
 
     def add_arguments(self, parser):
         parser.add_argument(
             "--dry-run",
             action="store_true",
-            help="Solo lista a quién se le avisaría, sin escribirle a nadie",
+            help="Se acepta por costumbre: este command nunca escribe",
         )
 
     def handle(self, *args, **options):
@@ -33,8 +39,6 @@ class Command(BaseCommand):
             espera = domicilios._cuanto(ahora - contact.delivery_missed_at)
             nombre = contact.customer_name or contact.profile_name or "sin nombre"
             self.stdout.write(f"{contact.phone} · {nombre} · chocó hace {espera}")
-        if options["dry_run"]:
-            self.stdout.write(self.style.WARNING(f"{len(listos)} por avisar (dry-run)"))
-            return
-        avisados = domicilios.barrer(ahora)
-        self.stdout.write(self.style.SUCCESS(f"{avisados} conversaciones retomadas"))
+        self.stdout.write(
+            self.style.WARNING(f"{len(listos)} por avisar; los manda el vigía, no este command")
+        )

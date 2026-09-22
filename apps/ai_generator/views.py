@@ -71,6 +71,12 @@ class AIImageGenerationViewSet(viewsets.ModelViewSet):
         if self.action == 'list':
             queryset = queryset.exclude(status='failed')
 
+            # El panel pregunta por la generacion que produjo una imagen
+            # concreta para retomar su prompt en vez de escribirlo de nuevo.
+            generated_url = self.request.query_params.get('generated_url')
+            if generated_url:
+                queryset = queryset.filter(generated_image_url=generated_url)
+
         return queryset
 
     def get_serializer_class(self):

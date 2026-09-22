@@ -196,20 +196,38 @@ def barrer(ahora=None):
     return rescatados
 
 
-def _loop():
+def _una_vuelta():
+    """Los dos barridos de una pasada. Separada de _loop para poder probarla."""
     from . import domicilios
 
+    # Primero el aviso de los domicilios y después el rescate: los dos pueden
+    # querer escribirle al mismo cliente, y el aviso es el que sabe más
+    # (retoma el pedido Y cuenta que ya hay servicio). Al reclamar al contacto
+    # deja su último mensaje como rescatado, así que el vigía lo ve atendido
+    # aunque el modelo se haya callado. Cada uno con su try: el barrido nuevo
+    # no puede dejar sin correr al rescate, que ya estaba en producción.
+    #
+    # Los dos miran la misma hora, la del principio de la vuelta. El rescate
+    # tiene ventana máxima: si contara desde que le toca el turno, un aviso de
+    # domicilios lento podría dejar fuera de ella a quien estaba justo en el
+    # borde, y ese cliente no se rescataría nunca.
+    ahora = timezone.now()
+    try:
+        domicilios.barrer(ahora)
+    except Exception:
+        logger.exception("Error en el aviso de los domicilios")
+    try:
+        barrer(ahora)
+    except Exception:
+        logger.exception("Error en el barrido del vigía")
+
+
+def _loop():
     time.sleep(ARRANQUE_GRACIA_SECONDS)
     while True:
         try:
             close_old_connections()
-            # Primero el aviso de los domicilios y después el rescate: los dos
-            # pueden querer escribirle al mismo cliente, y el aviso es el que
-            # sabe más (retoma el pedido Y cuenta que ya hay servicio). Lo que
-            # sale por ahí queda en SentMessage, así que el rescate lo ve como
-            # una respuesta ya dada y se aparta solo.
-            domicilios.barrer()
-            barrer()
+            _una_vuelta()
         except Exception:
             logger.exception("Error en el barrido del vigía")
         finally:

@@ -8,6 +8,7 @@ prueba qué contesta el modelo, sino cuándo y cuántas veces lo llamamos).
 import datetime
 import threading
 import time
+from io import StringIO
 from unittest.mock import Mock, patch
 
 from django.test import (
@@ -4185,6 +4186,9 @@ class DomiciliosQueVuelvenTests(TestCase):
     domicilio, están apagados porque no hay domiciliario, Frosty se lo dice, el
     cliente contesta "ah bueno, gracias" y ahí muere la venta. Media hora
     después vuelve a haber quien lo lleve y nadie se lo cuenta.
+
+    Escribirle a quien no pidió nada es peor que perder la venta, así que casi
+    todos estos tests son de gente que NO debe recibir el aviso.
     """
 
     def setUp(self):
@@ -4199,8 +4203,7 @@ class DomiciliosQueVuelvenTests(TestCase):
         self.cfg.is_open = True
         self.cfg.customer_ordering_enabled = True
         self.cfg.save()
-        self.cfg.ordering_changed_at = timezone.now() - datetime.timedelta(minutes=30)
-        self.cfg.save(update_fields=["ordering_changed_at"])
+        self._prendidos(minutos=30)
         self.contact = WhatsAppContact.objects.create(
             phone=PHONE,
             profile_name="Anyi V",
@@ -4208,13 +4211,30 @@ class DomiciliosQueVuelvenTests(TestCase):
             last_message_at=timezone.now() - datetime.timedelta(hours=2),
             delivery_missed_at=timezone.now() - datetime.timedelta(hours=2),
         )
+        self.mensaje = self._escribio("hola, hacen domicilios?", horas=2)
+
+    def _prendidos(self, minutos):
+        """Los domicilios llevan prendidos ese rato."""
+        cuando = timezone.now() - datetime.timedelta(minutes=minutos)
+        type(self.cfg).objects.filter(pk=1).update(ordering_changed_at=cuando)
+        self.cfg.refresh_from_db()
+
+    def _escribio(self, body, horas=2, wamid="wamid.cliente", phone=PHONE):
+        msg = ChatMessage.objects.create(
+            wamid=wamid, phone=phone, direction=ChatMessage.Direction.INBOUND,
+            body=body, author=ChatMessage.Author.CUSTOMER,
+        )
+        cuando = timezone.now() - datetime.timedelta(hours=horas)
+        ChatMessage.objects.filter(pk=msg.pk).update(created_at=cuando)
+        msg.refresh_from_db()
+        return msg
 
     def _barrer(self, replies=("¡Ya tenemos domicilios! ¿Te mando la pecera?",)):
         enviados = []
-        turn = AgentTurn(replies=replies, message_ids=(), mutated=False)
+        turn = AgentTurn(replies=replies, message_ids=("m1",), mutated=False)
         with patch("apps.whatsapp.agent.run_turn", return_value=turn) as correr, patch(
-            "apps.whatsapp.worker.MESSAGE_GAP_SECONDS", 0
-        ), patch(
+            "apps.whatsapp.agent.discard_turn"
+        ), patch("apps.whatsapp.worker.MESSAGE_GAP_SECONDS", 0), patch(
             "apps.whatsapp.kapso.send_text",
             side_effect=lambda pid, to, text: enviados.append(text),
         ):
@@ -4239,10 +4259,12 @@ class DomiciliosQueVuelvenTests(TestCase):
         self.assertTrue(correr.call_args.kwargs["silence_ok"])
 
     def test_si_no_esperaba_ningun_domicilio_no_sale_nada(self):
-        """Preguntó la dirección, no un domicilio: el modelo lee el hilo y calla."""
+        """Lo pidió, pero el hilo dice que ya lo resolvió: el modelo se calla."""
         avisados, enviados, _ = self._barrer(replies=())
         self.assertEqual(enviados, [])
         self.assertEqual(avisados, 1)  # atendido: no se vuelve a intentar
+
+    # --- nadie recibe dos mensajes ---
 
     def test_no_se_avisa_dos_veces_por_la_misma_reactivacion(self):
         self._barrer()
@@ -4251,36 +4273,135 @@ class DomiciliosQueVuelvenTests(TestCase):
         self.assertEqual(enviados, [])
         correr.assert_not_called()
 
-    def test_si_los_domicilios_vuelven_a_caerse_y_a_volver_sí_se_avisa(self):
-        """Otra tanda apagada es otro cliente esperando: la marca es nueva."""
+    def test_tampoco_en_la_siguiente_reactivacion_de_la_noche(self):
+        """Apagar y prender otra vez no es un cliente nuevo esperando: si él no
+        volvió a chocar con la puerta cerrada, no hay nada que contarle."""
         self._barrer()
-        self.contact.delivery_missed_at = timezone.now()
-        self.contact.save(update_fields=["delivery_missed_at"])
-        self.cfg.ordering_changed_at = timezone.now()
-        self.cfg.save(update_fields=["ordering_changed_at"])
-        with override_settings(WHATSAPP_DELIVERY_REENGAGE_AFTER_MINUTES=0):
-            avisados, enviados, _ = self._barrer()
+        self._prendidos(minutos=5)
+        avisados, enviados, correr = self._barrer()
+        self.assertEqual(avisados, 0)
+        self.assertEqual(enviados, [])
+        correr.assert_not_called()
+
+    def test_si_vuelve_a_chocar_con_la_puerta_cerrada_sí_se_le_avisa(self):
+        self._barrer()
+        self.contact.refresh_from_db()
+        self.domicilios.anotar(self.contact)
+        # Chocó con la puerta cerrada durante la segunda caída, antes de que
+        # volvieran a prenderse
+        WhatsAppContact.objects.filter(pk=self.contact.pk).update(
+            delivery_missed_at=timezone.now() - datetime.timedelta(minutes=10)
+        )
+        self._prendidos(minutos=5)
+        avisados, enviados, _ = self._barrer()
         self.assertEqual(avisados, 1)
         self.assertEqual(len(enviados), 1)
 
+    def test_dos_barridos_a_la_vez_solo_dejan_un_aviso(self):
+        """Dos réplicas, o el proceso viejo y el nuevo durante un despliegue:
+        el reclamo es un UPDATE condicionado, así que uno de los dos pierde."""
+        otro = WhatsAppContact.objects.get(pk=self.contact.pk)
+        ahora = timezone.now()
+        self.assertTrue(self.domicilios.reclamar(self.contact, ahora))
+        self.assertFalse(self.domicilios.reclamar(otro, ahora))
+
+    def test_despues_del_aviso_el_vigia_no_lo_vuelve_a_tocar(self):
+        """Aunque el modelo se calle y no quede ningún mensaje enviado, ese
+        mensaje del cliente ya lo atendió este barrido."""
+        from . import watchdog
+
+        self._barrer(replies=())
+        self.contact.refresh_from_db()
+        self.assertEqual(self.contact.rescued_wamid, self.mensaje.wamid)
+        self.assertEqual(watchdog.esperando(), [])
+
+    def test_un_fallo_del_aviso_no_deja_sin_correr_al_rescate(self):
+        from . import watchdog
+
+        with patch(
+            "apps.whatsapp.domicilios.barrer", side_effect=RuntimeError("base caída")
+        ), patch("apps.whatsapp.watchdog.barrer") as rescate:
+            watchdog._una_vuelta()
+        rescate.assert_called_once()
+
+    def test_los_dos_barridos_miran_la_misma_hora(self):
+        """El rescate tiene ventana máxima: si contara desde que le toca el
+        turno, un aviso de domicilios lento dejaría fuera de ella a quien
+        estaba en el borde y ese cliente no se rescataría nunca."""
+        from . import watchdog
+
+        with patch("apps.whatsapp.domicilios.barrer") as aviso, patch(
+            "apps.whatsapp.watchdog.barrer"
+        ) as rescate:
+            watchdog._una_vuelta()
+        self.assertIsNotNone(rescate.call_args.args[0])
+        self.assertEqual(aviso.call_args.args, rescate.call_args.args)
+
     # --- quién no entra ---
+
+    def test_el_que_nunca_pidio_domicilio_no_recibe_nada(self):
+        """Preguntó la dirección con los domicilios apagados: la tool lo marcó,
+        pero él nunca habló de que se lo llevaran."""
+        ChatMessage.objects.all().delete()
+        self._escribio("hola, dónde quedan ustedes?")
+        self.assertEqual(self.domicilios.pendientes(), [])
+
+    def test_el_que_solo_venia_a_recoger_tampoco(self):
+        ChatMessage.objects.all().delete()
+        self._escribio("buenas, yo paso a recoger una pecera")
+        self.assertEqual(self.domicilios.pendientes(), [])
+
+    def test_pedirlo_sin_la_palabra_domicilio_igual_cuenta(self):
+        ChatMessage.objects.all().delete()
+        self._escribio("me lo pueden llevar hasta mi casa?")
+        self.assertEqual(len(self.domicilios.pendientes()), 1)
 
     def test_el_que_escribio_con_los_domicilios_ya_activos_no_entra(self):
         self.contact.delivery_missed_at = timezone.now()
         self.contact.save(update_fields=["delivery_missed_at"])
         self.assertEqual(self.domicilios.pendientes(), [])
 
-    def test_fuera_de_la_ventana_no_se_le_escribe(self):
-        """Pasado ese punto el aviso es una interrupción, y WhatsApp además solo
-        deja escribir primero dentro de las 24 h del mensaje del cliente."""
-        self.contact.delivery_missed_at = timezone.now() - datetime.timedelta(hours=20)
+    def test_el_que_volvio_a_escribir_ya_con_servicio_tampoco_entra(self):
+        """Marca vieja, pero la conversación siguió: volvió a preguntar con los
+        domicilios ya prendidos y el camino normal lo atendió sabiendo que hay
+        servicio. Escribirle encima sería el segundo mensaje sobre lo mismo; si
+        se quedó sin respuesta, el que va es el rescate."""
+        self._escribio(
+            "y hacen domicilios hasta el barrio?", horas=0.25, wamid="wamid.despues"
+        )
+        self.assertEqual(self.domicilios.pendientes(), [])
+
+    def test_la_intencion_no_se_lee_de_un_mensaje_posterior_al_aviso(self):
+        """Lo marcó una consulta cualquiera con la puerta cerrada y nunca pidió
+        domicilio; el único mensaje que habla de domicilios es posterior a la
+        reactivación, así que no autoriza nada."""
+        ChatMessage.objects.all().delete()
+        self._escribio("buenas, están abiertos?", horas=2)
+        self._escribio("me lo llevan a la casa?", horas=0.25, wamid="wamid.despues")
+        self.assertEqual(self.domicilios.pendientes(), [])
+
+    def test_fuera_de_la_ventana_de_whatsapp_no_se_le_escribe(self):
+        """La ventana se cuelga de cuándo escribió ÉL, no de cuándo corrió
+        nuestra tool: WhatsApp solo deja escribir primero dentro de las 24 h."""
+        ChatMessage.objects.all().delete()
+        self._escribio("hacen domicilios?", horas=21)
+        self.contact.delivery_missed_at = timezone.now() - datetime.timedelta(minutes=40)
         self.contact.save(update_fields=["delivery_missed_at"])
+        self.assertEqual(self.domicilios.pendientes(), [])
+
+    def test_una_ventana_mal_puesta_no_saca_el_aviso_de_las_24_horas(self):
+        ChatMessage.objects.all().delete()
+        self._escribio("hacen domicilios?", horas=23)
+        with override_settings(WHATSAPP_DELIVERY_REENGAGE_WINDOW_HOURS=30):
+            self.assertEqual(self.domicilios.pendientes(), [])
+
+    def test_sin_ningun_mensaje_suyo_no_hay_aviso(self):
+        ChatMessage.objects.all().delete()
         self.assertEqual(self.domicilios.pendientes(), [])
 
     def test_recien_prendidos_no_se_avisa_todavia(self):
         """Por si fue un toque sin querer: apagarlos otra vez no cuesta nada."""
-        self.cfg.ordering_changed_at = timezone.now()
-        self.cfg.save(update_fields=["ordering_changed_at"])
+        self._prendidos(minutos=0)
         self.assertEqual(self.domicilios.pendientes(), [])
 
     def test_con_los_domicilios_apagados_no_hay_nada_que_avisar(self):
@@ -4326,16 +4447,121 @@ class DomiciliosQueVuelvenTests(TestCase):
         """El corte que en Ungga faltó: la primera corrida habría mandado
         ochenta avisos de golpe."""
         for i in range(4):
+            phone = f"57300111000{i}"
             WhatsAppContact.objects.create(
-                phone=f"57300111000{i}",
+                phone=phone,
                 last_phone_number_id=PHONE_NUMBER_ID,
                 delivery_missed_at=timezone.now() - datetime.timedelta(hours=1),
             )
+            self._escribio("hacen domicilios?", horas=1, wamid=f"wamid.{i}", phone=phone)
         with override_settings(WHATSAPP_DELIVERY_REENGAGE_MAX=2):
             self.assertEqual(len(self.domicilios.pendientes()), 2)
             avisados, _, _ = self._barrer()
             self.assertEqual(avisados, 2)
             self.assertEqual(self.domicilios.pendientes(), [])
+
+    def test_la_tanda_se_reparte_en_vueltas_para_no_frenar_al_rescate(self):
+        """El rescate corre detrás de este barrido en el mismo hilo: diez
+        turnos de modelo seguidos lo dejarían esperando minutos. El vigía
+        vuelve cada minuto, así que repartir no es recortar."""
+        for i in range(4):
+            phone = f"57300222000{i}"
+            WhatsAppContact.objects.create(
+                phone=phone,
+                last_phone_number_id=PHONE_NUMBER_ID,
+                delivery_missed_at=timezone.now() - datetime.timedelta(hours=1),
+            )
+            self._escribio("hacen domicilios?", horas=1, wamid=f"wamid.v{i}", phone=phone)
+        self.assertEqual(len(self.domicilios.pendientes()), self.domicilios.POR_VUELTA)
+
+    def test_el_cupo_se_cuenta_otra_vez_antes_de_escribir(self):
+        """Entre armar la lista y escribirle pueden haber salido avisos: una
+        corrida a mano del command, o el proceso viejo durante un despliegue."""
+        with override_settings(WHATSAPP_DELIVERY_REENGAGE_MAX=1):
+            listos = self.domicilios.pendientes()
+            self.assertEqual(len(listos), 1)
+            WhatsAppContact.objects.create(
+                phone="573002223333",
+                last_phone_number_id=PHONE_NUMBER_ID,
+                delivery_notified_at=timezone.now(),
+            )
+            with patch("apps.whatsapp.agent.run_turn") as correr:
+                self.assertIsNone(self.domicilios.avisar(listos[0]))
+            correr.assert_not_called()
+        self.contact.refresh_from_db()
+        self.assertIsNotNone(self.contact.delivery_missed_at)
+
+    def test_si_entra_una_persona_del_equipo_mientras_piensa_no_sale_el_aviso(self):
+        """El estado que hay en memoria es el de antes de pensar: entre el
+        turno y el envío alguien del equipo pudo tomar la conversación."""
+        def atendio(*args, **kwargs):
+            WhatsAppContact.objects.filter(pk=self.contact.pk).update(human_handoff=True)
+            return AgentTurn(
+                replies=("¡Ya tenemos domicilios!",), message_ids=("m1",), mutated=False
+            )
+
+        enviados = []
+        with patch("apps.whatsapp.agent.run_turn", side_effect=atendio), patch(
+            "apps.whatsapp.agent.discard_turn"
+        ) as descartar, patch("apps.whatsapp.worker.MESSAGE_GAP_SECONDS", 0), patch(
+            "apps.whatsapp.kapso.send_text",
+            side_effect=lambda pid, to, text: enviados.append(text),
+        ):
+            self.domicilios.barrer()
+        self.assertEqual(enviados, [])
+        descartar.assert_called_once()
+
+    def test_al_que_acaba_de_escribir_no_se_le_manda_encima(self):
+        """Tiene un turno corriendo ahora mismo, y puede ser el de otro proceso.
+        Lo tapa la misma regla: los domicilios llevan prendidos al menos el
+        margen de reactivación, así que su mensaje es posterior a ella."""
+        ChatMessage.objects.all().delete()
+        self._escribio("me lo llevan a la casa?", horas=1, wamid="wamid.viejo")
+        self.assertEqual(len(self.domicilios.pendientes()), 1)  # con esto solo, entra
+        self._escribio("ahi sigo esperando", horas=0, wamid="wamid.recien")
+        self.assertEqual(self.domicilios.pendientes(), [])
+
+    def test_dos_candidatos_no_se_pasan_del_tope_con_el_ultimo_cupo(self):
+        """Con un cupo y dos contactos distintos, el UPDATE condicional no
+        arbitra —cada uno reclama su propia fila—, así que el tope lo tiene que
+        sostener el reclamo transaccional."""
+        otro = WhatsAppContact.objects.create(
+            phone="573004445555",
+            last_phone_number_id=PHONE_NUMBER_ID,
+            delivery_missed_at=timezone.now() - datetime.timedelta(hours=1),
+        )
+        self._escribio("hacen domicilios?", horas=1, wamid="wamid.otro", phone=otro.phone)
+        turn = AgentTurn(replies=("¡Ya hay domicilios!",), message_ids=("m1",), mutated=False)
+        with override_settings(WHATSAPP_DELIVERY_REENGAGE_MAX=1), patch(
+            "apps.whatsapp.agent.run_turn", return_value=turn
+        ), patch("apps.whatsapp.worker.MESSAGE_GAP_SECONDS", 0), patch(
+            "apps.whatsapp.kapso.send_text"
+        ):
+            self.assertIsNotNone(self.domicilios.avisar(self.contact))
+            self.assertIsNone(self.domicilios.avisar(otro))
+        otro.refresh_from_db()
+        self.assertIsNone(otro.delivery_notified_at)
+
+    def test_si_escribe_y_le_contestan_mientras_piensa_no_sale_el_aviso(self):
+        """El turno normal entra, contesta y termina mientras el modelo prepara
+        el aviso: para cuando se mira, _active ya está limpio y solo queda el
+        mensaje del cliente en la base."""
+        def contestaron(*args, **kwargs):
+            self._escribio("bueno y ya hay domicilio?", horas=0, wamid="wamid.entretanto")
+            return AgentTurn(
+                replies=("¡Ya tenemos domicilios!",), message_ids=("m1",), mutated=False
+            )
+
+        enviados = []
+        with patch("apps.whatsapp.agent.run_turn", side_effect=contestaron), patch(
+            "apps.whatsapp.agent.discard_turn"
+        ) as descartar, patch("apps.whatsapp.worker.MESSAGE_GAP_SECONDS", 0), patch(
+            "apps.whatsapp.kapso.send_text",
+            side_effect=lambda pid, to, text: enviados.append(text),
+        ):
+            self.domicilios.barrer()
+        self.assertEqual(enviados, [])
+        descartar.assert_called_once()
 
     def test_con_el_aviso_apagado_no_barre(self):
         with override_settings(WHATSAPP_DELIVERY_REENGAGE_ENABLED=False):
@@ -4349,14 +4575,79 @@ class DomiciliosQueVuelvenTests(TestCase):
         self.assertEqual(avisados, 0)
         correr.assert_not_called()
 
-    def test_el_mensaje_que_llega_mientras_tanto_cancela_el_aviso(self):
-        """Entre el barrido y el turno el cliente escribió: lo atiende el camino
-        normal, que además ya sabe que hay domicilios."""
+    # --- el mundo cambia mientras el modelo piensa ---
+
+    def test_si_apagan_los_domicilios_mientras_tanto_el_aviso_no_sale(self):
+        """Ese mensaje ya no sería verdad cuando llegue al teléfono."""
+        def apagarlos(*args, **kwargs):
+            self.cfg.customer_ordering_enabled = False
+            self.cfg.save()
+            return AgentTurn(replies=("¡Ya hay domicilios!",), message_ids=("m1",), mutated=False)
+
+        enviados = []
+        with patch("apps.whatsapp.agent.run_turn", side_effect=apagarlos), patch(
+            "apps.whatsapp.agent.discard_turn"
+        ) as descartar, patch("apps.whatsapp.worker.MESSAGE_GAP_SECONDS", 0), patch(
+            "apps.whatsapp.kapso.send_text",
+            side_effect=lambda pid, to, text: enviados.append(text),
+        ):
+            self.domicilios.avisar(self.contact)
+        self.assertEqual(enviados, [])
+        descartar.assert_called_once()
+
+    def test_si_el_cliente_escribe_mientras_tanto_el_aviso_no_sale(self):
+        def escribe(*args, **kwargs):
+            worker._active.add(PHONE)
+            return AgentTurn(replies=("¡Ya hay domicilios!",), message_ids=("m1",), mutated=False)
+
+        self.addCleanup(worker._active.discard, PHONE)
+        enviados = []
+        with patch("apps.whatsapp.agent.run_turn", side_effect=escribe), patch(
+            "apps.whatsapp.agent.discard_turn"
+        ), patch("apps.whatsapp.worker.MESSAGE_GAP_SECONDS", 0), patch(
+            "apps.whatsapp.kapso.send_text",
+            side_effect=lambda pid, to, text: enviados.append(text),
+        ):
+            self.domicilios.avisar(self.contact)
+        self.assertEqual(enviados, [])
+
+    def test_el_mensaje_que_llega_antes_del_turno_cancela_el_aviso(self):
         worker._active.add(PHONE)
         self.addCleanup(worker._active.discard, PHONE)
         with patch("apps.whatsapp.agent.run_turn") as correr:
             self.assertIsNone(self.domicilios.avisar(self.contact))
         correr.assert_not_called()
+
+
+class CommandDeAvisarDomiciliosTests(TestCase):
+    """El command solo mira. El vigía del servidor es quien escribe, y este
+    proceso no ve sus turnos vivos: son memoria del otro."""
+
+    def setUp(self):
+        from apps.orders.models import StoreSettings
+
+        cfg = StoreSettings.load()
+        cfg.is_open = True
+        cfg.customer_ordering_enabled = True
+        cfg.save()
+
+    def test_el_command_nunca_escribe(self):
+        from django.core.management import call_command
+
+        with patch("apps.whatsapp.domicilios.barrer") as barrido, patch(
+            "apps.whatsapp.domicilios.avisar"
+        ) as aviso:
+            call_command("avisar_domicilios", stdout=StringIO())
+            call_command("avisar_domicilios", "--dry-run", stdout=StringIO())
+        barrido.assert_not_called()
+        aviso.assert_not_called()
+
+    def test_no_hay_manera_de_pedirle_que_escriba(self):
+        """Ni con un flag: la única vía de envío es el vigía."""
+        from django.core.management import CommandError, call_command
+
+        with self.assertRaises(CommandError):
+            call_command("avisar_domicilios", "--enviar", stdout=StringIO())
 
 
 class MarcaDeDomicilioPerdidoTests(TestCase):
@@ -4388,6 +4679,15 @@ class MarcaDeDomicilioPerdidoTests(TestCase):
         self.contact.refresh_from_db()
         self.assertIsNotNone(self.contact.delivery_missed_at)
 
+    def test_la_marca_no_se_repisa_en_cada_consulta(self):
+        """Pisarla en cada tool call alargaría sola la ventana de WhatsApp."""
+        self.tools["consultar_estado_tienda"].invoke({})
+        self.contact.refresh_from_db()
+        primera = self.contact.delivery_missed_at
+        self.tools["consultar_estado_tienda"].invoke({})
+        self.contact.refresh_from_db()
+        self.assertEqual(self.contact.delivery_missed_at, primera)
+
     def test_con_domicilios_activos_no_se_marca_a_nadie(self):
         self.cfg.customer_ordering_enabled = True
         self.cfg.save()
@@ -4404,6 +4704,13 @@ class MarcaDeDomicilioPerdidoTests(TestCase):
         self.contact.refresh_from_db()
         self.assertIsNone(self.contact.delivery_missed_at)
 
+    def test_una_marca_que_falla_no_le_quita_la_respuesta_al_cliente(self):
+        with patch(
+            "apps.whatsapp.domicilios.anotar", side_effect=RuntimeError("base caída")
+        ):
+            resultado = self.tools["consultar_estado_tienda"].invoke({})
+        self.assertIn("no hay servicio de domicilios", resultado)
+
     def test_el_pedido_rechazado_por_no_haber_domicilios_tambien_marca(self):
         resultado = self.tools["crear_pedido"].invoke({
             "items": [{"variante_id": self.variante.id, "cantidad": 1, "notas": ""}],
@@ -4413,6 +4720,14 @@ class MarcaDeDomicilioPerdidoTests(TestCase):
         self.assertIn("ERROR", resultado)
         self.contact.refresh_from_db()
         self.assertIsNotNone(self.contact.delivery_missed_at)
+
+    def test_con_el_aviso_apagado_no_se_acumulan_marcas(self):
+        """Si el interruptor solo callara al barrido, el día que se prenda
+        saldrían avisos por lo que pasó mientras estuvo apagado."""
+        with override_settings(WHATSAPP_DELIVERY_REENGAGE_ENABLED=False):
+            self.tools["consultar_estado_tienda"].invoke({})
+        self.contact.refresh_from_db()
+        self.assertIsNone(self.contact.delivery_missed_at)
 
     def test_el_pedido_creado_borra_la_marca(self):
         """Pasó a recoger: su caso está cerrado y no hay nada que avisarle."""
@@ -4457,6 +4772,36 @@ class FechaDeLosDomiciliosTests(TestCase):
         cfg.delivery_fee = Decimal("3000.00")
         cfg.save()
         self.assertEqual(self.StoreSettings.load().ordering_changed_at, antes)
+
+    def test_una_instancia_vieja_no_inventa_una_reactivacion(self):
+        """Dos pestañas del panel abiertas: la de atrás guarda la tarifa con el
+        interruptor viejo en memoria y no puede fechar lo que no tocó. Sin
+        refresh_from_db a propósito: con él dejaría de ser una instancia vieja
+        y el test no probaría nada."""
+        vieja = self.StoreSettings.load()
+        nueva = self.StoreSettings.load()
+        nueva.customer_ordering_enabled = True
+        nueva.save(update_fields=["customer_ordering_enabled"])
+        fecha = self.StoreSettings.load().ordering_changed_at
+        vieja.delivery_fee = Decimal("4000.00")
+        vieja.save(update_fields=["delivery_fee"])
+        self.assertEqual(self.StoreSettings.load().ordering_changed_at, fecha)
+        self.assertTrue(self.StoreSettings.load().customer_ordering_enabled)
+
+    def test_abrir_el_local_desde_una_pantalla_vieja_no_prende_un_episodio(self):
+        """El panel guarda por campos: cerrar el local desde una pantalla
+        cargada antes de prender los domicilios llegaba aquí con el interruptor
+        viejo, fechaba una reactivación que no fue y con ella una tanda de
+        avisos a clientes que nadie pidió."""
+        nueva = self.StoreSettings.load()
+        nueva.customer_ordering_enabled = True
+        nueva.save(update_fields=["customer_ordering_enabled"])
+        fecha = self.StoreSettings.load().ordering_changed_at
+        vieja = self.StoreSettings.load()
+        vieja.customer_ordering_enabled = False  # lo que tenía la pantalla al cargar
+        vieja.is_open = False
+        vieja.save(update_fields=["is_open"])
+        self.assertEqual(self.StoreSettings.load().ordering_changed_at, fecha)
 
     def test_apagarlos_tambien_queda_fechado(self):
         cfg = self.StoreSettings.load()
