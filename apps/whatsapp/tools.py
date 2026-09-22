@@ -23,6 +23,7 @@ from apps.orders.models import Order, OrderItem, StoreSettings
 from apps.products.models import Category, Product, ProductVariant
 
 from . import domicilios
+from . import intencion
 from . import kapso
 from . import missing
 from . import stickers as stickers_media
@@ -1055,17 +1056,61 @@ def build_tools(contact, turn=None):
         return f"PEDIDO ACTUALIZADO.\n{_order_summary(order)}"
 
     @tool
-    def cancelar_pedido(numero_pedido: str) -> str:
-        """Cancela un pedido de este cliente mientras siga PENDIENTE.
+    def cancelar_pedido(numero_pedido: str, lo_que_dijo_el_cliente: str) -> str:
+        """Anula un pedido de este cliente mientras siga PENDIENTE.
+
+        OJO: en Colombia "cancelar" casi siempre significa PAGAR. Úsala solo
+        cuando el cliente pida de verdad que no le mandemos el pedido.
 
         Args:
-            numero_pedido: número del pedido a cancelar
+            numero_pedido: número del pedido a anular
+            lo_que_dijo_el_cliente: la frase TEXTUAL con la que lo pidió
         """
+        lectura = intencion.leer_cancelar(
+            lo_que_dijo_el_cliente, intencion.lo_ultimo_nuestro(contact)
+        )
+        if lectura == "pagar":
+            return (
+                "ERROR: no se canceló nada. Con eso el cliente está hablando de PAGAR, "
+                "no de anular el pedido: aquí 'cancelar' es pagar. Si contestaba con qué "
+                "billete paga, 'completo' o 'exacto' es paga_con='exacto'. Sigue con el "
+                "pedido y NO le menciones ninguna cancelación."
+            )
+        if lectura != "anular":
+            return (
+                "ERROR: no se canceló nada porque esa frase no pide anular nada: puede "
+                "ser una pregunta, una condición, un cambio de un producto o justo lo "
+                "contrario ('no me lo vaya a cancelar'). Contéstale lo que dijo; si de "
+                "verdad quiere que no le mandemos el pedido, que te lo diga y vuelves."
+            )
         try:
             order = _customer_orders(contact).get(order_number=numero_pedido.strip())
         except Order.DoesNotExist:
-            return f"ERROR: no encontré el pedido {numero_pedido} de este cliente."
+            return (
+                f"ERROR: no encontré el pedido {numero_pedido} de este cliente. "
+                "No le hables de pedidos que no existen: si quería anular algo, "
+                "pregúntale a cuál se refiere."
+            )
         if order.status != Order.Status.PENDING:
+            cerrado = order.status in (Order.Status.DELIVERED, Order.Status.CANCELLED)
+            de_hoy = timezone.localtime(order.created_at).date() == timezone.localdate()
+            if cerrado and not de_hoy:
+                return (
+                    f"ERROR: el pedido {order.order_number} es de otro día, ya está "
+                    f"'{order.get_status_display()}' y terminó hace rato. Si el cliente "
+                    "no lo nombró, NO se lo cuentes ni le expliques por qué no puedes "
+                    "cancelarlo —él habla de lo de ahora—: averigua a qué se refiere. "
+                    "Pero si está reclamando ESE pedido (que nunca le llegó, que llegó "
+                    "mal), no lo discutas: usa solicitar_humano."
+                )
+            if cerrado:
+                return (
+                    f"ERROR: el pedido {order.order_number} figura "
+                    f"'{order.get_status_display()}' y ya no se cancela por aquí. Es de "
+                    "hoy, así que el cliente sabe de cuál habla: si dice que no le "
+                    "llegó o que está mal, no lo discutas —usa solicitar_humano para "
+                    "que el equipo lo revise."
+                )
             return (
                 f"ERROR: el pedido ya está '{order.get_status_display()}'; "
                 "no se puede cancelar por este medio."

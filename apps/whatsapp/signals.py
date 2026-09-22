@@ -14,6 +14,7 @@ el agente escribe y la dejaba viva justo aquí, que es donde el negocio la vio.
 
 import logging
 import threading
+import time
 from datetime import timedelta
 
 from django.db.models.signals import post_save, pre_save
@@ -153,6 +154,54 @@ def message_for(order):
     return banned.clean(message, AgentSettings.load().forbidden_words())
 
 
+def _avisados(pk):
+    """Los estados ya avisados de ese pedido, leídos de la base.
+
+    Siempre de la base y nunca del objeto en memoria: el panel puede guardar
+    dos veces la MISMA instancia, y entonces su lista lleva estados que el
+    aviso anterior todavía no ha decidido si enviar.
+    """
+    actual = (
+        Order.objects.filter(pk=pk).values_list("notified_statuses", flat=True).first()
+    )
+    return [s for s in (actual or []) if isinstance(s, str)]
+
+
+def _guardar_avisados(order, avisados):
+    """Escribe la lista en la base y en el objeto que tiene quien llama.
+
+    Las dos cosas: si solo se escribiera en la base, el siguiente save() de
+    esa misma instancia mandaría su lista vieja de memoria y borraría lo que
+    acabamos de anotar.
+    """
+    Order.objects.filter(pk=order.pk).update(notified_statuses=avisados)
+    order.notified_statuses = avisados
+
+
+def _marcar(order, status):
+    """Anota que ese estado ya se avisó. False si alguien se adelantó."""
+    from django.db import transaction
+
+    with transaction.atomic():
+        if Order.objects.select_for_update().filter(pk=order.pk).first() is None:
+            return False
+        avisados = _avisados(order.pk)
+        if status in avisados:
+            return False
+        _guardar_avisados(order, avisados + [status])
+        return True
+
+
+def _desmarcar(order, status):
+    """Borra un estado de los avisados: lo que no salió no está avisado."""
+    from django.db import transaction
+
+    with transaction.atomic():
+        if Order.objects.select_for_update().filter(pk=order.pk).first() is None:
+            return
+        _guardar_avisados(order, [s for s in _avisados(order.pk) if s != status])
+
+
 @receiver(post_save, sender=Order)
 def _notify_status_change(sender, instance, created, **kwargs):
     if created:
@@ -162,22 +211,22 @@ def _notify_status_change(sender, instance, created, **kwargs):
         return
     if instance.source != Order.Source.WHATSAPP or not instance.customer_phone:
         return
+    body = message_for(instance)
+    if not body:
+        return
     # Cada estado se avisa UNA vez. Un pedido retrocede más de lo que parece
     # (el equipo lo devuelve a la cocina, o lo marca entregado por error) y el
     # cliente recibía el mismo mensaje dos veces: a Anyi le llegó "entregado"
     # a las 18:47, contestó "aún no me entregan", y le volvió a llegar a las
     # 19:17 con un "va en camino" en medio.
-    avisados = [s for s in (instance.notified_statuses or []) if isinstance(s, str)]
-    if instance.status in avisados:
+    if not _marcar(instance, instance.status):
         return
-    body = message_for(instance)
-    if not body:
-        return
-    instance.notified_statuses = avisados + [instance.status]
-    Order.objects.filter(pk=instance.pk).update(
-        notified_statuses=instance.notified_statuses
-    )
     phone = instance.customer_phone
+    # El estado se copia aquí y no se lee de instance dentro del hilo: el panel
+    # puede volver a guardar el MISMO objeto en Python y entonces instance.status
+    # ya sería el nuevo, que es justo lo que este aviso tiene que comparar.
+    avisado = instance.status
+    numero = instance.order_number
 
     def _send():
         from django.conf import settings
@@ -185,18 +234,35 @@ def _notify_status_change(sender, instance, created, **kwargs):
 
         from . import kapso
 
+        espera = settings.WHATSAPP_STATUS_NOTICE_DELAY_SECONDS
+        if espera > 0:
+            time.sleep(espera)
         close_old_connections()
         try:
+            actual = Order.objects.filter(pk=instance.pk).values_list("status", flat=True).first()
+            if actual != avisado:
+                # Se lo comió el siguiente estado. Se DESMARCA: lo que no salió
+                # no está avisado, y si el equipo devuelve el pedido a ese
+                # estado (corrigió un clic) el aviso todavía tiene que poder
+                # salir. Marcado quedaría mudo para siempre.
+                _desmarcar(instance, avisado)
+                logger.info(
+                    "El aviso de '%s' del pedido %s no salió: ya está en '%s'",
+                    avisado,
+                    numero,
+                    actual,
+                )
+                return
             contact, to = _destination(phone)
             phone_number_id = (contact and contact.last_phone_number_id) or (
                 settings.KAPSO_PHONE_NUMBER_IDS[0] if settings.KAPSO_PHONE_NUMBER_IDS else ""
             )
             if not phone_number_id:
-                logger.warning("Sin phone_number_id para notificar el pedido %s", instance.order_number)
+                logger.warning("Sin phone_number_id para notificar el pedido %s", numero)
                 return
             kapso.send_text(phone_number_id, to, body)
         except Exception:
-            logger.exception("Error notificando por WhatsApp el pedido %s", instance.order_number)
+            logger.exception("Error notificando por WhatsApp el pedido %s", numero)
         finally:
             close_old_connections()
 

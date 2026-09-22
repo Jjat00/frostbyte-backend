@@ -6,8 +6,10 @@ prueba qué contesta el modelo, sino cuándo y cuántas veces lo llamamos).
 """
 
 import datetime
+import os
 import threading
 import time
+import unittest
 from io import StringIO
 from unittest.mock import Mock, patch
 
@@ -3346,12 +3348,17 @@ class EscaladaAHumanoTests(TestCase):
         self.assertTrue(self.contact.human_handoff)
 
 
+@override_settings(WHATSAPP_STATUS_NOTICE_DELAY_SECONDS=0)
 class AvisoRepetidoTests(TransactionTestCase):
     """Un pedido que retrocede no vuelve a avisar lo que ya avisó.
 
     Chat real del 06/09: a Anyi le llegó "✅ entregado" a las 18:47, contestó
     "Aún no me entregan", y a las 19:11 y 19:17 le llegaron "va en camino" y
     "entregado" otra vez. El equipo había devuelto el pedido a la cocina.
+
+    Aquí los estados se mueven uno a uno y con calma: la espera va en cero para
+    que cada aviso salga por su cuenta. Lo que pasa cuando se mueven de un
+    tirón lo prueba AvisosEnRafagaTests.
     """
 
     def setUp(self):
@@ -3390,6 +3397,340 @@ class AvisoRepetidoTests(TransactionTestCase):
         self._mover(Order.Status.PREPARING, [])
         self.order.refresh_from_db()
         self.assertEqual(self.order.notified_statuses, [Order.Status.PREPARING])
+
+
+class CancelarEsPagarTests(TestCase):
+    """"Cancelar" en Colombia es pagar; anular es otra cosa.
+
+    Chat real del 20-09: a "¿Con qué billete vas a pagar?" Natt contestó
+    "Cancelo completo" —pagaba con el valor exacto— y el agente le respondió
+    "Ese pedido ya figura como entregado, así que no puedo cancelarlo por acá",
+    hablando de un pedido de dos días antes. Ella tuvo que explicarle que había
+    "cancelado el pedido con 10 mil pesos".
+    """
+
+    def setUp(self):
+        self.contact = WhatsAppContact.objects.create(phone=PHONE)
+        self.tools = {t.name: t for t in build_tools(self.contact)}
+        self.order = Order.objects.create(
+            source=Order.Source.WHATSAPP,
+            order_type=Order.OrderType.DELIVERY,
+            customer_name="Natt",
+            customer_phone=PHONE,
+        )
+
+    def _cancelar(self, frase, numero=None):
+        return self.tools["cancelar_pedido"].invoke(
+            {
+                "numero_pedido": numero or self.order.order_number,
+                "lo_que_dijo_el_cliente": frase,
+            }
+        )
+
+    def _lectura(self, cual):
+        """El modelo barato ya leyó la frase y dijo esto."""
+        return patch("apps.whatsapp.intencion.leer_cancelar", return_value=cual)
+
+    def _lectura_cruda(self, texto):
+        """Lo que el modelo devuelve tal cual, sin limpiar."""
+        cliente = patch("apps.whatsapp.media._openai_client")
+        mock = cliente.start()
+        self.addCleanup(cliente.stop)
+        mock.return_value.chat.completions.create.return_value = Mock(
+            choices=[Mock(message=Mock(content=texto))]
+        )
+
+        class _Ctx:
+            def __enter__(inner):
+                return mock
+
+            def __exit__(inner, *exc):
+                return False
+
+        return _Ctx()
+
+    def test_cancelo_completo_no_cancela_nada(self):
+        resultado = self._cancelar("Cancelo completo")
+        self.assertIn("ERROR", resultado)
+        self.assertIn("PAGAR", resultado)
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, Order.Status.PENDING)
+
+    def test_las_formas_de_pagar_no_cancelan(self):
+        for frase in (
+            "Cancelo completo",
+            "¿Cuánto le cancelo?",
+            "Lo cancelo por Nequi",
+            "Ya cancelé, ahí le mando el comprobante",
+            "Cancelo con 20 mil",
+            "Cancelo en efectivo",
+        ):
+            with self.subTest(frase=frase):
+                self.assertIn("ERROR", self._cancelar(frase), frase)
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, Order.Status.PENDING)
+
+    def test_con_una_frase_de_pago_no_se_cancela_nada(self):
+        """El caso de Natt: contestaba con qué billete pagaba."""
+        with self._lectura("pagar"):
+            resultado = self._cancelar("Cancelo completo")
+        self.assertIn("ERROR", resultado)
+        self.assertIn("PAGAR", resultado)
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, Order.Status.PENDING)
+
+    def test_lo_dudoso_tampoco_cancela(self):
+        """Una pregunta, una condición o un cambio de producto no son órdenes."""
+        with self._lectura("dudoso"):
+            resultado = self._cancelar("¿Se puede anular?")
+        self.assertIn("ERROR", resultado)
+        self.assertIn("no pide anular nada", resultado)
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, Order.Status.PENDING)
+
+    def test_quien_sí_pide_anular_lo_consigue(self):
+        with self._lectura("anular"):
+            resultado = self._cancelar("Cancélame el pedido, ya no lo quiero")
+        self.assertIn("CANCELADO", resultado)
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, Order.Status.CANCELLED)
+
+    def test_si_el_modelo_falla_el_pedido_se_queda_quieto(self):
+        """El lado seguro del error: sin lectura no se toca nada."""
+        from . import intencion
+
+        with patch(
+            "apps.whatsapp.media._openai_client", side_effect=RuntimeError("sin red")
+        ):
+            self.assertEqual(intencion.leer_cancelar("Cancélalo"), "dudoso")
+
+    def test_lo_que_el_modelo_conteste_raro_es_dudoso(self):
+        from . import intencion
+
+        for respuesta in ("Anular el pedido", "", "sí", "PAGAR."):
+            with self.subTest(respuesta=respuesta):
+                with self._lectura_cruda(respuesta):
+                    self.assertEqual(intencion.leer_cancelar("Cancélalo"), "dudoso")
+
+    def test_la_lectura_va_con_el_modelo_barato(self):
+        """No es trabajo del modelo del agente: una palabra, sin razonar."""
+        from django.conf import settings as dj
+
+        from . import intencion
+
+        with self._lectura_cruda("anular") as cliente:
+            intencion.leer_cancelar("Cancélalo")
+        kwargs = cliente.return_value.chat.completions.create.call_args.kwargs
+        self.assertEqual(kwargs["model"], dj.WHATSAPP_SUMMARY_MODEL)
+        self.assertNotEqual(dj.WHATSAPP_SUMMARY_MODEL, dj.WHATSAPP_AGENT_MODEL)
+
+    def test_un_pedido_de_otro_día_no_se_le_explica_al_cliente(self):
+        """El de otro día ya terminó: hablar de él fue lo que confundió a Natt.
+
+        Pero si el cliente está reclamando justo ese, callarse lo deja solo: el
+        error le deja al agente las dos salidas.
+        """
+        self.order.status = Order.Status.DELIVERED
+        self.order.save()
+        ayer = timezone.now() - datetime.timedelta(days=2)
+        Order.objects.filter(pk=self.order.pk).update(created_at=ayer)
+        with self._lectura("anular"):
+            resultado = self._cancelar("Cancélame el pedido, ya no lo quiero")
+        self.assertIn("ERROR", resultado)
+        self.assertIn("NO se lo cuentes", resultado)
+        self.assertIn("solicitar_humano", resultado)
+
+    def test_el_pedido_de_hoy_marcado_entregado_se_escala(self):
+        """Si el equipo lo cerró por error, callarse deja al cliente sin nadie."""
+        self.order.status = Order.Status.DELIVERED
+        self.order.save()
+        with self._lectura("anular"):
+            resultado = self._cancelar("Cancélame el pedido, nunca llegó")
+        self.assertIn("ERROR", resultado)
+        self.assertIn("solicitar_humano", resultado)
+        self.assertNotIn("otro día", resultado)
+
+
+@unittest.skipUnless(
+    os.getenv("PROBAR_INTENCION_CON_EL_MODELO") == "1",
+    "llama al modelo de verdad; se corre a mano: PROBAR_INTENCION_CON_EL_MODELO=1",
+)
+class LecturaDeCancelarConElModeloTests(TestCase):
+    """La matriz contra el modelo de verdad, no contra un doble.
+
+    Estas 38 frases son las que tumbaron cuatro rondas de expresiones
+    regulares: cada patrón nuevo arreglaba tres casos y abría otros tres, hasta
+    que quedó claro que el sentido de la frase no cabe en una lista. El modelo
+    barato las lee todas bien. Se corre a mano cuando se toque el prompt de
+    intencion.py, que es lo único que puede romperlas.
+    """
+
+    PAGAR = (
+        "Cancelo completo",
+        "¿Cuánto le cancelo?",
+        "Lo cancelo por Nequi",
+        "Ya cancelé, ahí le mando el comprobante",
+        "Cancelo con 20 mil",
+        "Cancelo con 20000",
+        "Cancelo en efectivo",
+        "Ya no tengo efectivo, cancelo por Nequi",
+        "Cancelo el pedido al recibir",
+        "Cancelé el pedido al recibir",
+        "Voy a cancelar el pedido completo",
+        "Quiero cancelar el pedido por Nequi",
+        # Las dos que escribió Natt el 20-09
+        "Es decir que canceló el pedido con 10 mil pesos",
+        "Ya cancelé",
+    )
+    ANULAR = (
+        "Cancélame el pedido por favor",
+        "Ya no lo quiero, cancélalo",
+        "Mejor no, déjalo así",
+        "Cancélalo",
+        "Cancélalo, mi familia ya comió",
+        "cancelame el domicilio que ya no estoy en la casa",
+        "Cancelar el pedido por favor",
+        "Cancelen el pedido",
+        "anúlalo",
+        "Ya no quiero nada",
+        # La negación es del motivo, no de la orden
+        "No voy a estar en casa cancélalo",
+        "No puedo ir a recogerlo cancelen el pedido",
+    )
+    DUDOSO = (
+        # Prohibir no es mandar
+        "No anules el pedido, ya pagué",
+        "No quiero que lo anules",
+        "No me vayas a cancelar el pedido",
+        "Por favor nunca anules el pedido",
+        "No quiero que me vayan a cancelar el pedido",
+        # Preguntar tampoco
+        "¿Me cancelaron el pedido?",
+        "¿Se puede anular?",
+        "¿Qué pasa si quiero cancelar el pedido?",
+        # Ni poner una condición que el agente no puede evaluar solo
+        "Si no hay de mango, cancélalo",
+        # Cambiar un producto no es cancelar el pedido entero
+        "No lo quiero con whisky",
+        "Ya no quiero la hamburguesa, solo las papas",
+        "Mejor no le ponga cebolla",
+    )
+
+    def _leer(self, frases):
+        from concurrent.futures import ThreadPoolExecutor
+
+        from . import intencion
+
+        with ThreadPoolExecutor(10) as pool:
+            return list(pool.map(intencion.leer_cancelar, frases))
+
+    def test_ninguna_frase_de_pago_anula_el_pedido(self):
+        """El fallo grave: cancelarle el pedido a quien estaba pagando."""
+        for frase, lectura in zip(self.PAGAR, self._leer(self.PAGAR)):
+            with self.subTest(frase=frase):
+                self.assertEqual(lectura, "pagar", frase)
+
+    def test_quien_pide_anular_se_entiende(self):
+        for frase, lectura in zip(self.ANULAR, self._leer(self.ANULAR)):
+            with self.subTest(frase=frase):
+                self.assertEqual(lectura, "anular", frase)
+
+    def test_lo_que_no_es_una_orden_no_anula(self):
+        for frase, lectura in zip(self.DUDOSO, self._leer(self.DUDOSO)):
+            with self.subTest(frase=frase):
+                self.assertNotEqual(lectura, "anular", frase)
+
+
+class AvisosEnRafagaTests(TransactionTestCase):
+    """Tres estados de un tirón son un aviso, no tres.
+
+    Chat real del 20-09: el equipo cerró el pedido de Angelly cuando ya se lo
+    habían entregado y le marcó cocina, salida y entrega seguidas. A las
+    21:17:39, 21:17:40 y 21:17:41 le llegaron los tres mensajes: "ya está en la
+    cocina", "va en camino" y "entregado". Los dos primeros eran mentira en el
+    momento en que los leyó.
+    """
+
+    def setUp(self):
+        WhatsAppContact.objects.create(phone=PHONE, last_phone_number_id="pn-1")
+        self.order = Order.objects.create(
+            source=Order.Source.WHATSAPP,
+            order_type=Order.OrderType.DELIVERY,
+            customer_name="Angelly",
+            customer_phone=PHONE,
+            payment_method=Order.PaymentMethod.CASH,
+        )
+
+    def _cerrar_de_un_tiron(self):
+        """Los tres estados seguidos, como los marca el equipo en el panel."""
+        enviados = []
+        with patch("apps.whatsapp.kapso.send_text", side_effect=lambda *a: enviados.append(a[2])):
+            for status in (
+                Order.Status.PREPARING,
+                Order.Status.READY,
+                Order.Status.DELIVERED,
+            ):
+                self.order.status = status
+                self.order.save()
+            time.sleep(1.2)  # más que la espera de los avisos
+        return enviados
+
+    @override_settings(WHATSAPP_STATUS_NOTICE_DELAY_SECONDS=0.4)
+    def test_solo_llega_el_ultimo_estado(self):
+        enviados = self._cerrar_de_un_tiron()
+        self.assertEqual(len(enviados), 1, enviados)
+        self.assertIn("entregado", enviados[0])
+
+    @override_settings(WHATSAPP_STATUS_NOTICE_DELAY_SECONDS=0.4)
+    def test_solo_queda_anotado_lo_que_de_verdad_salió(self):
+        """Lo que no se envió se desmarca: no está avisado."""
+        self._cerrar_de_un_tiron()
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.notified_statuses, [Order.Status.DELIVERED])
+
+    @override_settings(WHATSAPP_STATUS_NOTICE_DELAY_SECONDS=0.4)
+    def test_otra_instancia_del_pedido_no_pisa_lo_ya_avisado(self):
+        """El panel y el hilo del aviso miran el mismo pedido por separado.
+
+        La lista de avisados no es del pedido, es del sistema de avisos, y un
+        save() corriente lleva todas las columnas: la instancia que el panel
+        cargó hace un minuto borraba lo que el hilo acababa de anotar, y el
+        aviso no salía nunca.
+        """
+        enviados = []
+        with patch("apps.whatsapp.kapso.send_text", side_effect=lambda *a: enviados.append(a[2])):
+            self.order.status = Order.Status.READY
+            self.order.save()
+            otra = Order.objects.get(pk=self.order.pk)  # el panel, por su lado
+            otra.status = Order.Status.PREPARING  # se equivocó de botón
+            otra.save()
+            time.sleep(1.2)
+            otra.status = Order.Status.READY  # ahora sí salió
+            otra.save()
+            time.sleep(1.2)
+        self.assertEqual(len(enviados), 2, enviados)
+        self.assertIn("va en camino", enviados[-1])
+
+    @override_settings(WHATSAPP_STATUS_NOTICE_DELAY_SECONDS=0.4)
+    def test_el_estado_corregido_vuelve_a_avisar(self):
+        """El equipo se equivoca de botón y lo devuelve: el aviso sigue debiéndose.
+
+        Si el descarte marcara el estado como avisado, el cliente se quedaría
+        sin saber nunca que su pedido salió.
+        """
+        enviados = []
+        with patch("apps.whatsapp.kapso.send_text", side_effect=lambda *a: enviados.append(a[2])):
+            self.order.status = Order.Status.READY
+            self.order.save()
+            self.order.status = Order.Status.PREPARING  # se equivocó de botón
+            self.order.save()
+            time.sleep(1.2)
+            self.order.status = Order.Status.READY  # ahora sí salió
+            self.order.save()
+            time.sleep(1.2)
+        self.assertEqual(len(enviados), 2, enviados)
+        self.assertIn("en la cocina", enviados[0])
+        self.assertIn("va en camino", enviados[1])
 
 
 class NumeroDePedidoTests(TestCase):
@@ -4177,6 +4518,45 @@ class VigiaDeClientesSinRespuestaTests(TestCase):
         with patch("apps.whatsapp.agent.run_turn") as correr:
             self.assertIsNone(self.watchdog.rescatar(self.contact, ultimo))
         correr.assert_not_called()
+
+    def _del_equipo(self, body="26.000", minutos=12):
+        """Un mensaje que escribió una persona del equipo, no el agente."""
+        msg = ChatMessage.objects.create(
+            wamid=f"wamid.humano.{minutos}",
+            phone=PHONE,
+            direction=ChatMessage.Direction.OUTBOUND,
+            author=ChatMessage.Author.HUMAN,
+            body=body,
+        )
+        cuando = timezone.now() - datetime.timedelta(minutes=minutos)
+        ChatMessage.objects.filter(pk=msg.pk).update(created_at=cuando)
+        return msg
+
+    def test_tras_un_companero_el_vigia_avisa_que_no_reabra_el_pedido(self):
+        """Chat real del 19-09: el equipo cerró el precio en 26.000, el cliente
+        contestó "Gracias" y el vigía retomó con "¿Con qué billete vas a pagar,
+        veci?", una pregunta que el humano ya había dejado resuelta."""
+        self._del_equipo()
+        ultimo = self._mensaje(body="Gracias")
+        nota = self.watchdog._texto_del_turno(self.contact, ultimo, timezone.now())
+        self.assertIn("un compañero del equipo estuvo atendiendo", nota)
+        self.assertIn("no repitas sus preguntas", nota)
+        # Dentro de los corchetes: ahí es donde el modelo lee al sistema. Fuera
+        # se leería como algo que escribió el cliente
+        self.assertLess(nota.index("un compañero del equipo"), nota.index("]"), nota)
+
+    def test_sin_compañero_de_por_medio_la_nota_no_cambia(self):
+        ultimo = self._mensaje(body="Gracias")
+        nota = self.watchdog._texto_del_turno(self.contact, ultimo, timezone.now())
+        self.assertNotIn("un compañero del equipo estuvo atendiendo", nota)
+
+    def test_lo_que_el_compañero_escribio_despues_no_cuenta(self):
+        """Solo pesa lo que el equipo dijo ANTES del mensaje del cliente."""
+        ultimo = self._mensaje(body="Gracias", minutos=20)
+        self._del_equipo(minutos=5)
+        nota = self.watchdog._texto_del_turno(self.contact, ultimo, timezone.now())
+        self.assertNotIn("un compañero del equipo estuvo atendiendo", nota)
+
 
 
 class DomiciliosQueVuelvenTests(TestCase):

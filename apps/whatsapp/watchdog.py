@@ -64,6 +64,21 @@ NOTA_PERDIDA = (
 )
 
 
+# Cuando un compañero estuvo en el chat, el vigía no puede entrar como si
+# llegara a una conversación intacta. Chat real del 19-09: el equipo cerró el
+# precio ("26.000") y el cliente respondió "Gracias"; diez minutos después el
+# vigía retomó con "¿Con qué billete vas a pagar, veci?", una pregunta de un
+# flujo que el humano ya había dejado resuelto.
+NOTA_HUMANO = (
+    " Ojo: un compañero del equipo estuvo atendiendo este chat hace poco, y lo que él dijo "
+    "vale. Lee lo que ya quedó resuelto entre ellos: no repitas sus preguntas, no vuelvas a "
+    "empezar el flujo del pedido y no le pidas datos que él ya cerró. Si lo último del "
+    "cliente fue solo un agradecimiento o una despedida, no escribas nada. Pero si estaba "
+    "contestando algo que el compañero le preguntó —confirmando el pedido, dando un dato—, "
+    "eso sí se atiende: ahí lo que falte lo haces tú."
+)
+
+
 def _cuanto(delta):
     """La espera en palabras: "4 minutos", "una hora"."""
     minutos = int(delta.total_seconds() // 60)
@@ -137,8 +152,25 @@ def _texto_del_turno(contact, ultimo, ahora):
 
     cuanto = _cuanto(ahora - ultimo.created_at)
     if ultimo.body.strip() and ultimo.body.strip() in ultimo_del_cliente(contact):
-        return NOTA_PENDIENTE.format(cuanto=cuanto)
-    return NOTA_PERDIDA.format(cuanto=cuanto, texto=ultimo.body)
+        nota = NOTA_PENDIENTE.format(cuanto=cuanto)
+    else:
+        nota = NOTA_PERDIDA.format(cuanto=cuanto, texto=ultimo.body)
+    if _atendio_un_humano(contact, ultimo, ahora):
+        # La nota va dentro de los corchetes del aviso, que es donde el modelo
+        # lee las instrucciones del sistema; fuera sonaría a mensaje del cliente
+        nota = nota.replace("]", NOTA_HUMANO + "]", 1)
+    return nota
+
+
+def _atendio_un_humano(contact, ultimo, ahora):
+    """Si alguien del equipo escribió en este chat dentro de la ventana."""
+    desde = ahora - timedelta(minutes=settings.WHATSAPP_RESCUE_WINDOW_MINUTES)
+    return ChatMessage.objects.filter(
+        phone=contact.phone[:30],
+        author=ChatMessage.Author.HUMAN,
+        created_at__gte=desde,
+        created_at__lte=ultimo.created_at,
+    ).exists()
 
 
 def rescatar(contact, ultimo, ahora=None):

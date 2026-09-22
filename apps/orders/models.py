@@ -289,6 +289,19 @@ class Order(models.Model):
             self.order_number = self._generate_order_number()
         if not self.access_code:
             self.access_code = self._generate_access_code()
+        # `notified_statuses` no es un dato del pedido: lo llevan los avisos de
+        # WhatsApp (whatsapp/signals.py) desde hilos que duermen veinte
+        # segundos antes de decidir si el mensaje todavía es verdad. Un save()
+        # corriente escribe TODAS las columnas, así que el panel —o cualquier
+        # instancia cargada hace un minuto— pisaba lo que el hilo acababa de
+        # anotar y el aviso no salía nunca. Solo lo escribe quien lo entiende,
+        # con update(); aquí se queda fuera.
+        if self.pk and not args and kwargs.get("update_fields") is None:
+            kwargs["update_fields"] = [
+                field.name
+                for field in self._meta.concrete_fields
+                if not field.primary_key and field.name != "notified_statuses"
+            ]
         super().save(*args, **kwargs)
 
     @staticmethod

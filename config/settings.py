@@ -417,6 +417,17 @@ MUSIC_GENRE_MODEL = os.getenv('MUSIC_GENRE_MODEL', 'gpt-5.6-luna')
 WHATSAPP_TRANSFER_INFO = os.getenv('WHATSAPP_TRANSFER_INFO', '')
 # Número al que el agente remite cuando no sabe algo (contacto directo del local)
 WHATSAPP_CONTACT_PHONE = os.getenv('WHATSAPP_CONTACT_PHONE', '3164277879')
+# Segundos que un aviso de estado espera antes de salir. El equipo marca la
+# cocina, la salida y la entrega de un tirón cuando cierra un pedido que ya
+# entregó: el 20-09 a Angelly le llegaron los tres en dos segundos. Al despertar
+# el hilo relee el pedido y, si el estado ya avanzó, se calla: al cliente le
+# llega solo el último, que es el único que todavía es verdad.
+WHATSAPP_STATUS_NOTICE_DELAY_SECONDS = float(
+    os.getenv('WHATSAPP_STATUS_NOTICE_DELAY_SECONDS', '20')
+)
+# Reservas (mesas y Sala VIP) tienen su propia línea: el 19-09 el agente mandó
+# al general a quien quería reservar la Sala VIP, y ahí no las toman.
+WHATSAPP_RESERVATIONS_PHONE = os.getenv('WHATSAPP_RESERVATIONS_PHONE', '3182371257')
 # Minutos que el agente queda pausado tras cada mensaje que un humano del
 # equipo envía al cliente (desde el inbox de Kapso o la app de WhatsApp).
 # Corta a propósito: la pausa se RENUEVA con cada mensaje del equipo, así que
