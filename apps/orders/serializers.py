@@ -3,7 +3,7 @@ from decimal import Decimal
 
 from apps.products.models import ProductVariant
 from .coverage import coverage_label, is_within_delivery_area
-from .models import Order, OrderItem, Table
+from .models import Order, OrderItem, StoreSettings, Table
 
 
 class TableSerializer(serializers.ModelSerializer):
@@ -277,13 +277,28 @@ class OrderDetailSerializer(serializers.ModelSerializer):
 
 
 class OrderCreateSerializer(serializers.ModelSerializer):
-    """Serializer para crear pedidos"""
+    """Serializer para crear pedidos desde el panel del staff.
+
+    Casi siempre es un pedido de mesa, pero de vez en cuando alguien llega al
+    local, encarga y pide que se lo lleven a la casa. Ese pedido es un
+    domicilio sin mesa: `order_type=delivery` con dirección y teléfono.
+    """
 
     items = OrderItemCreateSerializer(many=True, write_only=True)
     payment_method = serializers.ChoiceField(
         choices=Order.active_payment_choices(),
         required=False,
         allow_blank=True,
+    )
+    # Solo estas dos: "para recoger" no tiene pantalla en el panel, y aceptarlo
+    # aquí dejaría una ruta a medias (pediría mesa como si fuera de mesa).
+    order_type = serializers.ChoiceField(
+        choices=[
+            (Order.OrderType.DINE_IN, Order.OrderType.DINE_IN.label),
+            (Order.OrderType.DELIVERY, Order.OrderType.DELIVERY.label),
+        ],
+        required=False,
+        default=Order.OrderType.DINE_IN,
     )
     table_id = serializers.PrimaryKeyRelatedField(
         queryset=Table.objects.filter(is_active=True),
@@ -307,6 +322,10 @@ class OrderCreateSerializer(serializers.ModelSerializer):
             "payment_method",
             "discount",
             "total",
+            "order_type",
+            "delivery_address",
+            "delivery_reference",
+            "delivery_fee",
             "table_id",
             "table_number",
             "items",
@@ -337,7 +356,47 @@ class OrderCreateSerializer(serializers.ModelSerializer):
                 "El pedido debe tener al menos un item.")
         return value
 
+    def _validate_delivery(self, attrs):
+        """Prepara un domicilio tomado en el local: sin mesa, con dirección.
+
+        No se le pide marcar el mapa ni se comprueba la cobertura, a diferencia
+        del pedido que el cliente hace desde la app (CustomerOrderCreateSerializer):
+        aquí el cliente está de frente a quien toma el pedido, que sabe mejor
+        que un radio en kilómetros si vale la pena ir hasta esa dirección.
+        """
+        errors = {}
+        if not (attrs.get("delivery_address") or "").strip():
+            errors["delivery_address"] = (
+                "La dirección es obligatoria para el domicilio.")
+        if not (attrs.get("customer_phone") or "").strip():
+            errors["customer_phone"] = (
+                "El teléfono es obligatorio para el domicilio: sin número, el "
+                "domiciliario no tiene a quién llamar si no encuentra la casa.")
+        if errors:
+            raise serializers.ValidationError(errors)
+
+        # El pedido sale del local: los tres campos de mesa se limpian juntos
+        # para que no quede un número suelto si el checkbox se marcó después
+        # de haber elegido mesa.
+        attrs["table"] = None
+        attrs["table_number"] = None
+        attrs["table_floor"] = None
+
+        if attrs.get("delivery_fee") is None:
+            attrs["delivery_fee"] = StoreSettings.load().delivery_fee
+        return attrs
+
     def validate(self, attrs):
+        if attrs.get("order_type") == Order.OrderType.DELIVERY:
+            return self._validate_delivery(attrs)
+
+        # Pedido de mesa: los campos de domicilio no aplican, y si llegaron
+        # (el checkbox se marcó y se desmarcó) no deben quedar guardados ni
+        # sumarle el envío al total.
+        attrs["delivery_address"] = ""
+        attrs["delivery_reference"] = ""
+        attrs["delivery_fee"] = Decimal("0.00")
+
         table = self._resolve_table(attrs)
         attrs["table"] = table
         attrs["table_number"] = table.table_number
