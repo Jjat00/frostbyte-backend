@@ -296,7 +296,12 @@ class Order(models.Model):
         # instancia cargada hace un minuto— pisaba lo que el hilo acababa de
         # anotar y el aviso no salía nunca. Solo lo escribe quien lo entiende,
         # con update(); aquí se queda fuera.
-        if self.pk and not args and kwargs.get("update_fields") is None:
+        if (
+            self.pk
+            and not args
+            and kwargs.get("update_fields") is None
+            and not kwargs.get("force_insert")
+        ):
             kwargs["update_fields"] = [
                 field.name
                 for field in self._meta.concrete_fields
