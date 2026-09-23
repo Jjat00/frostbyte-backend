@@ -48,7 +48,7 @@ class Contest(models.Model):
         null=True, blank=True, verbose_name="Hora del concurso")
     prize = models.CharField(
         max_length=200, blank=True, default="", verbose_name="Premio",
-        help_text="Vacío mientras no esté definido: la página no lo menciona",
+        help_text="Vacío mientras no esté definido: la app anuncia que pronto se revela",
     )
     entry_fee = models.DecimalField(
         max_digits=10, decimal_places=2, default=Decimal("10000.00"),

@@ -24,7 +24,7 @@ class Migration(migrations.Migration):
                 ('description', models.TextField(blank=True, default='', help_text='Texto de la página pública del concurso', verbose_name='Descripción')),
                 ('event_date', models.DateField(blank=True, null=True, verbose_name='Fecha del concurso')),
                 ('event_time', models.TimeField(blank=True, null=True, verbose_name='Hora del concurso')),
-                ('prize', models.CharField(blank=True, default='', help_text='Vacío mientras no esté definido: la página no lo menciona', max_length=200, verbose_name='Premio')),
+                ('prize', models.CharField(blank=True, default='', help_text='Vacío mientras no esté definido: la app anuncia que pronto se revela', max_length=200, verbose_name='Premio')),
                 ('entry_fee', models.DecimalField(decimal_places=2, default=Decimal('10000.00'), max_digits=10, verbose_name='Valor de la inscripción')),
                 ('min_age', models.PositiveSmallIntegerField(default=18, verbose_name='Edad mínima')),
                 ('requires_instagram_follow', models.BooleanField(default=True, verbose_name='Exige seguir a Frostbyte en Instagram')),
