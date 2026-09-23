@@ -42,6 +42,8 @@ urlpatterns = [
     path('api/v1/whatsapp/', include('apps.whatsapp.urls')),
     # Reservas (mesas, grupos y Sala VIP)
     path('api/v1/reservations/', include('apps.reservations.urls')),
+    # Concursos con inscripción (disfraces de Halloween)
+    path('api/v1/contests/', include('apps.contests.urls')),
 ]
 
 # Servir archivos media en desarrollo
