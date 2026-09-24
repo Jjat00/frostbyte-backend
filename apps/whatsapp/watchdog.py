@@ -14,8 +14,8 @@ no puede cubrir por sí mismo:
 3. El envío a Kapso falló tras sus reintentos: el hilo del modelo cree que
    respondió y en el chat del cliente no hay nada.
 
-Lo que NO hace: escribirle a quien no está esperando. El turno corre con
-silence_ok, así que si lo último fue un "gracias" el propio modelo se calla,
+Lo que NO hace: escribirle a quien no está esperando. Si lo último fue
+un "gracias", el propio modelo se calla (y callarse no manda nada),
 que es más barato y más fino que una lista de palabras de despedida. Y la
 ventana máxima impide revivir una conversación de ayer: pasado ese punto, el
 silencio ya es parte de la historia del chat y meterse sería peor.
@@ -196,9 +196,6 @@ def rescatar(contact, ultimo, ahora=None):
             _texto_del_turno(contact, ultimo, ahora),
             phone_number_id=phone_number_id,
             message_id=ultimo.wamid,
-            # Nadie preguntó nada ahora mismo: el modelo puede decidir que no
-            # había nada que contestar y quedarse callado
-            silence_ok=True,
         )
     if not turn.replies and turn.sticker is None:
         logger.info("El vigía no tenía nada que contestarle a %s", contact.phone)

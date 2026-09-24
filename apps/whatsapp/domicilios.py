@@ -9,7 +9,7 @@ haber quien lo lleve.
 
 Este barrido cierra ese hueco. Corre dentro del vigía (watchdog._loop), mira si
 los domicilios volvieron a prenderse y, para cada cliente que chocó con la
-puerta cerrada mientras estaban apagados, corre un turno con silence_ok: el
+puerta cerrada mientras estaban apagados, corre un turno en el que el
 modelo lee la conversación y decide si de verdad quedó un pedido en el aire.
 
 Escribirle primero a alguien que no está esperando nada es peor que perder la
@@ -383,9 +383,6 @@ def avisar(contact, ahora=None):
             # turno que ya mandó algo no se puede deshacer, y el cliente se
             # quedaría con la foto de un domicilio que no le vamos a ofrecer.
             # Para entregar el texto sí se usa, en _deliver.
-            # Nadie preguntó nada ahora mismo: el modelo puede mirar el hilo y
-            # decidir que este cliente no se quedó esperando ningún domicilio
-            silence_ok=True,
         )
     if not turn.replies and turn.sticker is None:
         logger.info("Los domicilios volvieron pero %s no esperaba ninguno", contact.phone)

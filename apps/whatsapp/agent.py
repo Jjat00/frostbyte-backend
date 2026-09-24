@@ -706,16 +706,13 @@ def ultimo_del_cliente(contact):
     return ""
 
 
-def _for_whatsapp(reply, already_answered=False, banned_words=(), silence_ok=False):
+def _for_whatsapp(reply, banned_words=()):
     """Texto plano listo para WhatsApp (no renderiza Markdown).
 
-    `already_answered`: el turno ya respondió con un sticker, una foto, unos
-    botones o una reacción. Entonces quedarse callado es la respuesta correcta
-    —el prompt se lo pide— y el texto de relleno sería un mensaje de más.
-
-    `silence_ok`: el cliente no preguntó nada (mandó un gesto). Callarse
-    también es una respuesta y "Perdón, ¿me lo repites?" sería pedirle que
-    repita un sticker.
+    Si el modelo no escribió nada, no se manda nada: callarse es una decisión
+    suya (el cliente dijo "ok" o "gracias", o ya respondió con una reacción o
+    un sticker). Antes aquí se rellenaba con "Perdón, ¿me lo repites?", y eso
+    le pedía al cliente que repitiera un "ok" (chat real del 23/09).
 
     `banned_words`: lo que el negocio prohibió decir se quita aquí, y no solo
     en el prompt, porque en el prompt es una petición (ver banned.py).
@@ -733,10 +730,7 @@ def _for_whatsapp(reply, already_answered=False, banned_words=(), silence_ok=Fal
         # para saber si el tono elegido y lo prohibido se están peleando.
         logger.info("Palabras vetadas quitadas de la respuesta: %s", ", ".join(hits))
         reply = banned.clean(reply, banned_words)
-    reply = reply.strip()
-    if reply:
-        return reply
-    return "" if (already_answered or silence_ok) else "Perdón, ¿me lo repites?"
+    return reply.strip()
 
 
 # Una línea de guiones sola: como el modelo pide mandar dos mensajes seguidos.
@@ -787,7 +781,6 @@ def run_turn(
     phone_number_id="",
     message_id="",
     customer_sticker=False,
-    silence_ok=False,
 ):
     """Corre un turno del agente y devuelve un AgentTurn.
 
@@ -797,9 +790,6 @@ def run_turn(
 
     `customer_sticker`: el cliente mandó un sticker en este mensaje. Sube las
     ganas de devolverle el gesto, que es lo que hace cualquiera.
-
-    `silence_ok`: el turno nació de un gesto y no de una pregunta, así que si
-    el modelo decide no escribir, no se responde nada.
 
     El dado de los stickers se tira aquí, una sola vez: el prompt y la tool
     tienen que estar de acuerdo dentro del mismo turno, o el modelo intentaría
@@ -847,9 +837,7 @@ def run_turn(
         replies=_split_messages(
             _for_whatsapp(
                 messages[-1].content,
-                already_answered=turn_ctx.answered,
                 banned_words=AgentSettings.load().forbidden_words(),
-                silence_ok=silence_ok,
             )
         ),
         message_ids=tuple(m.id for m in added),

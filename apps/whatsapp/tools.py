@@ -372,9 +372,6 @@ class TurnContext:
 
     `posted`: quedó un mensaje en el chat del cliente, así que el turno ya no
     se puede descartar y rehacer.
-    `answered`: el turno ya respondió algo, aunque no haya sido un mensaje. Una
-    reacción sola es una respuesta completa —el prompt se lo permite—, y sin
-    esto un "gracias" contestado con un ❤️ recibía además un "¿me lo repites?".
     `sticker_urge`: si este turno puede llevar sticker (ver mood.py). Se tira
     una vez y lo leen los dos lados, el prompt y la tool. En None —pruebas por
     shell— no hay dado y la tool manda lo que le pidan.
@@ -388,7 +385,6 @@ class TurnContext:
         self.phone_number_id = phone_number_id
         self.message_id = message_id
         self.posted = False
-        self.answered = False
         self.sticker_urge = sticker_urge
         self.sticker = None
 
@@ -1272,7 +1268,6 @@ def build_tools(contact, turn=None):
         # stickers.deliver): así el orden es el de una persona y, si el turno
         # acaba descartándose, el cliente no se queda con un sticker suelto.
         turn.sticker = sticker
-        turn.answered = True
         return (
             f"Listo: el sticker «{sticker.label}» sale al final de este turno. Si el gesto "
             "era toda tu respuesta, no escribas nada más y ya está; si aún te falta decir "
@@ -1302,7 +1297,6 @@ def build_tools(contact, turn=None):
         if result is None:
             return "No se pudo mandar la foto. Sigue con texto y no la menciones."
         turn.posted = True
-        turn.answered = True
         return f"Foto de {product.name} enviada. El cliente ya la vio: no la describas."
 
     @tool
@@ -1332,7 +1326,6 @@ def build_tools(contact, turn=None):
         if result is None:
             return "No se pudieron mandar los botones. Haz la misma pregunta con texto normal."
         turn.posted = True
-        turn.answered = True
         return (
             "Botones enviados con esa pregunta. YA ESTÁ DICHA: no la repitas en texto, "
             "responde vacío y espera a que el cliente toque una."
@@ -1359,7 +1352,6 @@ def build_tools(contact, turn=None):
         )
         if result is None:
             return "No se pudo reaccionar. Sigue normal y no lo menciones."
-        turn.answered = True
         return "Reacción puesta. No la menciones ni la describas."
 
     @tool

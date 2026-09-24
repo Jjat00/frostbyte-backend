@@ -671,12 +671,6 @@ def _run_turn(phone, batch):
         _close_events(batch["event_ids"], WebhookEvent.Status.IGNORED, "agente pausado: humano atendiendo")
         return
 
-    # Un lote de puros gestos no es una pregunta: si el modelo decide no
-    # escribir, el silencio es la respuesta y no el "¿me lo repites?"
-    solo_gestos = bool(messages) and all(
-        (m.get("media") or {}).get("kind") == "sticker" for m in messages
-    )
-
     with _phone_lock(phone):
         # Los audios/imágenes se resuelven aquí (descarga + OpenAI) para que el
         # 'escribiendo…' ya esté visible mientras tanto
@@ -687,6 +681,7 @@ def _run_turn(phone, batch):
         # nada: el cliente hizo un gesto, no una pregunta, y responderle sin
         # haberlo visto solo puede salir mal.
         _remember_unseen(contact, phone)
+        _mark_silence(contact, messages)
         _close_events(
             batch["event_ids"], WebhookEvent.Status.IGNORED, "sticker que no se pudo leer"
         )
@@ -705,7 +700,6 @@ def _run_turn(phone, batch):
             customer_sticker=any(
                 (m.get("media") or {}).get("kind") == "sticker" for m in messages
             ),
-            silence_ok=solo_gestos,
         )
 
         # ¿Escribió mientras el agente pensaba? Entonces esta respuesta ya nació
@@ -719,7 +713,35 @@ def _run_turn(phone, batch):
     # Un turno que solo mandó una foto o unos botones no lleva texto detrás: el
     # mensaje ya está en el chat y añadir uno vacío sería un segundo mensaje
     _deliver(contact, phone_number_id, turn)
+    if not turn.replies and turn.sticker is None:
+        _mark_silence(contact, messages)
     _close_events(batch["event_ids"], WebhookEvent.Status.PROCESSED)
+
+
+def _mark_silence(contact, messages):
+    """Deja constancia de que el agente decidió no contestar este lote.
+
+    Callarse ante un "ok" o un "gracias" es una respuesta, pero no deja nada
+    en el chat: para el vigía el último mensaje seguiría siendo del cliente y
+    a los pocos minutos correría otro turno con un aviso de "sigue esperando",
+    que empuja al modelo a escribir justo lo que había decidido no escribir.
+    Se marca como ya rescatado para que el vigía lo respete.
+
+    Se marca el mismo mensaje que el vigía mira, el último guardado de ese
+    contacto, y no el último del lote: dos webhooks pueden guardarse en un
+    orden y encolarse en otro. Si ese último no es de este lote, es de uno que
+    todavía está en la cola, y ese turno decidirá por su cuenta.
+    """
+    wamids = {m["message_id"][:128] for m in messages if m.get("message_id")}
+    logger.info("El agente no contestó nada a %s", contact.phone)
+    ultimo = (
+        ChatMessage.objects.filter(phone=contact.phone[:30])
+        .order_by("-created_at")
+        .first()
+    )
+    if ultimo is not None and ultimo.wamid in wamids:
+        contact.rescued_wamid = ultimo.wamid
+        contact.save(update_fields=["rescued_wamid", "updated_at"])
 
 
 def _deliver(contact, phone_number_id, turn):

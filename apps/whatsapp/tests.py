@@ -19,6 +19,7 @@ from django.test import (
     override_settings,
 )
 
+from django.conf import settings
 from django.utils import timezone
 
 from decimal import Decimal
@@ -146,7 +147,6 @@ class WorkerAgrupadoTests(TransactionTestCase):
             phone_number_id="",
             message_id="",
             customer_sticker=False,
-            silence_ok=False,
         ):
             self.turns.append(text)
             if on_call:
@@ -1492,7 +1492,6 @@ class PersonalidadYStickersTests(TestCase):
             salida = tool.invoke({"nombre": "granizado feliz"})
         send.assert_not_called()
         self.assertEqual(turn.sticker.label, "granizado feliz")
-        self.assertTrue(turn.answered)
         self.assertFalse(turn.posted, "todavía no ha salido nada: el turno se puede rehacer")
         self.assertIn("al final de este turno", salida)
         self.assertEqual(Sticker.objects.get(label="granizado feliz").sent_count, 0)
@@ -1607,7 +1606,6 @@ class PersonalidadYStickersTests(TestCase):
         with patch("apps.whatsapp.kapso.send_reaction", return_value={"ok": True}) as send:
             tool.invoke({"emoji": "❤️"})
         self.assertFalse(turn.posted, "una reacción no es un mensaje")
-        self.assertTrue(turn.answered, "pero sí es una respuesta: no se pide repetir")
         self.assertEqual(send.call_args.args[2:], ("wamid.7", "❤️"))
 
     def test_un_turno_que_solo_reacciona_no_manda_texto_de_relleno(self):
@@ -1615,7 +1613,7 @@ class PersonalidadYStickersTests(TestCase):
         tool = next(t for t in build_tools(self.contact, turn) if t.name == "reaccionar")
         with patch("apps.whatsapp.kapso.send_reaction", return_value={"ok": True}):
             tool.invoke({"emoji": "❤️"})
-        self.assertEqual(_for_whatsapp("", already_answered=turn.answered), "")
+        self.assertEqual(_for_whatsapp(""), "")
 
     def test_la_foto_de_un_producto_sin_imagen_no_se_inventa(self):
         from apps.products.models import Business, Category, Product
@@ -1635,16 +1633,18 @@ class PersonalidadYStickersTests(TestCase):
 
 
 class RespuestaVaciaTests(TestCase):
-    """Cuando el turno ya puso algo en el chat, callarse es la respuesta correcta."""
+    """Si el modelo decide callarse, no sale nada: no hay texto de relleno.
 
-    def test_sin_texto_y_sin_envio_previo_se_pide_repetir(self):
-        self.assertEqual(_for_whatsapp("  "), "Perdón, ¿me lo repites?")
+    Chat real del 23/09: el cliente contestó "Ok" al aviso de que su pedido
+    iba en camino, el modelo hizo bien en callarse y el relleno le mandó
+    "Perdón, ¿me lo repites?".
+    """
 
-    def test_sin_texto_despues_de_responder_no_se_manda_nada(self):
-        self.assertEqual(_for_whatsapp("", already_answered=True), "")
+    def test_sin_texto_no_se_manda_nada(self):
+        self.assertEqual(_for_whatsapp("  "), "")
 
     def test_el_texto_normal_no_cambia(self):
-        self.assertEqual(_for_whatsapp("Listo parce", already_answered=True), "Listo parce")
+        self.assertEqual(_for_whatsapp("Listo parce"), "Listo parce")
 
 
 class MensajesSeguidosTests(TestCase):
@@ -2860,7 +2860,6 @@ class StickerDelClienteTests(TransactionTestCase):
             phone_number_id="",
             message_id="",
             customer_sticker=False,
-            silence_ok=False,
         ):
             self.turns.append(text)
             return AgentTurn(
@@ -2911,11 +2910,40 @@ class StickerDelClienteTests(TransactionTestCase):
         self.assertEqual(self.sent, ["ok"])
 
     def test_el_silencio_ante_un_gesto_no_se_rellena(self):
-        self.assertEqual(_for_whatsapp("", silence_ok=True), "")
+        self.assertEqual(_for_whatsapp(""), "")
 
-    def test_ante_una_pregunta_el_silencio_si_se_rellena(self):
-        """Callarse cuando el cliente preguntó algo sigue siendo un fallo."""
-        self.assertEqual(_for_whatsapp(""), "Perdón, ¿me lo repites?")
+    @override_settings(**FAST)
+    def test_callarse_ante_un_ok_no_manda_nada_y_el_vigia_lo_respeta(self):
+        """Chat real del 23/09: al "Ok" del cliente le llegó "¿me lo repites?".
+
+        Ahora el silencio no manda nada, y queda marcado como rescatado para
+        que el vigía no corra otro turno diciendo que el cliente sigue esperando.
+        """
+        with patch("apps.whatsapp.agent.run_turn", side_effect=self.fake_turn(reply="")):
+            self.receive("Ok", sequence=1)
+            self.wait_idle()
+        self.assertEqual(self.sent, [])
+        self.assertEqual(self._vigia_ve(), [], "callarse ya fue la respuesta")
+        # Sin la marca el vigía sí lo tomaría: la prueba no pasa por casualidad
+        WhatsAppContact.objects.filter(phone=PHONE).update(rescued_wamid="")
+        self.assertEqual(self._vigia_ve(), ["wamid.test1"])
+
+    @override_settings(**FAST, OPENAI_API_KEY="test")
+    def test_el_vigia_tampoco_retoma_un_sticker_ilegible(self):
+        self.describe.return_value = ""
+        with patch("apps.whatsapp.agent.run_turn", side_effect=self.fake_turn()):
+            self.receive("", msg_type="sticker", media_id="media-1")
+            self.wait_idle()
+        self.assertEqual(self._vigia_ve(), [])
+
+    def _vigia_ve(self):
+        """Los mensajes que el vigía retomaría pasado el margen de rescate."""
+        from . import watchdog
+
+        luego = timezone.now() + datetime.timedelta(
+            minutes=settings.WHATSAPP_RESCUE_AFTER_MINUTES + 1
+        )
+        return [ultimo.wamid for _, ultimo in watchdog.esperando(ahora=luego)]
 
 
 class AvisosDeEstadoTests(TestCase):
@@ -4636,7 +4664,6 @@ class DomiciliosQueVuelvenTests(TestCase):
         self.assertIn("NO había servicio de domicilios", texto)
         self.assertIn("ya volvió a haberlo", texto)
         self.assertIn("NO escribas nada", texto)
-        self.assertTrue(correr.call_args.kwargs["silence_ok"])
 
     def test_si_no_esperaba_ningun_domicilio_no_sale_nada(self):
         """Lo pidió, pero el hilo dice que ya lo resolvió: el modelo se calla."""
@@ -4914,7 +4941,6 @@ class DomiciliosQueVuelvenTests(TestCase):
             self.domicilios.barrer()
         self.assertEqual(len(vistos), 1, vistos)
         self.assertFalse(vistos[0].get("phone_number_id"), vistos[0])
-        self.assertTrue(vistos[0].get("silence_ok"), vistos[0])
 
     def test_al_que_acaba_de_escribir_no_se_le_manda_encima(self):
         """Tiene un turno corriendo ahora mismo, y puede ser el de otro proceso.
