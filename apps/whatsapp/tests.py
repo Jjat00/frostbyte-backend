@@ -61,6 +61,12 @@ FAST = dict(
 )
 
 
+def _mediodia():
+    """Hoy a las 12:00, hora local: lejos de la medianoche, para las pruebas
+    que cuentan lo de "hoy" y restan minutos u horas desde ahora."""
+    return timezone.localtime().replace(hour=12, minute=0, second=0, microsecond=0)
+
+
 def webhook_payload(
     text, sequence=1, message_id=None, quoted_wamid=None, msg_type="text", media_id=None
 ):
@@ -1551,13 +1557,14 @@ class PersonalidadYStickersTests(TestCase):
 
     def test_el_pulso_del_turno_llega_al_prompt_y_nombra_el_ultimo(self):
         self._sticker()
-        rato = timezone.now() - datetime.timedelta(minutes=mood.COOLDOWN_MINUTES + 1)
+        mediodia = _mediodia()
+        rato = mediodia - datetime.timedelta(minutes=mood.COOLDOWN_MINUTES + 1)
         self.contact.sticker_log = [{"label": "granizado feliz", "at": rato.isoformat()}]
         self.contact.save(update_fields=["sticker_log"])
+        with patch("django.utils.timezone.now", return_value=mediodia):
+            urge = mood.sticker_urge(self.contact, roll=0.0)
         turn = TurnContext(
-            phone_number_id=PHONE_NUMBER_ID,
-            message_id="wamid.1",
-            sticker_urge=mood.sticker_urge(self.contact, roll=0.0),
+            phone_number_id=PHONE_NUMBER_ID, message_id="wamid.1", sticker_urge=urge
         )
         prompt = build_system_prompt(self.contact, turn)
         self.assertIn("STICKERS EN ESTE TURNO", prompt)
@@ -1717,10 +1724,15 @@ class PulsoDeStickersTests(TestCase):
     Lo que se protege aquí es que el sticker siga siendo un gesto: que a veces
     no toque, que no lleguen dos seguidos y que una conversación no acabe
     empapelada. El dado se fija con `roll` para que la prueba no dependa de la
-    suerte.
+    suerte, y el reloj a mediodía para que no dependa de la hora: el pulso
+    cuenta los stickers de HOY, y justo después de medianoche uno de "hace un
+    rato" ya es de ayer.
     """
 
     def setUp(self):
+        reloj = patch("django.utils.timezone.now", return_value=_mediodia())
+        reloj.start()
+        self.addCleanup(reloj.stop)
         self.contact = WhatsAppContact.objects.create(phone=PHONE)
 
     def test_el_dado_decide_el_turno(self):
