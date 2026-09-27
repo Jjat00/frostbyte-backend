@@ -3439,6 +3439,54 @@ class AvisoRepetidoTests(TransactionTestCase):
         self.assertEqual(self.order.notified_statuses, [Order.Status.PREPARING])
 
 
+class PedirOtraVezEsPedidoNuevoTests(TestCase):
+    """Chat real del 25-09: con el primer pedido ya entregado, Santiago pidió
+    "otro granizado de mandarina". El agente intentó sumarlo al entregado, la
+    tool le dijo que ofreciera un humano y le contestó "No me dejó sumarlo al
+    pedido actual. Ya te escribe alguien del equipo". Esperó una hora.
+    """
+
+    def setUp(self):
+        self.contact = WhatsAppContact.objects.create(phone=PHONE)
+        self.tools = {t.name: t for t in build_tools(self.contact)}
+        self.order = Order.objects.create(
+            source=Order.Source.WHATSAPP,
+            order_type=Order.OrderType.DELIVERY,
+            customer_name="Santiago",
+            customer_phone=PHONE,
+            status=Order.Status.DELIVERED,
+        )
+
+    def _modificar(self, **extra):
+        return self.tools["modificar_pedido"].invoke(
+            {"numero_pedido": self.order.order_number, **extra}
+        )
+
+    def test_sumar_a_un_pedido_entregado_manda_a_crear_uno_nuevo(self):
+        resultado = self._modificar(
+            agregar_items=[{"variante_id": 1, "cantidad": 1, "notas": ""}]
+        )
+        self.assertIn("PEDIDO NUEVO", resultado)
+        self.assertIn("crear_pedido", resultado)
+        self.assertNotIn("Ofrécele contactar a un humano", resultado)
+        self.assertFalse(self.order.items.exists())
+
+    def test_cambiar_la_direccion_de_uno_entregado_sigue_ofreciendo_humano(self):
+        resultado = self._modificar(nueva_direccion="Otra casa")
+        self.assertIn("humano", resultado)
+
+    def test_el_prompt_pregunta_el_billete_junto_con_el_metodo(self):
+        """Ahorra un mensaje: "¿efectivo o Nequi? Si es efectivo, ¿con qué billete?"."""
+        self.assertIn(
+            "MISMA pregunta, con qué billete paga", build_system_prompt(self.contact)
+        )
+
+    def test_el_prompt_dice_que_pedir_otra_vez_es_pedido_nuevo(self):
+        self.assertIn(
+            "PEDIR OTRA VEZ ES UN PEDIDO NUEVO", build_system_prompt(self.contact)
+        )
+
+
 class CancelarEsPagarTests(TestCase):
     """"Cancelar" en Colombia es pagar; anular es otra cosa.
 

@@ -1004,9 +1004,22 @@ def build_tools(contact, turn=None):
         except Order.DoesNotExist:
             return f"ERROR: no encontré el pedido {numero_pedido} de este cliente."
         if order.status != Order.Status.PENDING:
+            # Antes esto mandaba a ofrecer un humano, y el agente escalaba a
+            # quien solo quería pedir otra vez: Santiago pidió "otro granizado"
+            # con el primero ya entregado y esperó una hora (chat del 25/09)
+            if agregar_items and not quitar_cantidad and not nueva_direccion:
+                return (
+                    f"ERROR: el pedido ya está '{order.get_status_display()}' y no se le "
+                    "suma nada, pero eso no es un problema: lo que pide el cliente es un "
+                    "PEDIDO NUEVO. No le digas que no se pudo sumar ni lo pases a un "
+                    "humano: arma el pedido nuevo con cotizar_pedido y crear_pedido como "
+                    "cualquier otro (pregunta si va a la misma ubicación y cómo paga)."
+                )
             return (
                 f"ERROR: el pedido ya está '{order.get_status_display()}' y no se puede modificar. "
-                "Ofrécele contactar a un humano si es urgente."
+                "Si el cliente quiere algo más, es un pedido nuevo (cotizar_pedido y "
+                "crear_pedido); si necesita cambiar lo que ya va en camino, ofrécele "
+                "contactar a un humano."
             )
 
         with transaction.atomic():
