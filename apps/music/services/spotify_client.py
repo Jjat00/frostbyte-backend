@@ -50,6 +50,10 @@ class SpotifyNotConnectedError(Exception):
     pass
 
 
+class SpotifyNoDeviceError(Exception):
+    """La cuenta del piso no tiene ningun Spotify abierto donde reproducir."""
+
+
 class SpotifyRateLimitedError(Exception):
     """Se levanto un 429 de Spotify. retry_after en segundos."""
 
@@ -111,6 +115,29 @@ def _call(floor, func, *args, **kwargs):
         _handle_spotify_exception(floor, e)
 
 
+def _call_on_device(floor, sp, func, **kwargs):
+    """Ejecuta un comando de reproduccion aunque el equipo del piso este inactivo.
+
+    Si Spotify lleva un rato sin sonar, deja de tener "dispositivo activo" y los
+    comandos sin device_id fallan con 404 "No active device found". En ese caso
+    se busca el Spotify abierto de la cuenta y se repite el comando apuntando a
+    el, lo que ademas lo despierta. Si no hay ninguno abierto, SpotifyNoDeviceError.
+    """
+    try:
+        return _call(floor, func, **kwargs)
+    except SpotifyException as e:
+        if e.http_status != 404:
+            raise
+
+    devices = (_call(floor, sp.devices) or {}).get("devices", [])
+    usable = [d for d in devices if d.get("id") and not d.get("is_restricted")]
+    if not usable:
+        raise SpotifyNoDeviceError(f"No hay ningún Spotify abierto en el piso {floor}")
+    device = next((d for d in usable if d.get("is_active")), usable[0])
+    logger.info(f"[Spotify] Piso {floor}: sin dispositivo activo, uso '{device.get('name')}'")
+    return _call(floor, func, device_id=device["id"], **kwargs)
+
+
 def search_tracks(query, floor, limit=10):
     """Busca tracks en Spotify"""
     sp = _get_spotify_client(floor)
@@ -132,7 +159,7 @@ def search_tracks(query, floor, limit=10):
 def add_to_queue(track_uri, floor):
     """Agrega un track a la cola de reproducción del piso"""
     sp = _get_spotify_client(floor)
-    _call(floor, sp.add_to_queue, uri=track_uri)
+    _call_on_device(floor, sp, sp.add_to_queue, uri=track_uri)
 
 
 def _fetch_current_playback(floor):
@@ -212,13 +239,13 @@ def get_queue(floor):
 def pause_playback(floor):
     """Pausa la reproducción del piso"""
     sp = _get_spotify_client(floor)
-    _call(floor, sp.pause_playback)
+    _call_on_device(floor, sp, sp.pause_playback)
 
 
 def resume_playback(floor):
     """Reanuda la reproducción del piso"""
     sp = _get_spotify_client(floor)
-    _call(floor, sp.start_playback)
+    _call_on_device(floor, sp, sp.start_playback)
 
 
 def skip_to_next(floor):
@@ -234,13 +261,13 @@ def skip_to_next(floor):
     for req in playing_requests:
         req.mark_as_completed()
 
-    _call(floor, sp.next_track)
+    _call_on_device(floor, sp, sp.next_track)
 
 
 def skip_to_previous(floor):
     """Vuelve a la canción anterior en el piso"""
     sp = _get_spotify_client(floor)
-    _call(floor, sp.previous_track)
+    _call_on_device(floor, sp, sp.previous_track)
 
 
 def play_track(track_uri, floor):
@@ -267,13 +294,13 @@ def play_track(track_uri, floor):
         matching.mark_as_playing()
 
     # Reproducir inmediatamente. Las demás canciones siguen en la cola de Spotify.
-    _call(floor, sp.start_playback, uris=[track_uri])
+    _call_on_device(floor, sp, sp.start_playback, uris=[track_uri])
 
 
 def set_volume(volume_percent, floor):
     """Ajusta el volumen del piso (0-100)"""
     sp = _get_spotify_client(floor)
-    _call(floor, sp.volume, volume_percent)
+    _call_on_device(floor, sp, sp.volume, volume_percent=volume_percent)
 
 
 def is_connected(floor):
