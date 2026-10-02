@@ -1,9 +1,12 @@
+import uuid
+
+from django.core.cache import cache
 from django.test import TestCase
 from rest_framework.test import APIClient
 
 from apps.accounts.models import User
 
-from .models import Contest, ContestEntry, normalize_instagram_handle
+from .models import Contest, ContestEntry, ContestVisit, normalize_instagram_handle
 
 ENTRY = {
     "full_name": "Ana Pérez",
@@ -147,6 +150,67 @@ class ContestFlowTests(TestCase):
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.data["counts"]["pending"], 1)
         self.assertEqual(len(res.data["entries"]), 1)
+
+
+class ContestVisitTests(TestCase):
+    URL = "/api/v1/contests/current/visit/"
+
+    def setUp(self):
+        cache.clear()
+        self.contest = Contest.objects.get(slug="disfraces-halloween-2026")
+        self.contest.is_published = True
+        self.contest.save()
+        self.customer = User.objects.create_user(
+            username="ana", email="ana@example.com", role=User.Role.CUSTOMER)
+        self.employee = User.objects.create_user(
+            username="barra", role=User.Role.EMPLOYEE)
+        self.client = APIClient()
+
+    def visit(self, visitor_id, user=None):
+        self.client.force_authenticate(user)
+        return self.client.post(
+            self.URL, {"visitor_id": str(visitor_id)}, format="json")
+
+    def unique(self):
+        return ContestVisit.unique_visitors(self.contest)
+
+    def test_same_visitor_counts_once(self):
+        vid = uuid.uuid4()
+        for _ in range(3):
+            self.assertEqual(self.visit(vid).status_code, 204)
+        self.visit(uuid.uuid4())
+        self.assertEqual(self.unique(), 2)
+
+    def test_same_account_on_two_browsers_counts_once(self):
+        self.visit(uuid.uuid4(), self.customer)
+        self.visit(uuid.uuid4(), self.customer)
+        self.assertEqual(self.unique(), 1)
+
+    def test_anonymous_then_login_counts_once(self):
+        vid = uuid.uuid4()
+        self.visit(vid)
+        self.visit(vid, self.customer)
+        self.visit(uuid.uuid4(), self.customer)
+        self.assertEqual(self.unique(), 1)
+
+    def test_staff_visits_do_not_count(self):
+        self.visit(uuid.uuid4(), self.employee)
+        self.assertEqual(self.unique(), 0)
+
+    def test_invalid_visitor_id(self):
+        res = self.client.post(self.URL, {"visitor_id": "abc"}, format="json")
+        self.assertEqual(res.status_code, 400)
+
+    def test_unpublished_contest_does_not_count(self):
+        self.contest.is_published = False
+        self.contest.save()
+        self.assertEqual(self.visit(uuid.uuid4()).status_code, 404)
+
+    def test_staff_overview_shows_unique_visitors(self):
+        self.visit(uuid.uuid4())
+        self.client.force_authenticate(self.employee)
+        res = self.client.get("/api/v1/contests/admin/")
+        self.assertEqual(res.data["unique_visitors"], 1)
 
 
 class NormalizeHandleTests(TestCase):

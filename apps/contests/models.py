@@ -197,3 +197,44 @@ class ContestEntry(models.Model):
         self.follows_instagram = value
         self.instagram_checked_at = timezone.now() if value else None
         self.instagram_checked_by = by if value else None
+
+
+class ContestVisit(models.Model):
+    """Una persona que abrió la página del concurso (visita única).
+
+    La persona se reconoce por `visitor_id`, un identificador aleatorio que el
+    navegador guarda la primera vez y reenvía en cada visita: volver a entrar
+    no suma. Si entra con su cuenta de Google se guarda también `user`, y así
+    la misma cuenta en dos celulares cuenta una sola vez (ver unique_visitors).
+    Un navegador en modo incógnito o con el almacenamiento borrado sí cuenta
+    como persona nueva; no hay forma fiable de evitarlo sin pedir login.
+    """
+
+    contest = models.ForeignKey(
+        Contest, on_delete=models.CASCADE, related_name="visits",
+        verbose_name="Concurso",
+    )
+    visitor_id = models.UUIDField(verbose_name="Visitante")
+    user = models.ForeignKey(
+        "accounts.User", null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="+", verbose_name="Cuenta",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Visita a la página del concurso"
+        verbose_name_plural = "Visitas a la página del concurso"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["contest", "visitor_id"],
+                name="contest_visit_unique_visitor",
+            ),
+        ]
+
+    @classmethod
+    def unique_visitors(cls, contest):
+        """Personas distintas: las cuentas cuentan una vez aunque usen varios
+        navegadores, y los navegadores sin cuenta cuentan cada uno."""
+        visits = cls.objects.filter(contest=contest)
+        accounts = visits.exclude(user=None).values("user").distinct().count()
+        return accounts + visits.filter(user=None).count()

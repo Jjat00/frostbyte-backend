@@ -5,6 +5,7 @@ from . import views
 urlpatterns = [
     path("current/", views.current_contest, name="contest-current"),
     path("current/entry/", views.my_entry, name="contest-my-entry"),
+    path("current/visit/", views.register_visit, name="contest-visit"),
     path("current/entry/cancel/", views.cancel_my_entry,
          name="contest-my-entry-cancel"),
     path("admin/", views.staff_overview, name="contest-admin"),

@@ -6,6 +6,8 @@ Dos superficies, como en reservas:
 - Staff (/contests/admin/...): la lista de inscritos para marcar en la barra
   el pago y el seguimiento en Instagram, y la configuración del concurso.
 """
+import uuid
+
 from django.db import IntegrityError, transaction
 from django.db.models import Max
 from django.http import Http404
@@ -14,11 +16,11 @@ from rest_framework.decorators import api_view, permission_classes, throttle_cla
 from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
-from rest_framework.throttling import UserRateThrottle
+from rest_framework.throttling import SimpleRateThrottle, UserRateThrottle
 
 from apps.accounts.permissions import IsStaffMember
 
-from .models import Contest, ContestEntry
+from .models import Contest, ContestEntry, ContestVisit
 from .serializers import (
     EntryCreateSerializer,
     MyEntrySerializer,
@@ -38,6 +40,17 @@ class ContestEntryThrottle(UserRateThrottle):
         if request.method != "POST":
             return True
         return super().allow_request(request, view)
+
+
+class ContestVisitThrottle(SimpleRateThrottle):
+    """Tope por IP para que nadie infle el contador a punta de visitor_id
+    inventados. Holgado: en el local muchos comparten el wifi."""
+    scope = "contest_visits"
+    rate = "60/hour"
+
+    def get_cache_key(self, request, view):
+        return self.cache_format % {
+            "scope": self.scope, "ident": self.get_ident(request)}
 
 
 def _public_contest():
@@ -108,6 +121,33 @@ def my_entry(request):
 
 
 @api_view(["POST"])
+@permission_classes([AllowAny])
+@throttle_classes([ContestVisitThrottle])
+def register_visit(request):
+    """Cuenta una visita a /concurso. Una sola por persona (visitor_id).
+
+    El navegador genera `visitor_id` la primera vez y lo reenvía siempre, así
+    que repetir la visita no suma. Las visitas del staff no cuentan."""
+    contest = _public_contest()
+    try:
+        visitor_id = uuid.UUID(str(request.data.get("visitor_id", "")))
+    except ValueError:
+        raise ValidationError({"visitor_id": "Identificador inválido."})
+
+    user = request.user if request.user.is_authenticated else None
+    if user and user.is_staff_member:
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    visit, created = ContestVisit.objects.get_or_create(
+        contest=contest, visitor_id=visitor_id, defaults={"user": user})
+    # Entró anónimo y luego con su cuenta: el navegador queda ligado a ella
+    if not created and user and visit.user_id is None:
+        visit.user = user
+        visit.save(update_fields=["user"])
+    return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+@api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def cancel_my_entry(request):
     """Cancela mi inscripción mientras no esté pagada."""
@@ -148,6 +188,7 @@ def staff_overview(request):
     return Response({
         "contest": StaffContestSerializer(contest).data,
         "counts": counts,
+        "unique_visitors": ContestVisit.unique_visitors(contest),
         "entries": StaffEntrySerializer(entries, many=True).data,
     })
 

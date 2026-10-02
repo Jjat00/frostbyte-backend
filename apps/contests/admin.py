@@ -2,7 +2,7 @@ from django.contrib import admin
 
 from apps.search import PlainSearchAdminMixin
 
-from .models import Contest, ContestEntry
+from .models import Contest, ContestEntry, ContestVisit
 
 
 @admin.register(Contest)
@@ -24,3 +24,10 @@ class ContestEntryAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
     list_filter = ("contest", "status", "paid", "follows_instagram")
     search_fields = ("full_name", "phone", "instagram_handle")
     raw_id_fields = ("user", "paid_by", "instagram_checked_by")
+
+
+@admin.register(ContestVisit)
+class ContestVisitAdmin(admin.ModelAdmin):
+    list_display = ("visitor_id", "contest", "user", "created_at")
+    list_filter = ("contest",)
+    raw_id_fields = ("user",)
