@@ -53,6 +53,15 @@ PICKUP_MESSAGES = {
     ),
 }
 
+# El cliente ya está sentado en el local: "listo" es que se lo están subiendo
+# al piso, y la plata se cuadra ahí mismo, así que no lleva línea de pago.
+DINE_IN_MESSAGES = {
+    Order.Status.READY: "🙌 ¡Tu pedido {order_number} ya está listo! Ya te lo llevamos{where}.",
+    Order.Status.DELIVERED: (
+        "✅ Pedido {order_number} entregado. ¡Que lo disfrutes y gracias por pedir en Frostbyte! 💙"
+    ),
+}
+
 
 # El comprobante no se guarda en el pedido: llega como imagen y lo único que
 # queda de él es la descripción que la visión dejó en el archivo de la
@@ -126,6 +135,8 @@ def message_for(order):
     """
     if order.order_type == Order.OrderType.PICKUP:
         template = PICKUP_MESSAGES.get(order.status, STATUS_MESSAGES.get(order.status))
+    elif order.order_type == Order.OrderType.DINE_IN:
+        template = DINE_IN_MESSAGES.get(order.status, STATUS_MESSAGES.get(order.status))
     else:
         template = STATUS_MESSAGES.get(order.status)
     if not template:
@@ -148,7 +159,10 @@ def message_for(order):
 
     from .models import AgentSettings
 
-    message = template.format(order_number=order.order_number, payment_line=payment_line)
+    where = f" al piso {order.table_floor}" if order.table_floor else ""
+    message = template.format(
+        order_number=order.order_number, payment_line=payment_line, where=where
+    )
     # Lo prohibido se quita aquí y no de las plantillas de arriba: la lista la
     # escribe el negocio en el panel y cambia cuando él quiera.
     return banned.clean(message, AgentSettings.load().forbidden_words())

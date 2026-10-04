@@ -52,6 +52,40 @@ def _cop(value):
     return "$" + f"{value:,.0f}".replace(",", ".")
 
 
+# Los pisos donde atiende Frostbyte. Un cliente que ya está sentado pide por
+# WhatsApp y el pedido se le lleva al piso (chat del 03/10: Natt pidió desde el
+# segundo piso y el agente lo tomó "para recoger" con la mesa en las notas).
+PISOS_DEL_LOCAL = (2, 3)
+
+
+def _entrega_en_local(piso, mesa):
+    """Valida el piso (y la mesa, si la dijo) de un pedido en el local.
+
+    Devuelve (piso, numero_de_mesa, Table o None, "") o un error en el último
+    lugar. La mesa es opcional: al cliente solo se le pregunta el piso.
+    """
+    from apps.orders.models import Table
+
+    if piso not in PISOS_DEL_LOCAL:
+        pisos = " o ".join(str(p) for p in PISOS_DEL_LOCAL)
+        return None, None, None, (
+            f"ERROR: Frostbyte atiende en el piso {pisos}; pregúntale al cliente en "
+            "cuál de los dos está."
+        )
+    texto = (mesa or "").strip().lower()
+    if not texto:
+        return piso, None, None, ""
+    if "barra" in texto:
+        numero = 0
+    else:
+        digitos = re.sub(r"\D", "", texto)
+        if not digitos:
+            return piso, None, None, ""
+        numero = int(digitos)
+    mesa_obj = Table.objects.filter(floor=piso, table_number=numero, is_active=True).first()
+    return piso, numero, mesa_obj, ""
+
+
 # Palabras con las que el cliente rodea al producto y que no ayudan a buscar.
 _STOPWORDS = {
     "una", "uno", "unas", "unos", "quiero", "quisiera", "para", "con", "por",
@@ -148,10 +182,16 @@ def _order_summary(order):
         )
     if order.delivery_fee:
         lines.append(f"Envío: {_cop(order.delivery_fee)}")
-    pago = order.get_payment_method_display() or (
-        "al recoger en el local" if order.order_type == Order.OrderType.PICKUP else "sin definir"
-    )
+    pago = order.get_payment_method_display() or {
+        Order.OrderType.PICKUP: "al recoger en el local",
+        Order.OrderType.DINE_IN: "en el local",
+    }.get(order.order_type, "sin definir")
     lines.append(f"TOTAL: {_cop(order.total)} · pago: {pago}")
+    if order.order_type == Order.OrderType.DINE_IN and order.table_floor:
+        donde = f"Se lleva al piso {order.table_floor}"
+        if order.table_number is not None:
+            donde += ", barra" if order.table_number == 0 else f", mesa {order.table_number}"
+        lines.append(donde)
     if order.delivery_address:
         lines.append(f"Dirección: {order.delivery_address}")
     return "\n".join(lines)
@@ -431,6 +471,8 @@ def build_tools(contact, turn=None):
             f"Tarifa de envío: {_cop(cfg.delivery_fee)} (para recoger no se cobra envío).",
             f"Puedes tomar pedidos A DOMICILIO: {'sí' if cfg.customer_ordering_enabled else 'NO'}.",
             "Puedes tomar pedidos PARA RECOGER: sí.",
+            "Puedes tomar pedidos de clientes que YA ESTÁN EN EL LOCAL (piso 2 o 3): sí, "
+            "se les lleva al piso y no dependen de los domicilios.",
         ]
         if not cfg.customer_ordering_enabled:
             # Queda anotado que este cliente llegó con la puerta cerrada: si los
@@ -688,7 +730,10 @@ def build_tools(contact, turn=None):
 
     @tool
     def cotizar_pedido(
-        items: list[ItemPedido], paga_con: str = "", para_recoger: bool = False
+        items: list[ItemPedido],
+        paga_con: str = "",
+        para_recoger: bool = False,
+        piso: int = 0,
     ) -> str:
         """Calcula el total EXACTO de un pedido (items + envío) sin crearlo.
         Úsala SIEMPRE antes de mostrar el resumen al cliente y copia sus cifras
@@ -700,9 +745,16 @@ def build_tools(contact, turn=None):
                 o 'exacto' si dice que paga completo/justo. PROHIBIDO inventar
                 un valor que el cliente no mencionó.
             para_recoger: True si el cliente pasa por el pedido al local (sin envío)
+            piso: 2 o 3 SOLO si el cliente ya está en el local (se le lleva al
+                piso, sin envío); 0 en cualquier otro caso
         """
         if not items:
             return "ERROR: no hay items para cotizar."
+        if piso and para_recoger:
+            return "ERROR: un pedido es en el local (piso) o para recoger, no ambos."
+        if piso and piso not in PISOS_DEL_LOCAL:
+            return _entrega_en_local(piso, "")[3]
+        en_local = bool(piso)
         cfg = StoreSettings.load()
         lines = []
         subtotal = Decimal("0.00")
@@ -718,9 +770,11 @@ def build_tools(contact, turn=None):
             lines.append(
                 f"- {item.cantidad}x {variant.product.name} {variant.name} · {_cop(line_total)}"
             )
-        envio = Decimal("0.00") if para_recoger else cfg.delivery_fee
+        envio = Decimal("0.00") if para_recoger or en_local else cfg.delivery_fee
         total = subtotal + envio
-        if para_recoger:
+        if en_local:
+            lines.append(f"En el local, se lleva al piso {piso}: sin envío.")
+        elif para_recoger:
             lines.append("Para recoger en el local: sin envío.")
         else:
             lines.append(f"Envío: {_cop(envio)}")
@@ -760,8 +814,11 @@ def build_tools(contact, turn=None):
         para_recoger: bool = False,
         telefono_contacto: str = "",
         paga_al_recibir: bool = False,
+        piso: int = 0,
+        mesa: str = "",
     ) -> str:
-        """Crea el pedido DEFINITIVO, a domicilio o para recoger en el local.
+        """Crea el pedido DEFINITIVO: a domicilio, para recoger o para un cliente
+        que ya está en el local.
 
         A domicilio: llámala cuando el cliente confirmó el resumen (items y
         total). La ubicación de WhatsApp hace de dirección y la toma el sistema
@@ -775,6 +832,9 @@ def build_tools(contact, turn=None):
         resumen (items y TOTAL de cotizar_pedido). NO pidas dirección,
         ubicación, teléfono ni método de pago (paga al recoger en el local, sin
         envío); responde que el pedido quedó creado.
+        En el local (piso=2 o 3): el cliente ya está sentado en Frostbyte y se
+        le lleva el pedido a su piso. Solo hace falta el piso: NO pidas
+        dirección, ubicación, teléfono ni método de pago (paga en el local).
 
         Args:
             items: items del pedido con variante_id, cantidad y notas
@@ -802,6 +862,10 @@ def build_tools(contact, turn=None):
                 entreguen (típico del Nequi que manda al llegar el
                 domiciliario). Queda anotado para que el equipo lo cobre allí;
                 NUNCA esperes el comprobante para crear el pedido
+            piso: 2 o 3 SOLO si el cliente ya está en el local; 0 si es a
+                domicilio o para recoger
+            mesa: número de mesa (o 'barra') SOLO si el cliente lo dijo por su
+                cuenta; no se le pregunta
         """
         cfg = StoreSettings.load()
         if not cfg.is_open:
@@ -810,6 +874,17 @@ def build_tools(contact, turn=None):
                 "de ningún tipo. Dile al cliente que está cerrado y que "
                 f"{cfg.reopening_hint()}; no le ofrezcas encargar ni recoger."
             )
+        en_local = bool(piso)
+        if en_local and para_recoger:
+            return "ERROR: un pedido es en el local (piso) o para recoger, no ambos."
+        piso_local, mesa_numero, mesa_obj = None, None, None
+        if en_local:
+            piso_local, mesa_numero, mesa_obj, error = _entrega_en_local(piso, mesa)
+            if error:
+                return error
+            # Desde aquí un pedido en el local se trata como uno para recoger:
+            # sin envío, sin ubicación, sin pago por adelantado ni celular
+            para_recoger = True
         if not para_recoger and not cfg.customer_ordering_enabled:
             # Ya no es que preguntara: tenía el pedido armado y se quedó sin él
             try:
@@ -904,8 +979,15 @@ def build_tools(contact, turn=None):
             order = Order.objects.create(
                 source=Order.Source.WHATSAPP,
                 order_type=(
-                    Order.OrderType.PICKUP if para_recoger else Order.OrderType.DELIVERY
+                    Order.OrderType.DINE_IN
+                    if en_local
+                    else Order.OrderType.PICKUP
+                    if para_recoger
+                    else Order.OrderType.DELIVERY
                 ),
+                table=mesa_obj,
+                table_number=mesa_numero,
+                table_floor=piso_local,
                 customer_name=nombre,
                 # El número que el staff puede llamar; si no hay (para recoger
                 # sin número visible) queda el BSUID, que es lo que signals
@@ -957,12 +1039,18 @@ def build_tools(contact, turn=None):
 
         broadcast_orders_update()
 
-        cierre = (
-            "El cliente pasa por él al local y paga al recogerlo; dile el TOTAL y "
-            "que le avisas cuando esté listo."
-            if para_recoger
-            else "Sale a domicilio."
-        )
+        if en_local:
+            cierre = (
+                f"El cliente está en el local: se le lleva al piso {piso_local} y paga "
+                "ahí. Dile el TOTAL y que se lo llevamos apenas esté."
+            )
+        elif para_recoger:
+            cierre = (
+                "El cliente pasa por él al local y paga al recogerlo; dile el TOTAL y "
+                "que le avisas cuando esté listo."
+            )
+        else:
+            cierre = "Sale a domicilio."
         aviso = ""
         if pendientes:
             falta = "la dirección" if sin_ubicacion else "lo que falta"
@@ -986,10 +1074,13 @@ def build_tools(contact, turn=None):
         quitar_cantidad: int = 0,
         nueva_direccion: str = "",
         nueva_referencia: str = "",
+        nuevo_piso: int = 0,
+        nueva_mesa: str = "",
     ) -> str:
         """Modifica un pedido de este cliente mientras siga PENDIENTE (la cocina
         aún no lo toma). Puede agregar items, quitar unidades de una variante o
-        corregir la dirección.
+        corregir la dirección. El piso y la mesa de un pedido en el local se
+        corrigen aunque la cocina ya lo tenga, mientras no se haya entregado.
 
         Args:
             numero_pedido: número del pedido (ej. 20260713-A1B2C3)
@@ -998,11 +1089,45 @@ def build_tools(contact, turn=None):
             quitar_cantidad: cuántas unidades quitar de esa variante
             nueva_direccion: dirección corregida (vacío = no cambiar)
             nueva_referencia: referencia corregida (vacío = no cambiar)
+            nuevo_piso: piso corregido (2 o 3) de un pedido en el local
+                (0 = no cambiar)
+            nueva_mesa: mesa corregida de un pedido en el local, solo si el
+                cliente la dijo (vacío = no cambiar)
         """
         try:
             order = _customer_orders(contact).get(order_number=numero_pedido.strip())
         except Order.DoesNotExist:
             return f"ERROR: no encontré el pedido {numero_pedido} de este cliente."
+        if nuevo_piso or nueva_mesa.strip():
+            # Dónde está sentado el cliente no toca la cocina: se corrige hasta
+            # que se entregue. Natt avisó "perdón, es piso 3" justo cuando la
+            # cocina lo tomaba y el agente tuvo que escalarlo (chat del 03/10)
+            if order.order_type != Order.OrderType.DINE_IN:
+                return "ERROR: ese pedido no es en el local; el piso no aplica."
+            if order.status in (Order.Status.DELIVERED, Order.Status.CANCELLED):
+                return (
+                    f"ERROR: el pedido ya está '{order.get_status_display()}'; ya no "
+                    "se le cambia el piso."
+                )
+            piso, mesa_numero, mesa_obj, error = _entrega_en_local(
+                nuevo_piso or order.table_floor, nueva_mesa
+            )
+            if error:
+                return error
+            if nuevo_piso and nuevo_piso != order.table_floor and not nueva_mesa.strip():
+                # La mesa de otro piso no es la misma mesa
+                mesa_numero, mesa_obj = None, None
+            elif not nueva_mesa.strip():
+                mesa_numero, mesa_obj = order.table_number, order.table
+            order.table_floor = piso
+            order.table_number = mesa_numero
+            order.table = mesa_obj
+            order.save(update_fields=["table_floor", "table_number", "table", "updated_at"])
+            if not (agregar_items or quitar_cantidad or nueva_direccion or nueva_referencia):
+                from apps.orders.consumers import broadcast_orders_update
+
+                broadcast_orders_update()
+                return f"PEDIDO ACTUALIZADO.\n{_order_summary(order)}"
         if order.status != Order.Status.PENDING:
             # Antes esto mandaba a ofrecer un humano, y el agente escalaba a
             # quien solo quería pedir otra vez: Santiago pidió "otro granizado"

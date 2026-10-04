@@ -131,7 +131,9 @@ def build_table_label(order):
         return order.table.label
     number = order.table_number
     if number is None:
-        return None
+        # Pedido en el local tomado por WhatsApp: el cliente dijo el piso pero
+        # no la mesa, y eso es lo que el mesero necesita para subírselo
+        return f"Piso {order.table_floor}" if order.table_floor else None
     name = "Barra" if number == 0 else f"Mesa {number}"
     floor = order.table_floor
     return f"{name} · Piso {floor}" if floor else name

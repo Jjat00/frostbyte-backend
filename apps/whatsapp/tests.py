@@ -741,6 +741,130 @@ class PedidoParaRecogerTests(TestCase):
         self.assertIn("NUNCA digas al cliente que un servicio está \"pausado\"", SYSTEM_PROMPT)
 
 
+class PedidoEnElLocalTests(TestCase):
+    """Chat real 2026-10-03: Natt pidió dos micheladas "acá en el segundo piso,
+    en la mesa 2". El agente lo tomó para recoger con la mesa en las notas, le
+    avisó "pasa por él cuando quieras" y, cuando ella corrigió el piso, tuvo
+    que escalarlo porque no había cómo cambiarlo."""
+
+    def setUp(self):
+        from apps.orders.models import StoreSettings, Table
+        from apps.products.models import Category, Product, ProductVariant
+
+        from apps.business.models import Business
+
+        bar, _ = Business.objects.get_or_create(slug="frostbyte", defaults={"name": "Frostbyte"})
+        categoria = Category.objects.create(name="Micheladas", slug="micheladas", business=bar)
+        producto = Product.objects.create(
+            name="Michelada Budweiser", category=categoria, business=bar, description="Michelada"
+        )
+        self.variante = ProductVariant.objects.create(
+            product=producto, name="Regular", sku="MIC-BUD", price=8000
+        )
+        self.cfg = StoreSettings.load()
+        self.cfg.is_open = True
+        self.cfg.customer_ordering_enabled = False  # sin domicilios no importa
+        self.cfg.delivery_fee = 2000
+        self.cfg.save()
+        self.mesa2_piso3 = Table.objects.create(table_number=2, floor=3, table_name="Mesa 2")
+
+        self.contact = WhatsAppContact.objects.create(phone=PHONE, profile_name="Natt Studio")
+        self.tools = {t.name: t for t in build_tools(self.contact)}
+
+    def _items(self):
+        return [{"variante_id": self.variante.id, "cantidad": 2, "notas": ""}]
+
+    def _crear(self, **kwargs):
+        datos = {"items": self._items()}
+        datos.update(kwargs)
+        return self.tools["crear_pedido"].invoke(datos)
+
+    def test_solo_con_el_piso_se_crea_sin_envio_ni_pago(self):
+        resultado = self._crear(piso=2)
+        self.assertIn("PEDIDO CREADO", resultado)
+        self.assertIn("piso 2", resultado)
+        order = Order.objects.get()
+        self.assertEqual(order.order_type, Order.OrderType.DINE_IN)
+        self.assertEqual(order.table_floor, 2)
+        self.assertIsNone(order.table_number)
+        self.assertEqual(order.delivery_fee, 0)
+        self.assertEqual(order.total, 16000)
+        self.assertEqual(order.payment_method, "")
+        self.assertNotIn(missing.PREFIX, order.customer_notes)
+        self.assertEqual(order.customer_name, "Natt Studio")
+
+    def test_la_mesa_que_dice_se_enlaza_a_la_del_piso(self):
+        self._crear(piso=3, mesa="mesa 2")
+        order = Order.objects.get()
+        self.assertEqual(order.table, self.mesa2_piso3)
+        self.assertEqual(order.table_number, 2)
+
+    def test_un_piso_que_no_existe_se_pregunta(self):
+        resultado = self._crear(piso=5)
+        self.assertIn("ERROR", resultado)
+        self.assertEqual(Order.objects.count(), 0)
+
+    def test_no_es_a_la_vez_para_recoger(self):
+        self.assertIn("ERROR", self._crear(piso=2, para_recoger=True))
+
+    def test_con_el_local_cerrado_tampoco(self):
+        self.cfg.is_open = False
+        self.cfg.save()
+        self.assertIn("CERRADO", self._crear(piso=2))
+
+    def test_la_cotizacion_no_cobra_envio(self):
+        resultado = self.tools["cotizar_pedido"].invoke({"items": self._items(), "piso": 3})
+        self.assertIn("piso 3", resultado)
+        self.assertIn("TOTAL: $16.000", resultado)
+        self.assertNotIn("Envío: $", resultado)
+
+    def test_el_piso_se_corrige_aunque_la_cocina_ya_lo_tenga(self):
+        self._crear(piso=2, mesa="2")
+        order = Order.objects.get()
+        order.status = Order.Status.PREPARING
+        order.save()
+        resultado = self.tools["modificar_pedido"].invoke(
+            {"numero_pedido": order.order_number, "nuevo_piso": 3}
+        )
+        self.assertIn("PEDIDO ACTUALIZADO", resultado)
+        order.refresh_from_db()
+        self.assertEqual(order.table_floor, 3)
+        # la mesa 2 del piso 2 no es la mesa 2 del piso 3
+        self.assertIsNone(order.table_number)
+
+    def test_entregado_ya_no_se_mueve(self):
+        self._crear(piso=2)
+        order = Order.objects.get()
+        Order.objects.filter(pk=order.pk).update(status=Order.Status.DELIVERED)
+        resultado = self.tools["modificar_pedido"].invoke(
+            {"numero_pedido": order.order_number, "nuevo_piso": 3}
+        )
+        self.assertIn("ERROR", resultado)
+
+    def test_el_aviso_de_listo_no_lo_manda_a_recoger(self):
+        from .signals import message_for
+
+        self._crear(piso=3)
+        order = Order.objects.get()
+        order.status = Order.Status.READY
+        aviso = message_for(order)
+        self.assertIn("al piso 3", aviso)
+        self.assertNotIn("Pasa por él", aviso)
+        self.assertNotIn("Pagas", aviso)
+
+    def test_la_cocina_ve_el_piso(self):
+        from apps.orders.serializers import build_table_label
+
+        self._crear(piso=3)
+        self.assertEqual(build_table_label(Order.objects.get()), "Piso 3")
+
+    def test_el_prompt_solo_pide_el_piso(self):
+        prompt = build_system_prompt()
+        self.assertIn("YA ESTÁ EN EL LOCAL", prompt)
+        self.assertIn("piso 2", prompt)
+        self.assertIn("ni le preguntes la mesa", prompt)
+
+
 class PreguntasDeMasTests(TestCase):
     """Chats reales del 18-09 revisados por Jaime: el agente gastaba turnos
     preguntando lo que el cliente acababa de decir.
