@@ -123,7 +123,7 @@ class WorkerAgrupadoTests(TransactionTestCase):
         discard = patch("apps.whatsapp.agent.discard_turn")
         self.discard = discard.start()
         self.addCleanup(discard.stop)
-        self.discard.side_effect = lambda contact, ids: self.discarded.append(ids)
+        self.discard.side_effect = lambda contact, ids, **kwargs: self.discarded.append(ids)
 
     def receive(self, text, sequence=1):
         """Simula la llegada de un webhook y su procesamiento (síncrono)."""
@@ -160,7 +160,11 @@ class WorkerAgrupadoTests(TransactionTestCase):
             if delay:
                 time.sleep(delay)
             return AgentTurn(
-                replies=(reply,) if reply else (), message_ids=("m1", "m2"), mutated=mutated
+                replies=(reply,) if reply else (),
+                message_ids=("m1", "m2"),
+                mutated=mutated,
+                previous=("snap",),
+                after=("m1", "m2"),
             )
 
         return _run
@@ -183,6 +187,29 @@ class WorkerAgrupadoTests(TransactionTestCase):
         self.assertIn("Hola, quiero hacer un pedido a domicilio", self.turns[0])
         self.assertIn("Buenas", self.turns[0])
         self.assertEqual(len(self.sent), 1, "el cliente debió recibir una sola respuesta")
+
+    @override_settings(**FAST)
+    def test_el_descarte_recibe_el_hilo_previo_del_turno(self):
+        """Sin el hilo previo, descartar un turno que resumió borra la memoria."""
+        arrived = threading.Event()
+
+        def escribe_durante_el_turno():
+            if arrived.is_set():
+                return
+            arrived.set()
+            self.receive("perdón, para 2", 2)
+
+        self.discard.side_effect = lambda contact, ids, previous=None, after=None, corte=None: (
+            self.discarded.append((previous, after))
+        )
+        with patch(
+            "apps.whatsapp.agent.run_turn",
+            side_effect=self.fake_turn(delay=0.5, on_call=escribe_durante_el_turno),
+        ):
+            self.receive("personal", 1)
+            self.wait_idle()
+
+        self.assertEqual(self.discarded, [(("snap",), ("m1", "m2"))])
 
     @override_settings(**FAST)
     def test_mensaje_mientras_el_agente_piensa_descarta_la_respuesta(self):
@@ -4292,6 +4319,76 @@ class ResumenDeLaConversacionTests(TestCase):
         middleware = agent_mod._summarization_middleware()
         self.assertEqual(middleware.keep, ("messages", 14))
 
+    def test_no_resume_por_el_uso_que_reporta_el_modelo(self):
+        """El uso reportado incluye el prompt de sistema y las tools.
+
+        Medido en producción el 05-10: historial de 3.500 tokens, uso reportado
+        de 10.000. Con eso la librería resumía en cada llamada al modelo y el
+        resumen se rehacía sobre sí mismo hasta perder el pedido.
+        """
+        from langchain_core.messages import AIMessage, HumanMessage
+
+        middleware = agent_mod._summarization_middleware()
+        respuesta = AIMessage(
+            content="¿Personal o para 2?",
+            usage_metadata={"input_tokens": 9800, "output_tokens": 200, "total_tokens": 10000},
+            response_metadata={"model_provider": "openai"},
+        )
+        mensajes = [HumanMessage(content="una salchipapa clásica"), respuesta]
+        total = middleware.token_counter(mensajes)
+        self.assertLess(total, 100)
+        self.assertFalse(middleware._should_summarize(mensajes, total))
+
+    def test_un_historial_largo_si_se_resume(self):
+        from langchain_core.messages import HumanMessage
+
+        middleware = agent_mod._summarization_middleware()
+        mensajes = [HumanMessage(content="x" * 30000)]
+        self.assertTrue(middleware._should_summarize(mensajes, middleware.token_counter(mensajes)))
+
+    def test_el_recorte_conserva_el_resumen_anterior(self):
+        """El recorte de fábrica tiraba primero el resumen, que va al principio."""
+        from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+        middleware = agent_mod._summarization_middleware()
+        resumen = HumanMessage(content=f"{agent_mod.RESUMEN_ENCABEZADO}\n\nQUÉ QUIERE: 1 clásica")
+        menu = ToolMessage(content="x" * 200000, tool_call_id="t1")
+        mensajes = [
+            resumen,
+            AIMessage(content="", tool_calls=[{"name": "consultar_menu", "args": {}, "id": "t1"}]),
+            menu,
+            HumanMessage(content="una clásica para 2"),
+            AIMessage(content="¿Va a la misma ubicación?"),
+        ]
+        recortados = middleware._trim_messages_for_summary(mensajes)
+        self.assertIs(recortados[0], resumen)
+        self.assertNotIn(menu, recortados)
+        self.assertIn("una clásica para 2", [m.content for m in recortados])
+        self.assertLessEqual(
+            middleware.token_counter(recortados), agent_mod.PRESUPUESTO_RESUMEN_TOKENS
+        )
+
+    def test_tras_un_menu_gigante_queda_al_menos_el_resumen(self):
+        from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+        middleware = agent_mod._summarization_middleware()
+        resumen = HumanMessage(content=f"{agent_mod.RESUMEN_ENCABEZADO}\n\nQUÉ QUIERE: 1 clásica")
+        mensajes = [
+            resumen,
+            HumanMessage(content="el menú porfa"),
+            AIMessage(content="", tool_calls=[{"name": "consultar_menu", "args": {}, "id": "t1"}]),
+            ToolMessage(content="x" * 200000, tool_call_id="t1"),
+        ]
+        recortados = middleware._trim_messages_for_summary(mensajes)
+        self.assertIs(recortados[0], resumen)
+
+    def test_lo_corto_se_resume_entero(self):
+        from langchain_core.messages import HumanMessage
+
+        middleware = agent_mod._summarization_middleware()
+        mensajes = [HumanMessage(content="hola"), HumanMessage(content="una clásica")]
+        self.assertEqual(middleware._trim_messages_for_summary(mensajes), mensajes)
+
     def test_el_prompt_del_resumen_protege_los_datos_del_pedido(self):
         prompt = agent_mod.SUMMARY_PROMPT
         self.assertIn("variante_id", prompt)
@@ -4369,12 +4466,183 @@ class ResumenEnUnTurnoRealTests(TestCase):
         self.assertIn("Esto es lo que se ha hablado con el cliente", resumen)
         self.assertNotIn("Here is a summary", resumen)
 
+    def test_si_el_resumen_falla_no_se_borra_la_conversacion(self):
+        """La librería devolvía el error como resumen y borraba el historial."""
+        from langchain.agents import create_agent
+        from langchain_core.language_models.fake_chat_models import (
+            FakeMessagesListChatModel,
+        )
+        from langchain_core.messages import AIMessage, HumanMessage
+
+        class _Roto(FakeMessagesListChatModel):
+            def _generate(self, *args, **kwargs):
+                raise RuntimeError("context_length_exceeded")
+
+        middleware = agent_mod._ResumenEnEspanol(
+            model=_Roto(responses=[AIMessage(content="nunca")]),
+            trigger=("tokens", 200),
+            keep=("messages", 4),
+            summary_prompt=agent_mod.SUMMARY_PROMPT,
+        )
+        grafo = create_agent(
+            model=FakeMessagesListChatModel(responses=[AIMessage(content="Listo.")]),
+            tools=[],
+            system_prompt="eres frosty",
+            middleware=[middleware],
+        )
+        entrada = self._conversacion_larga() + [HumanMessage(content="quiero un granizado")]
+        with self.assertLogs("apps.whatsapp.agent", level="WARNING"):
+            salida = grafo.invoke({"messages": entrada})
+        textos = [m.content for m in salida["messages"]]
+        self.assertIn("mensaje del cliente numero 0 con relleno", textos)
+        self.assertFalse(any("Error generating summary" in str(t) for t in textos))
+        self.assertEqual(textos[-1], "Listo.")
+
     def test_una_conversacion_corta_no_gasta_el_resumidor(self):
         from langchain_core.messages import HumanMessage
 
         grafo = self._grafo()
         grafo.invoke({"messages": [HumanMessage(content="hola")]})
         self.assertEqual(len(self.resumidor.responses), 1, "no debió consumirse")
+
+
+class DescartarUnTurnoQueResumioTests(TestCase):
+    """Descartar un turno deja el hilo como estaba, aunque el turno resumiera.
+
+    Chat de Angelly del 04-10: escribió "Perdón para 2" mientras el agente
+    contestaba a "Personal". El turno se descartó borrando lo que había
+    añadido, pero ese turno había resumido: lo añadido incluía el resumen
+    nuevo y lo viejo ya no estaba. El hilo quedó sin memoria y el siguiente
+    turno le cotizó la especial por la clásica.
+    """
+
+    def setUp(self):
+        from langchain.agents import create_agent
+        from langchain_core.language_models.fake_chat_models import (
+            FakeMessagesListChatModel,
+        )
+        from langchain_core.messages import AIMessage
+        from langgraph.checkpoint.memory import InMemorySaver
+
+        self.contact = WhatsAppContact.objects.create(phone=PHONE)
+        resumidor = FakeMessagesListChatModel(
+            responses=[AIMessage(content="QUIÉN ES: Angelly. QUÉ QUIERE: 1 clásica para 2.")]
+        )
+        middleware = agent_mod._ResumenEnEspanol(
+            model=resumidor,
+            trigger=("tokens", 200),
+            keep=("messages", 4),
+            summary_prompt=agent_mod.SUMMARY_PROMPT,
+        )
+        self.grafo = create_agent(
+            model=FakeMessagesListChatModel(responses=[AIMessage(content="¿Personal o para 2?")]),
+            tools=[],
+            system_prompt="eres frosty",
+            middleware=[middleware],
+            checkpointer=InMemorySaver(),
+        )
+        patcher = patch.object(agent_mod, "_build_agent", return_value=self.grafo)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.config = {"configurable": {"thread_id": agent_mod._thread_id(self.contact)}}
+
+    def _mensajes(self):
+        return self.grafo.get_state(self.config).values.get("messages", [])
+
+    def _hilo_largo(self):
+        from langchain_core.messages import AIMessage, HumanMessage
+
+        mensajes = []
+        for i in range(20):
+            mensajes.append(HumanMessage(content=f"mensaje del cliente {i} con relleno", id=f"h{i}"))
+            mensajes.append(AIMessage(content=f"respuesta del agente {i} con relleno", id=f"a{i}"))
+        self.grafo.update_state(self.config, {"messages": mensajes}, as_node="__start__")
+        return [m.id for m in self._mensajes()]
+
+    def test_el_hilo_vuelve_a_ser_el_de_antes(self):
+        antes = self._hilo_largo()
+        contenido_antes = [m.content for m in self._mensajes()]
+        turno = agent_mod.run_turn(self.contact, "Personal")
+        despues = [m.id for m in self._mensajes()]
+        self.assertNotIn("h0", despues, "el turno debió resumir y borrar lo viejo")
+        self.assertTrue(
+            any(str(m.content).startswith(agent_mod.RESUMEN_ENCABEZADO) for m in self._mensajes())
+        )
+
+        agent_mod.discard_turn(
+            self.contact, turno.message_ids, previous=turno.previous, after=turno.after
+        )
+        self.assertEqual([m.id for m in self._mensajes()], antes)
+        self.assertEqual([m.content for m in self._mensajes()], contenido_antes)
+
+    def test_el_turno_rehecho_conserva_la_nota_de_conversacion_nueva(self):
+        """Descartar crea un checkpoint "ahora": el turno rehecho ya no la generaría."""
+        from langchain_core.messages import HumanMessage
+
+        self.grafo.update_state(
+            self.config, {"messages": [HumanMessage(content="hola", id="h1")]}, as_node="__start__"
+        )
+        en_tres_dias = timezone.now() + datetime.timedelta(days=3)
+        with patch.object(agent_mod.timezone, "now", return_value=en_tres_dias):
+            turno = agent_mod.run_turn(self.contact, "una clásica")
+        self.assertIsNotNone(turno.corte)
+        agent_mod.discard_turn(
+            self.contact,
+            turno.message_ids,
+            previous=turno.previous,
+            after=turno.after,
+            corte=turno.corte,
+        )
+        textos = [str(m.content) for m in self._mensajes()]
+        self.assertEqual(textos[0], "hola")
+        self.assertIn("conversación NUEVA", textos[-1])
+        self.assertNotIn("una clásica", textos)
+
+    def test_la_nota_sobrevive_aunque_el_turno_la_resuma(self):
+        """Con un hilo largo el turno resume y la nota queda dentro del resumen."""
+        self._hilo_largo()
+        en_tres_dias = timezone.now() + datetime.timedelta(days=3)
+        with patch.object(agent_mod.timezone, "now", return_value=en_tres_dias):
+            turno = agent_mod.run_turn(self.contact, "una clásica")
+        self.assertIsNotNone(turno.corte)
+        self.assertIn("conversación NUEVA", turno.corte.content)
+
+    def test_el_borrado_por_ids_ignora_los_que_ya_no_estan(self):
+        """Si otro resumen ya los retiró, RemoveMessage de un id ausente revienta."""
+        from langchain_core.messages import HumanMessage
+
+        self.grafo.update_state(
+            self.config, {"messages": [HumanMessage(content="hola", id="h1")]}, as_node="__start__"
+        )
+        agent_mod.discard_turn(self.contact, ("no-existe", "h1"))
+        self.assertEqual(self._mensajes(), [])
+
+    def test_si_alguien_escribio_despues_del_turno_no_se_pisa(self):
+        """El aviso de domicilios suelta el lock antes de decidir el descarte."""
+        from langchain_core.messages import AIMessage
+
+        self._hilo_largo()
+        turno = agent_mod.run_turn(self.contact, "Personal")
+        self.grafo.update_state(
+            self.config, {"messages": [AIMessage(content="Te atiende Jaime", id="humano")]}
+        )
+        with self.assertLogs("apps.whatsapp.agent", level="WARNING"):
+            agent_mod.discard_turn(
+                self.contact, turno.message_ids, previous=turno.previous, after=turno.after
+            )
+        self.assertIn("humano", [m.id for m in self._mensajes()])
+
+    def test_sin_el_hilo_previo_se_borra_lo_añadido(self):
+        """Compatibilidad: quien no pase `previous` sigue borrando por ids."""
+        from langchain_core.messages import AIMessage, HumanMessage
+
+        self.grafo.update_state(
+            self.config,
+            {"messages": [HumanMessage(content="hola", id="h1"), AIMessage(content="hey", id="a1")]},
+            as_node="__start__",
+        )
+        agent_mod.discard_turn(self.contact, ("a1",))
+        self.assertEqual([m.id for m in self._mensajes()], ["h1"])
 
 
 class ClienteQueVuelveTests(TestCase):
@@ -4453,6 +4721,71 @@ class ClienteQueVuelveTests(TestCase):
     def test_dentro_de_la_misma_charla_no_se_corta_nada(self):
         self.contact.last_message_at = timezone.now() - datetime.timedelta(minutes=20)
         self.assertEqual(agent_mod._corte_de_sesion(self.contact), "")
+
+    def test_el_corte_mira_el_mensaje_anterior_y_no_el_de_ahora(self):
+        """Cuando corre el turno, last_message_at ya es el mensaje nuevo."""
+        self.contact.last_message_at = timezone.now()
+        anterior = timezone.now() - datetime.timedelta(days=9)
+        corte = agent_mod._corte_de_sesion(self.contact, anterior)
+        self.assertIn("conversación NUEVA", corte)
+        self.assertIn("9 días", corte)
+
+    def test_el_turno_mide_el_silencio_con_el_hilo(self):
+        """El turno no puede leer last_message_at: el webhook ya lo pisó.
+
+        Se prueba de punta a punta: un hilo quieto hace 3 días, un contacto
+        cuyo last_message_at es "ahora" (como lo deja el webhook) y el turno
+        tiene que avisarle al modelo de que es otra conversación.
+        """
+        from langchain.agents import create_agent
+        from langchain_core.language_models.fake_chat_models import (
+            FakeMessagesListChatModel,
+        )
+        from langchain_core.messages import AIMessage, HumanMessage
+        from langgraph.checkpoint.memory import InMemorySaver
+
+        grafo = create_agent(
+            model=FakeMessagesListChatModel(responses=[AIMessage(content="¡Hola!")]),
+            tools=[],
+            system_prompt="eres frosty",
+            checkpointer=InMemorySaver(),
+        )
+        config = {"configurable": {"thread_id": agent_mod._thread_id(self.contact)}}
+        grafo.update_state(
+            config,
+            {"messages": [HumanMessage(content="una especial"), AIMessage(content="Creado")]},
+            as_node="__start__",
+        )
+        en_tres_dias = timezone.now() + datetime.timedelta(days=3)
+        # Como lo deja el webhook: con la hora del mensaje que acaba de llegar
+        self.contact.last_message_at = en_tres_dias
+        with patch.object(agent_mod, "_build_agent", return_value=grafo), patch.object(
+            agent_mod.timezone, "now", return_value=en_tres_dias
+        ):
+            agent_mod.run_turn(self.contact, "Hola, quiero un domicilio")
+        textos = [m.content for m in grafo.get_state(config).values["messages"]]
+        self.assertTrue(any("conversación NUEVA" in str(t) for t in textos))
+
+    def test_un_hilo_nuevo_no_lleva_corte(self):
+        from langgraph.checkpoint.memory import InMemorySaver
+        from langchain.agents import create_agent
+        from langchain_core.language_models.fake_chat_models import (
+            FakeMessagesListChatModel,
+        )
+        from langchain_core.messages import AIMessage
+
+        grafo = create_agent(
+            model=FakeMessagesListChatModel(responses=[AIMessage(content="¡Hola!")]),
+            tools=[],
+            system_prompt="eres frosty",
+            checkpointer=InMemorySaver(),
+        )
+        self.contact.last_message_at = timezone.now() - datetime.timedelta(days=30)
+        with patch.object(agent_mod, "_build_agent", return_value=grafo):
+            agent_mod.run_turn(self.contact, "Hola")
+        config = {"configurable": {"thread_id": agent_mod._thread_id(self.contact)}}
+        textos = [m.content for m in grafo.get_state(config).values["messages"]]
+        self.assertFalse(any("conversación NUEVA" in str(t) for t in textos))
 
     def test_un_cliente_nuevo_no_tiene_nada_que_separar(self):
         self.contact.last_message_at = None

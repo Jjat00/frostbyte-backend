@@ -10,7 +10,8 @@ entra vía tools.
 import logging
 import re
 import threading
-from datetime import timedelta
+import uuid
+from datetime import datetime, timedelta
 from typing import NamedTuple
 
 from django.conf import settings
@@ -532,7 +533,10 @@ def build_system_prompt(contact=None, turn=None):
     )
 
 
+from functools import partial
+
 from langchain.agents.middleware import SummarizationMiddleware
+from langchain_core.messages.utils import count_tokens_approximately
 
 SUMMARY_PROMPT = """Eres el que le toma nota a quien atiende un WhatsApp de pedidos \
 de comida y bebida. La conversación de abajo se va a BORRAR y en su lugar queda lo que \
@@ -561,6 +565,25 @@ Conversación:
 {messages}"""
 
 
+RESUMEN_ENCABEZADO = "Esto es lo que se ha hablado con el cliente hasta ahora:"
+
+# Cuánto se le manda como mucho al modelo del resumen. Lo normal son unos pocos
+# mensajes más el resumen anterior (2.000-4.000); el tope existe por lo que se
+# acumula sin pasar por el modelo, como una pausa humana larga.
+PRESUPUESTO_RESUMEN_TOKENS = 24000
+
+# Lo que la librería devuelve EN LUGAR de un resumen cuando algo falla. Si se
+# dejara pasar, reemplazaría la conversación entera por esa frase.
+_RESUMEN_FALLIDO = (
+    "Error generating summary",
+    "Previous conversation was too long to summarize",
+)
+
+
+class _ResumenFallido(Exception):
+    pass
+
+
 class _ResumenEnEspanol(SummarizationMiddleware):
     """El resumen entra al hilo presentado en español.
 
@@ -570,15 +593,90 @@ class _ResumenEnEspanol(SummarizationMiddleware):
     detalle que se le termina colando al cliente.
     """
 
+    def _should_summarize_based_on_reported_tokens(self, messages, threshold):
+        """El disparo se mide con el historial, no con lo que facturó el modelo.
+
+        La librería también resume si el último AIMessage reporta más tokens
+        que el umbral, y ese número incluye el prompt de sistema y las tools
+        (~10.000 a 2026-10). Con un umbral de 6.000 eso resumía en CADA
+        llamada al modelo aunque el historial pesara 3.500: el resumen se
+        rehacía sobre el resumen anterior y en cada vuelta perdía datos (chat
+        de Angelly del 04-10: le cotizó la especial por la clásica).
+        """
+        return False
+
+    def _trim_messages_for_summary(self, messages):
+        """Acota lo que se resume sin tirar nunca el resumen anterior.
+
+        La librería se queda con "los últimos N tokens", y lo primero que cae
+        es justo el resumen previo, que va al principio. Aquí el resumen se
+        conserva siempre y se recorta lo demás.
+        """
+        from langchain_core.messages import HumanMessage
+        from langchain_core.messages.utils import trim_messages
+
+        if self.token_counter(messages) <= PRESUPUESTO_RESUMEN_TOKENS:
+            return messages
+        primero = messages[0] if messages else None
+        cabeza = (
+            [primero]
+            if isinstance(primero, HumanMessage)
+            and isinstance(primero.content, str)
+            and primero.content.startswith(RESUMEN_ENCABEZADO)
+            else []
+        )
+        resto = messages[len(cabeza):]
+        cupo = PRESUPUESTO_RESUMEN_TOKENS - self.token_counter(cabeza)
+        recorte = trim_messages(
+            resto,
+            max_tokens=max(cupo, 0),
+            token_counter=self.token_counter,
+            # Con el resumen delante ya hay contexto: no hace falta que lo
+            # recortado empiece por el cliente, y exigirlo tras un menú gigante
+            # lo dejaba vacío
+            start_on=None if cabeza else "human",
+            strategy="last",
+            allow_partial=True,
+        )
+        return cabeza + list(recorte)
+
+    def _create_summary(self, messages_to_summarize):
+        texto = super()._create_summary(messages_to_summarize)
+        if texto.startswith(_RESUMEN_FALLIDO):
+            raise _ResumenFallido(texto)
+        return texto
+
+    async def _acreate_summary(self, messages_to_summarize):
+        texto = await super()._acreate_summary(messages_to_summarize)
+        if texto.startswith(_RESUMEN_FALLIDO):
+            raise _ResumenFallido(texto)
+        return texto
+
+    def before_model(self, state, runtime):
+        """Si el resumen falla, el turno sigue con el historial entero.
+
+        La librería, ante un error, devuelve la frase del error como si fuera
+        el resumen y con eso BORRA la conversación. Mejor un turno con más
+        tokens que un agente que no recuerda qué le pidieron.
+        """
+        try:
+            return super().before_model(state, runtime)
+        except _ResumenFallido as error:
+            logger.warning("No se resumió el hilo: %s", error)
+            return None
+
+    async def abefore_model(self, state, runtime):
+        try:
+            return await super().abefore_model(state, runtime)
+        except _ResumenFallido as error:
+            logger.warning("No se resumió el hilo: %s", error)
+            return None
+
     @staticmethod
     def _build_new_messages(summary):
         from langchain_core.messages import HumanMessage
 
-        return [
-            HumanMessage(
-                content=f"Esto es lo que se ha hablado con el cliente hasta ahora:\n\n{summary}"
-            )
-        ]
+        return [HumanMessage(content=f"{RESUMEN_ENCABEZADO}\n\n{summary}")]
 
 
 def _summarization_middleware():
@@ -607,6 +705,16 @@ def _summarization_middleware():
         trigger=("tokens", settings.WHATSAPP_SUMMARY_TRIGGER_TOKENS),
         keep=("messages", settings.WHATSAPP_SUMMARY_KEEP_MESSAGES),
         summary_prompt=SUMMARY_PROMPT,
+        # El contador por defecto se escala con el uso reportado (que incluye
+        # el prompt de sistema) y volvería a inflar el historial; este cuenta
+        # solo los mensajes.
+        token_counter=partial(count_tokens_approximately),
+        # El recorte de fábrica (los últimos 4.000 tokens) tiraba el resumen
+        # anterior y, si el tramo era la respuesta de consultar_menu, no
+        # dejaba nada: "Previous conversation was too long to summarize." y el
+        # hilo sin memoria. El recorte propio está en
+        # _ResumenEnEspanol._trim_messages_for_summary.
+        trim_tokens_to_summarize=PRESUPUESTO_RESUMEN_TOKENS,
     )
 
 
@@ -652,15 +760,22 @@ def _thread_id(contact):
     return f"wa:{contact.phone}"
 
 
-def _corte_de_sesion(contact):
+def _corte_de_sesion(contact, anterior=None):
     """La nota que separa la conversación de hoy de la de la otra vez, o "".
 
-    Sale del último mensaje registrado del contacto; si no hay ninguno, es un
-    cliente nuevo y no hay nada que separar.
+    `anterior`: la última vez que se movió el hilo (la hora de su último
+    checkpoint, ver _ultimo_movimiento). Es lo que hay que medir y no
+    last_message_at: el webhook pisa ese campo con la hora del mensaje nuevo
+    antes de que corra el turno, así que el turno siempre leía "hace unos
+    segundos" y la nota no salió nunca del 15-09 al 05-10 (Angelly y Natt el
+    04-10 recibieron pedidos de otros días como si siguieran vivos). Sin
+    `anterior` se usa last_message_at. Si no hay ninguno, es un cliente nuevo
+    y no hay nada que separar.
     """
-    if not contact.last_message_at:
+    ultimo = anterior or contact.last_message_at
+    if not ultimo:
         return ""
-    quieto = timezone.now() - contact.last_message_at
+    quieto = timezone.now() - ultimo
     if quieto < NUEVA_CONVERSACION:
         return ""
     dias = quieto.days
@@ -670,6 +785,24 @@ def _corte_de_sesion(contact):
         horas = int(quieto.total_seconds() // 3600)
         cuanto = "una hora" if horas <= 1 else f"{horas} horas"
     return SESION_PROMPT.format(cuanto=cuanto)
+
+
+def _ultimo_movimiento(state):
+    """Cuándo se escribió por última vez en el hilo, o None si no existe.
+
+    Todo lo que pasa en la conversación deja checkpoint: los turnos del
+    agente, lo que escribe el cliente o el equipo durante una pausa
+    (record_messages) y los turnos descartados. Por eso sirve para saber cuánto
+    lleva quieta, venga el turno del worker, del vigía o de domicilios.
+    """
+    creado = getattr(state, "created_at", None)
+    if not creado:
+        return None
+    try:
+        return datetime.fromisoformat(creado)
+    except (TypeError, ValueError):
+        logger.warning("Checkpoint con fecha ilegible: %r", creado)
+        return None
 
 
 def record_messages(contact, entries):
@@ -785,12 +918,23 @@ class AgentTurn(NamedTuple):
     agente sin memoria de algo que YA pasó: hay que enviarlo sí o sí.
     sticker: el que remata el turno, si el modelo eligió uno. Lo manda el
     worker después del texto (ver stickers.deliver).
+    previous: los mensajes del hilo antes del turno, para que discard_turn
+    lo deje exactamente así aunque el resumen lo haya reescrito.
+    after: los ids del hilo al terminar el turno. discard_turn solo restaura
+    `previous` si el hilo sigue así: si alguien escribió entretanto, pisarlo
+    borraría lo suyo.
+    corte: la nota de conversación nueva que abrió el turno, si la hubo.
+    Descartar el turno NO la quita: el turno rehecho mide el silencio desde
+    el descarte (segundos) y ya no la generaría.
     """
 
     replies: tuple
     message_ids: tuple
     mutated: bool
     sticker: object = None
+    previous: tuple = None
+    after: tuple = None
+    corte: object = None
 
 
 def run_turn(
@@ -824,16 +968,25 @@ def run_turn(
         "recursion_limit": 20,
     }
     before = set()
+    previous = None
+    anterior = None
     try:
         state = agent.get_state(config)
-        before = {
-            m.id for m in (state.values or {}).get("messages", []) if getattr(m, "id", None)
-        }
+        previous = tuple((state.values or {}).get("messages", []) or [])
+        before = {m.id for m in previous if getattr(m, "id", None)}
+        anterior = _ultimo_movimiento(state)
     except Exception:
         logger.exception("No se pudo leer el hilo previo de %s", contact.phone)
 
-    corte = _corte_de_sesion(contact)
-    entrada = ([{"role": "user", "content": corte}] if corte else []) + [
+    from langchain_core.messages import HumanMessage
+
+    corte = _corte_de_sesion(contact, anterior) if previous else ""
+    # Se guarda el mensaje tal cual, no se busca después en el hilo: si el
+    # turno resume, la nota puede acabar dentro del resumen y sin su id
+    nota_corte = (
+        HumanMessage(content=corte, id=f"corte-{uuid.uuid4().hex}") if corte else None
+    )
+    entrada = ([nota_corte] if nota_corte else []) + [
         {"role": "user", "content": user_text}
     ]
     result = agent.invoke(
@@ -861,26 +1014,61 @@ def run_turn(
         message_ids=tuple(m.id for m in added),
         mutated=mutated or turn_ctx.posted,
         sticker=turn_ctx.sticker,
+        previous=previous,
+        after=tuple(m.id for m in messages),
+        corte=nota_corte,
     )
 
 
-def discard_turn(contact, message_ids):
-    """Borra del hilo los mensajes de un turno que no se llegó a enviar.
+def discard_turn(contact, message_ids, previous=None, after=None, corte=None):
+    """Deshace en el hilo un turno que no se llegó a enviar.
 
     Deja la conversación como estaba antes del turno: el mensaje del cliente
     vuelve a estar pendiente y se reenvía junto con los que llegaron después,
     en un solo turno. Sin esto el agente creería haber dicho algo que el
     cliente nunca leyó.
+
+    `previous` (AgentTurn.previous) es el hilo antes del turno, y con él se
+    restaura entero. Borrar solo lo añadido no basta cuando el turno resumió:
+    el resumen borra los mensajes viejos y añade uno nuevo, así que quitar lo
+    añadido se llevaba el resumen y dejaba el hilo sin memoria (Angelly,
+    04-10, al corregir "Personal" por "Perdón para 2").
+
+    Solo se restaura si el hilo sigue exactamente como lo dejó el turno
+    (`after`). Quien llama tiene que sostener el _phone_lock desde run_turn
+    hasta aquí, así que no debería cambiar; si cambió, restaurar borraría lo
+    que escribió otro y se vuelve al borrado por ids (solo los que siguen en
+    el hilo), que como mucho pierde el resumen de ese turno.
+
+    `corte` (AgentTurn.corte) se queda en el hilo: ver AgentTurn.
     """
     from langchain_core.messages import RemoveMessage
+    from langgraph.graph.message import REMOVE_ALL_MESSAGES
 
-    if not message_ids:
-        return
     agent = _build_agent(contact)
     config = {"configurable": {"thread_id": _thread_id(contact)}}
-    agent.update_state(
-        config, {"messages": [RemoveMessage(id=mid) for mid in message_ids]}
-    )
+    actual = agent.get_state(config).values.get("messages", []) or []
+    if previous is not None and after is not None:
+        if tuple(m.id for m in actual) == tuple(after):
+            agent.update_state(
+                config,
+                {
+                    "messages": [
+                        RemoveMessage(id=REMOVE_ALL_MESSAGES),
+                        *previous,
+                        *([corte] if corte is not None else []),
+                    ]
+                },
+            )
+            return
+        logger.warning(
+            "El hilo de %s cambió tras el turno: se descarta por ids", contact.phone
+        )
+    presentes = {m.id for m in actual}
+    conservar = getattr(corte, "id", None)
+    borrar = [mid for mid in message_ids if mid in presentes and mid != conservar]
+    if borrar:
+        agent.update_state(config, {"messages": [RemoveMessage(id=mid) for mid in borrar]})
 
 
 def run_agent(contact, user_text):

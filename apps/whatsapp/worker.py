@@ -706,7 +706,13 @@ def _run_turn(phone, batch):
         # incompleta: se descarta y el lote vuelve a la cola para rehacerse
         # entero. Un turno que ya creó o cambió un pedido NO se puede descartar.
         if _has_pending(phone) and not turn.mutated and batch.get("aborts", 0) < MAX_ABORTS:
-            discard_turn(contact, turn.message_ids)
+            discard_turn(
+                contact,
+                turn.message_ids,
+                previous=turn.previous,
+                after=turn.after,
+                corte=turn.corte,
+            )
             _requeue(phone, batch)
             return
 

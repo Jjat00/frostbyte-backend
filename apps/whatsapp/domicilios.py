@@ -384,24 +384,32 @@ def avisar(contact, ahora=None):
             # quedaría con la foto de un domicilio que no le vamos a ofrecer.
             # Para entregar el texto sí se usa, en _deliver.
         )
-    if not turn.replies and turn.sticker is None:
-        logger.info("Los domicilios volvieron pero %s no esperaba ninguno", contact.phone)
-        return turn
-    # El modelo tardó lo suyo en pensar y el mundo pudo cambiar: si mientras
-    # tanto apagaron los domicilios, cerraron el local, el cliente escribió o
-    # alguien del equipo entró a atenderlo, este mensaje ya no es verdad o
-    # sobra. Se tira antes de mandarlo. El estado del contacto se relee de la
-    # base: el que hay en memoria es el de antes de pensar.
-    if (
-        reactivacion() is None
-        or turno_vivo(contact.phone)
-        or _lo_atiende_alguien(contact)
-        or _escribio_mientras_tanto(contact)
-    ):
-        logger.info("El aviso a %s se descarta: el local cambió mientras tanto", contact.phone)
-        if not turn.mutated:
-            discard_turn(contact, turn.message_ids)
-        return turn
+        if not turn.replies and turn.sticker is None:
+            logger.info("Los domicilios volvieron pero %s no esperaba ninguno", contact.phone)
+            return turn
+        # El modelo tardó lo suyo en pensar y el mundo pudo cambiar: si mientras
+        # tanto apagaron los domicilios, cerraron el local, el cliente escribió o
+        # alguien del equipo entró a atenderlo, este mensaje ya no es verdad o
+        # sobra. Se tira antes de mandarlo. El estado del contacto se relee de la
+        # base: el que hay en memoria es el de antes de pensar. Todo sin soltar
+        # el lock: si alguien escribiera en el hilo entre la decisión y el
+        # descarte, restaurar el hilo previo se llevaría lo suyo.
+        if (
+            reactivacion() is None
+            or turno_vivo(contact.phone)
+            or _lo_atiende_alguien(contact)
+            or _escribio_mientras_tanto(contact)
+        ):
+            logger.info("El aviso a %s se descarta: el local cambió mientras tanto", contact.phone)
+            if not turn.mutated:
+                discard_turn(
+                    contact,
+                    turn.message_ids,
+                    previous=turn.previous,
+                    after=turn.after,
+                    corte=turn.corte,
+                )
+            return turn
     logger.info("Se le avisó a %s que los domicilios ya están activos", contact.phone)
     _deliver(contact, phone_number_id, turn)
     return turn
