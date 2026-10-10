@@ -71,6 +71,9 @@ def lo_ultimo_nuestro(contact):
         ChatMessage.objects.filter(
             phone=contact.phone[:30], direction=ChatMessage.Direction.OUTBOUND
         )
+        # El sticker sale después del texto y no dice nada: la pregunta que
+        # contesta el cliente es el texto de antes
+        .exclude(body="[Sticker]")
         .order_by("-created_at")
         .values_list("body", flat=True)
         .first()

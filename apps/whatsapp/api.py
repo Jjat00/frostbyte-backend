@@ -8,16 +8,28 @@ panel se abre desde el celular, que es donde está el dueño cuando quiere
 cambiarle el tono al agente o subirle un sticker.
 """
 
+from django.db.models import OuterRef, Subquery
+from django.db.models.functions import Left
+from django.shortcuts import get_object_or_404
+from django.utils.dateparse import parse_datetime
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.accounts.permissions import IsAdminUser
+from apps.accounts.permissions import IsAdminUser, IsStaffMember
+from apps.search import PlainSearchFilter
+from config.pagination import StandardResultsPagination
 
-from .models import AgentSettings, AgentTone, Sticker
-from .serializers import AgentSettingsSerializer, AgentToneSerializer, StickerSerializer
+from .models import AgentSettings, AgentTone, ChatMessage, Sticker, WhatsAppContact
+from .serializers import (
+    AgentSettingsSerializer,
+    AgentToneSerializer,
+    ChatMessageSerializer,
+    ConversationSerializer,
+    StickerSerializer,
+)
 from .stickers import StickerError, from_upload, has_transparency
 
 # Un sticker sale de una imagen o de un video corto grabado en el celular; más
@@ -189,3 +201,102 @@ class StickerViewSet(viewsets.ModelViewSet):
                 "transparencia si quieres arreglarlo."
             )
         return data
+
+
+# Lo que trae cada vistazo al chat. Una conversación de un pedido cabe de
+# sobra; lo anterior se pide hacia atrás con ?before=.
+MESSAGES_PAGE = 60
+
+
+class ConversationPagination(StandardResultsPagination):
+    page_size = 30
+
+
+class ConversationViewSet(viewsets.ReadOnlyModelViewSet):
+    """Los chats de WhatsApp para el equipo: la bandeja y cada conversación.
+
+    Solo lectura y abierta a admin y empleados: quien está en turno necesita
+    ver qué le prometió Frosty al cliente o qué le contestó un compañero, pero
+    responder sigue siendo cosa de la app de WhatsApp Business (un mensaje que
+    saliera de aquí no pasaría por la pausa humana ni por el agente).
+
+    El archivo es `ChatMessage`, que se indexa por teléfono y no por FK: se
+    une al contacto por `phone[:30]`, que es lo que cabe en esa columna.
+    """
+
+    serializer_class = ConversationSerializer
+    permission_classes = [IsStaffMember]
+    pagination_class = ConversationPagination
+    filter_backends = [PlainSearchFilter]
+    search_fields = ["customer_name", "profile_name", "username", "phone", "contact_phone"]
+
+    def get_queryset(self):
+        if self.action != "list":
+            return WhatsAppContact.objects.all()
+        last = ChatMessage.objects.filter(phone=OuterRef("phone_key")).order_by("-created_at")
+        return (
+            WhatsAppContact.objects.filter(last_message_at__isnull=False)
+            .annotate(phone_key=Left("phone", 30))
+            .annotate(
+                last_body=Subquery(last.values("body")[:1]),
+                last_author=Subquery(last.values("author")[:1]),
+            )
+            .order_by("-last_message_at")
+        )
+
+    @action(detail=True, methods=["get"])
+    def messages(self, request, pk=None):
+        """Los últimos mensajes del chat en orden de lectura (viejo → nuevo).
+
+        `?before=<fecha ISO>` trae los anteriores a esa fecha, para el botón
+        de "ver mensajes anteriores". Junto con los mensajes van los pedidos
+        de ese teléfono, que es lo segundo que se busca al leer el chat.
+        """
+        contact = get_object_or_404(WhatsAppContact, pk=pk)
+        qs = ChatMessage.objects.filter(phone=contact.phone[:30])
+        before = parse_datetime(request.query_params.get("before") or "")
+        if before is not None:
+            qs = qs.filter(created_at__lt=before)
+        page = list(qs.order_by("-created_at")[: MESSAGES_PAGE + 1])
+        has_more = len(page) > MESSAGES_PAGE
+        page = list(reversed(page[:MESSAGES_PAGE]))
+        return Response(
+            {
+                "contact": ConversationSerializer(contact).data,
+                "messages": ChatMessageSerializer(page, many=True).data,
+                "has_more": has_more,
+                "orders": _orders_of(contact),
+            }
+        )
+
+
+def _orders_of(contact, limit=5):
+    """Los últimos pedidos de ese cliente, sin importar quién los creó.
+
+    Mismo criterio que el admin (`pedidos_del_cliente`): por los últimos 10
+    dígitos del teléfono, que es como quedan también los que el equipo cierra
+    a mano. Un BSUID no tiene dígitos que comparar; ahí se usa el celular que
+    dio el cliente, si lo dio.
+    """
+    from apps.orders.models import Order
+
+    from .kapso import is_bsuid
+    from .tools import normalize_phone
+
+    source = contact.contact_phone if is_bsuid(contact.phone) else contact.phone
+    digits = normalize_phone(source or "")[-10:]
+    if len(digits) < 10:
+        return []
+    pedidos = Order.objects.filter(customer_phone__endswith=digits).order_by("-created_at")[:limit]
+    return [
+        {
+            "id": o.id,
+            "order_number": o.order_number,
+            "status": o.status,
+            "status_display": o.get_status_display(),
+            "order_type_display": o.get_order_type_display(),
+            "total": str(o.total),
+            "created_at": o.created_at,
+        }
+        for o in pedidos
+    ]

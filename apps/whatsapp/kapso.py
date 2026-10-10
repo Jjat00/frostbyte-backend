@@ -73,6 +73,33 @@ def _record_sent(data, to_phone, body=""):
         logger.exception("No se pudo registrar el wamid del mensaje enviado")
 
 
+def _archive_body(payload):
+    """Cómo queda en el archivo (ChatMessage) un mensaje que mandamos.
+
+    Antes solo se guardaba el texto, y el chat que lee el equipo en el panel
+    quedaba con huecos donde Frosty había mandado un sticker, una foto o los
+    botones. Las reacciones no van: no son un mensaje del chat.
+    """
+    kind = payload.get("type")
+    if kind == "text":
+        return (payload.get("text") or {}).get("body", "")
+    if kind == "interactive":
+        interactive = payload.get("interactive") or {}
+        body = (interactive.get("body") or {}).get("text", "")
+        titles = [
+            (b.get("reply") or {}).get("title", "")
+            for b in (interactive.get("action") or {}).get("buttons") or []
+        ]
+        titles = [t for t in titles if t]
+        return f"{body}\n[Botones: {' · '.join(titles)}]" if titles else body
+    if kind == "sticker":
+        return "[Sticker]"
+    if kind == "image":
+        caption = (payload.get("image") or {}).get("caption", "")
+        return f"[Foto] {caption}".strip()
+    return ""
+
+
 def recent_undelivered(phone, within_minutes=UNDELIVERED_LOOKBACK_MINUTES, limit=5):
     """Mensajes recientes del cliente que WhatsApp no nos pudo entregar.
 
@@ -150,11 +177,7 @@ def _post_message(phone_number_id, payload):
             if response.status_code < 300:
                 data = response.json()
                 if _recipient_of(payload):
-                    _record_sent(
-                        data,
-                        _recipient_of(payload),
-                        (payload.get("text") or {}).get("body", ""),
-                    )
+                    _record_sent(data, _recipient_of(payload), _archive_body(payload))
                 return data
             last_error = f"HTTP {response.status_code}: {response.text[:300]}"
             # Solo reintenta errores transitorios

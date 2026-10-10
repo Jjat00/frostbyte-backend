@@ -10,7 +10,10 @@ from base64 import b64encode
 
 from rest_framework import serializers
 
-from .models import AgentSettings, AgentTone, Sticker
+from django.utils import timezone
+
+from .kapso import is_bsuid
+from .models import AgentSettings, AgentTone, ChatMessage, Sticker, WhatsAppContact
 
 
 class AgentToneSerializer(serializers.ModelSerializer):
@@ -232,3 +235,61 @@ class StickerSerializer(serializers.ModelSerializer):
                 "Escribe cuándo usarlo: es lo único que el agente lee para elegirlo."
             )
         return value
+
+
+class ChatMessageSerializer(serializers.ModelSerializer):
+    """Un mensaje del archivo tal como lo ve el equipo en el panel."""
+
+    class Meta:
+        model = ChatMessage
+        fields = ["id", "direction", "author", "body", "created_at"]
+
+
+class ConversationSerializer(serializers.ModelSerializer):
+    """Un chat de WhatsApp en la bandeja del panel: quién es y en qué va.
+
+    `attended_by` responde lo que el empleado quiere saber al abrir la
+    bandeja: si ese cliente lo está atendiendo Frosty o una persona del
+    equipo (pausa humana o handoff), o si está bloqueado.
+    """
+
+    name = serializers.SerializerMethodField()
+    is_bsuid = serializers.SerializerMethodField()
+    attended_by = serializers.SerializerMethodField()
+    last_message = serializers.SerializerMethodField()
+
+    class Meta:
+        model = WhatsAppContact
+        fields = [
+            "id",
+            "phone",
+            "is_bsuid",
+            "contact_phone",
+            "name",
+            "profile_name",
+            "username",
+            "attended_by",
+            "human_until",
+            "last_message_at",
+            "last_message",
+        ]
+
+    def get_name(self, obj):
+        return obj.customer_name or obj.profile_name or obj.username or ""
+
+    def get_is_bsuid(self, obj):
+        return is_bsuid(obj.phone)
+
+    def get_attended_by(self, obj):
+        if obj.is_blocked:
+            return "blocked"
+        if obj.human_handoff or (obj.human_until and obj.human_until > timezone.now()):
+            return "human"
+        return "agent"
+
+    def get_last_message(self, obj):
+        # Viene anotado por la vista (una sola consulta para toda la página)
+        body = getattr(obj, "last_body", None)
+        if body is None:
+            return None
+        return {"body": body, "author": getattr(obj, "last_author", "")}

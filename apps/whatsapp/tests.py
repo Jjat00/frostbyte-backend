@@ -5760,3 +5760,108 @@ class FechaDeLosDomiciliosTests(TestCase):
         cfg.customer_ordering_enabled = False
         cfg.save()
         self.assertGreater(self.StoreSettings.load().ordering_changed_at, primera)
+
+
+class BandejaDeChatsEnElPanelTests(TestCase):
+    """Los chats con Frosty, leídos por el equipo desde el panel."""
+
+    def setUp(self):
+        from django.contrib.auth import get_user_model
+        from rest_framework.test import APIClient
+
+        User = get_user_model()
+        self.api = APIClient()
+        self.admin = User.objects.create(username="dueno", email="d@x.com", role="admin")
+        self.empleado = User.objects.create(username="mesero", email="m@x.com", role="employee")
+        self.cliente = User.objects.create(username="gmail", email="c@x.com", role="customer")
+        self.contact = WhatsAppContact.objects.create(
+            phone=PHONE, customer_name="Dayana", last_message_at=timezone.now()
+        )
+        ChatMessage.remember("wamid.1", PHONE, ChatMessage.Direction.INBOUND, "hola, una salchipapa")
+        ChatMessage.remember("wamid.2", PHONE, ChatMessage.Direction.OUTBOUND, "¡De una, parce!")
+
+    def test_solo_el_personal_ve_los_chats(self):
+        url = "/api/v1/whatsapp/conversations/"
+        self.assertIn(self.api.get(url).status_code, (401, 403))
+        self.api.force_authenticate(self.cliente)
+        self.assertEqual(self.api.get(url).status_code, 403)
+        self.api.force_authenticate(self.empleado)
+        self.assertEqual(self.api.get(url).status_code, 200)
+
+    def test_la_bandeja_trae_el_ultimo_mensaje_y_quien_atiende(self):
+        WhatsAppContact.objects.create(phone="573009998877")  # nunca escribió
+        self.api.force_authenticate(self.empleado)
+        results = self.api.get("/api/v1/whatsapp/conversations/").data["results"]
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["name"], "Dayana")
+        self.assertEqual(results[0]["last_message"]["body"], "¡De una, parce!")
+        self.assertEqual(results[0]["attended_by"], "agent")
+
+        self.contact.human_until = timezone.now() + datetime.timedelta(minutes=10)
+        self.contact.save()
+        results = self.api.get("/api/v1/whatsapp/conversations/").data["results"]
+        self.assertEqual(results[0]["attended_by"], "human")
+
+    def test_se_busca_sin_tildes_ni_mayusculas(self):
+        self.api.force_authenticate(self.empleado)
+        self.assertEqual(
+            len(self.api.get("/api/v1/whatsapp/conversations/?search=DAYANA").data["results"]), 1
+        )
+        self.assertEqual(
+            len(self.api.get("/api/v1/whatsapp/conversations/?search=pepe").data["results"]), 0
+        )
+
+    def test_el_chat_viene_en_orden_de_lectura_con_sus_pedidos(self):
+        order = Order.objects.create(
+            source=Order.Source.WHATSAPP, customer_phone=PHONE, customer_name="Dayana"
+        )
+        self.api.force_authenticate(self.empleado)
+        data = self.api.get(f"/api/v1/whatsapp/conversations/{self.contact.id}/messages/").data
+        self.assertEqual([m["body"] for m in data["messages"]], ["hola, una salchipapa", "¡De una, parce!"])
+        self.assertEqual(data["messages"][1]["author"], "agent")
+        self.assertFalse(data["has_more"])
+        self.assertEqual([o["id"] for o in data["orders"]], [order.id])
+
+    def test_los_mensajes_anteriores_se_piden_hacia_atras(self):
+        from . import api as wa_api
+
+        self.api.force_authenticate(self.empleado)
+        with patch.object(wa_api, "MESSAGES_PAGE", 1):
+            data = self.api.get(f"/api/v1/whatsapp/conversations/{self.contact.id}/messages/").data
+            self.assertEqual([m["body"] for m in data["messages"]], ["¡De una, parce!"])
+            self.assertTrue(data["has_more"])
+            antes = self.api.get(
+                f"/api/v1/whatsapp/conversations/{self.contact.id}/messages/",
+                {"before": data["messages"][0]["created_at"]},
+            ).data
+            self.assertEqual([m["body"] for m in antes["messages"]], ["hola, una salchipapa"])
+
+
+class ArchivoDeLoQueMandaFrostyTests(TestCase):
+    """El chat del panel no puede tener huecos donde Frosty mandó algo."""
+
+    def test_stickers_fotos_y_botones_quedan_en_el_archivo(self):
+        from .kapso import _archive_body
+
+        self.assertEqual(_archive_body({"type": "sticker", "sticker": {"link": "x"}}), "[Sticker]")
+        self.assertEqual(
+            _archive_body({"type": "image", "image": {"link": "x", "caption": "Así es"}}),
+            "[Foto] Así es",
+        )
+        botones = {
+            "type": "interactive",
+            "interactive": {
+                "body": {"text": "¿Confirmamos?"},
+                "action": {"buttons": [{"reply": {"title": "Sí"}}, {"reply": {"title": "No"}}]},
+            },
+        }
+        self.assertEqual(_archive_body(botones), "¿Confirmamos?\n[Botones: Sí · No]")
+        self.assertEqual(_archive_body({"type": "reaction", "reaction": {"emoji": "👍"}}), "")
+
+    def test_el_sticker_no_tapa_la_pregunta_que_contesta_el_cliente(self):
+        from .intencion import lo_ultimo_nuestro
+
+        contact = WhatsAppContact.objects.create(phone=PHONE)
+        ChatMessage.remember("wamid.a", PHONE, ChatMessage.Direction.OUTBOUND, "¿Lo cancelas?")
+        ChatMessage.remember("wamid.b", PHONE, ChatMessage.Direction.OUTBOUND, "[Sticker]")
+        self.assertEqual(lo_ultimo_nuestro(contact), "¿Lo cancelas?")
