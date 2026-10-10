@@ -34,4 +34,5 @@ dependencies = [
     "psycopg[binary]>=3.3.4",
     "psycopg-pool>=3.3.1",
     "imageio-ffmpeg>=0.6.0",
+    "langchain-anthropic>=1.7.5",
 ]

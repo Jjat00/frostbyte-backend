@@ -14,6 +14,7 @@ from io import StringIO
 from unittest.mock import Mock, patch
 
 from django.test import (
+    SimpleTestCase,
     TestCase,
     TransactionTestCase,
     override_settings,
@@ -1529,6 +1530,81 @@ class ParametrosDelModeloTests(TestCase):
         self.assertTrue(is_reasoning_model("gpt-5.6-terra"))
         self.assertFalse(is_reasoning_model("gpt-5-chat-latest"))
         self.assertFalse(is_reasoning_model("gpt-4o-mini"))
+
+
+class ClaudeConRespaldoDeTerraTests(SimpleTestCase):
+    """Conversa Claude Haiku y, si falla o se niega, responde Terra en el mismo turno."""
+
+    @override_settings(
+        WHATSAPP_AGENT_MODEL="claude-haiku-5-5",
+        WHATSAPP_AGENT_FALLBACK_MODEL="gpt-5.6-terra",
+        ANTHROPIC_API_KEY="sk-ant-prueba",
+    )
+    def test_con_clave_conversa_haiku_y_respalda_terra(self):
+        self.assertEqual(agent_mod._agent_models(), ("claude-haiku-5-5", "gpt-5.6-terra"))
+
+    @override_settings(
+        WHATSAPP_AGENT_MODEL="claude-haiku-5-5",
+        WHATSAPP_AGENT_FALLBACK_MODEL="gpt-5.6-terra",
+        ANTHROPIC_API_KEY="",
+    )
+    def test_sin_clave_de_anthropic_va_directo_a_terra(self):
+        self.assertEqual(agent_mod._agent_models(), ("gpt-5.6-terra", None))
+
+    @override_settings(WHATSAPP_AGENT_MODEL="gpt-5.6-terra", WHATSAPP_AGENT_FALLBACK_MODEL="gpt-5.6-terra")
+    def test_sin_respaldo_si_es_el_mismo_modelo(self):
+        self.assertEqual(agent_mod._agent_models(), ("gpt-5.6-terra", None))
+
+    @override_settings(ANTHROPIC_API_KEY="sk-ant-prueba", WHATSAPP_AGENT_REASONING_EFFORT="low")
+    def test_claude_va_por_anthropic_sin_temperature(self):
+        from langchain_anthropic import ChatAnthropic
+        from langchain_openai import ChatOpenAI
+
+        from .llm import agent_chat_model
+
+        claude = agent_chat_model("claude-haiku-5-5")
+        self.assertIsInstance(claude, ChatAnthropic)
+        self.assertIsNone(claude.temperature, "Haiku 5.5 rechaza temperature")
+        self.assertEqual(claude.output_config, {"effort": "low"})
+        self.assertIsInstance(agent_chat_model("gpt-5.6-terra"), ChatOpenAI)
+
+    def _agente(self, principal):
+        from langchain.agents import create_agent
+        from langchain.agents.middleware import ModelFallbackMiddleware
+        from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+        from langchain_core.messages import AIMessage
+
+        respaldo = GenericFakeChatModel(messages=iter([AIMessage(content="Te responde Terra")]))
+        return create_agent(
+            model=principal,
+            tools=[],
+            middleware=[ModelFallbackMiddleware(respaldo), agent_mod._rechazo_es_error()],
+        )
+
+    def test_una_negativa_de_claude_la_responde_el_respaldo(self):
+        from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+        from langchain_core.messages import AIMessage
+
+        negativa = AIMessage(content="", response_metadata={"stop_reason": "refusal"})
+        principal = GenericFakeChatModel(messages=iter([negativa]))
+        result = self._agente(principal).invoke({"messages": [("user", "hola")]})
+        self.assertEqual(result["messages"][-1].content, "Te responde Terra")
+
+    def test_un_error_de_claude_lo_responde_el_respaldo(self):
+        from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+
+        principal = GenericFakeChatModel(messages=iter([]))  # sin respuestas: revienta
+        result = self._agente(principal).invoke({"messages": [("user", "hola")]})
+        self.assertEqual(result["messages"][-1].content, "Te responde Terra")
+
+    def test_una_respuesta_normal_no_toca_el_respaldo(self):
+        from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+        from langchain_core.messages import AIMessage
+
+        normal = AIMessage(content="Qué hubo", response_metadata={"stop_reason": "end_turn"})
+        principal = GenericFakeChatModel(messages=iter([normal]))
+        result = self._agente(principal).invoke({"messages": [("user", "hola")]})
+        self.assertEqual(result["messages"][-1].content, "Qué hubo")
 
 
 class PersonalidadYStickersTests(TestCase):

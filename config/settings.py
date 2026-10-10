@@ -393,9 +393,15 @@ KAPSO_PHONE_NUMBER_IDS = [
 ]
 # Interruptor general del agente (los webhooks se registran igual, sin responder)
 WHATSAPP_AGENT_ENABLED = os.getenv('WHATSAPP_AGENT_ENABLED', 'True').lower() == 'true'
-WHATSAPP_AGENT_MODEL = os.getenv('WHATSAPP_AGENT_MODEL', 'gpt-5.6-terra')
-# Cuánto razona antes de responder (none|low|medium|high|xhigh|max). Solo lo
-# usan los modelos de razonamiento (GPT-5 en adelante); 'low' es el equilibrio
+# Conversa Claude Haiku 5.5 (hay créditos de Anthropic) y, si falla o se
+# niega, responde Terra en el mismo turno. La eval del 2026-10-09 (240 chats,
+# 20 escenarios) los dejó empatados en calidad y a Haiku más rápido. Sin
+# ANTHROPIC_API_KEY el agente arranca directo con el modelo de respaldo.
+WHATSAPP_AGENT_MODEL = os.getenv('WHATSAPP_AGENT_MODEL', 'claude-haiku-5-5')
+WHATSAPP_AGENT_FALLBACK_MODEL = os.getenv('WHATSAPP_AGENT_FALLBACK_MODEL', 'gpt-5.6-terra')
+ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY', '')
+# Cuánto razona antes de responder (none|low|medium|high|xhigh|max). Lo usan
+# los modelos de razonamiento (GPT-5 en adelante) y Claude; 'low' es el equilibrio
 # entre calidad y latencia que aguanta un chat de WhatsApp.
 WHATSAPP_AGENT_REASONING_EFFORT = os.getenv('WHATSAPP_AGENT_REASONING_EFFORT', 'low')
 # Leer lo que manda el cliente (audios e imágenes) es trabajo mecánico: va con

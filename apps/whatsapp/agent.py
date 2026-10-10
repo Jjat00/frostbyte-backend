@@ -21,7 +21,7 @@ from apps.orders.coverage import coverage_label
 from apps.orders.models import StoreSettings
 
 from . import banned, kapso
-from .llm import chat_model_params
+from .llm import agent_chat_model, chat_model_params, is_anthropic_model
 from .mood import sticker_urge
 from .models import AgentSettings, Sticker, StickerDraft
 from .tools import TurnContext, build_tools
@@ -244,7 +244,9 @@ sobre todo, cuando la frase venga con plata: un monto, un billete, "completo", "
 "efectivo", "Nequi", "comprobante". "Cancelo completo" es pagar con el valor exacto: \
 paga_con='exacto'. Anular solo es cuando el cliente lo dice sin lugar a dudas —"cancélame el \
 pedido", "anúlalo", "ya no lo quiero", "déjalo así"— y solo ahí se toca cancelar_pedido. Si \
-la frase te deja con dudas, pregúntale qué quiere decir antes de tocar nada: contestarle "no \
+dice que ya no lo quiere o ya no lo necesita ("ya no la quiero, cancélela", "cancélelo que ya \
+comimos"), eso es anular aunque use "cancelar": anúlalo de una, sin preguntarle si está \
+pagando. Si la frase te deja con dudas, pregúntale qué quiere decir antes de tocar nada: contestarle "no \
 puedo cancelar tu pedido" a alguien que solo estaba pagando es de lo peor que puede pasar en \
 este chat, y encima lo deja creyendo que le anulaste algo.
 
@@ -718,20 +720,68 @@ def _summarization_middleware():
     )
 
 
+class RechazoDelModelo(Exception):
+    """Claude se negó a responder (stop_reason "refusal")."""
+
+
+def _rechazo_es_error():
+    """Convierte la negativa de Claude en un error para que salte el respaldo.
+
+    Una negativa llega como respuesta normal con stop_reason "refusal" y sin
+    texto; ModelFallbackMiddleware solo reacciona a excepciones, así que sin
+    esto el cliente se quedaría sin contestación.
+    """
+    from langchain.agents.middleware import wrap_model_call
+
+    @wrap_model_call
+    def rechazo_es_error(request, handler):
+        response = handler(request)
+        for message in getattr(response, "result", None) or []:
+            if (getattr(message, "response_metadata", None) or {}).get("stop_reason") == "refusal":
+                raise RechazoDelModelo(request.model)
+        return response
+
+    return rechazo_es_error
+
+
+def _agent_models():
+    """(modelo principal, respaldo o None).
+
+    Sin clave de Anthropic no tiene sentido intentar con Claude en cada turno:
+    el respaldo pasa a ser el principal.
+    """
+    principal = settings.WHATSAPP_AGENT_MODEL
+    respaldo = settings.WHATSAPP_AGENT_FALLBACK_MODEL
+    if is_anthropic_model(principal) and not settings.ANTHROPIC_API_KEY:
+        logger.warning("Sin ANTHROPIC_API_KEY: el agente usa %s", respaldo)
+        return respaldo, None
+    return principal, (respaldo if respaldo and respaldo != principal else None)
+
+
 def _build_agent(contact, turn=None):
     from langchain.agents import create_agent
-    from langchain_openai import ChatOpenAI
+    from langchain.agents.middleware import ModelFallbackMiddleware
 
-    model = ChatOpenAI(
-        model=settings.WHATSAPP_AGENT_MODEL,
-        api_key=settings.OPENAI_API_KEY,
-        **chat_model_params(settings.WHATSAPP_AGENT_MODEL, temperature=0.3),
-    )
+    principal, respaldo = _agent_models()
+    middleware = [_summarization_middleware()]
+    if respaldo:
+        # Va por fuera del resto: si el principal falla (o se niega), el mismo
+        # turno se repite con el respaldo, sin que el cliente lo note.
+        middleware.append(ModelFallbackMiddleware(agent_chat_model(respaldo)))
+    if is_anthropic_model(principal):
+        from langchain_anthropic.middleware import AnthropicPromptCachingMiddleware
+
+        middleware += [
+            _rechazo_es_error(),
+            # El prompt y las tools no cambian dentro del turno: se cachean.
+            # Con un respaldo de OpenAI la marca se ignora.
+            AnthropicPromptCachingMiddleware(ttl="5m", unsupported_model_behavior="ignore"),
+        ]
     return create_agent(
-        model=model,
+        model=agent_chat_model(principal),
         tools=build_tools(contact, turn),
         system_prompt=build_system_prompt(contact, turn),
-        middleware=[_summarization_middleware()],
+        middleware=middleware,
         checkpointer=get_checkpointer(),
     )
 

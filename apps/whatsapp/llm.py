@@ -7,6 +7,10 @@ razonamiento se descuentan de ahí, y el esfuerzo se gradúa con
 `reasoning_effort`. Estos helpers arman los parámetros correctos para el modelo
 configurado, así cambiar de modelo (o volver a `gpt-4o-mini`) es cambiar una
 env var y nada más.
+
+Claude (`claude-*`) va por `ChatAnthropic`: no acepta `temperature` (Haiku y
+Sonnet 5.5 rechazan valores no por defecto), piensa siempre en modo adaptativo
+y el esfuerzo va en `output_config`.
 """
 
 from django.conf import settings
@@ -59,3 +63,27 @@ def completion_params(model, temperature, max_output_tokens, effort=None):
     if effort == "none":
         params["temperature"] = temperature
     return params
+
+
+def is_anthropic_model(model):
+    return (model or "").lower().startswith("claude")
+
+
+def agent_chat_model(model, temperature=0.3, effort=None):
+    """El modelo de chat del agente, de OpenAI o de Anthropic según el nombre."""
+    if is_anthropic_model(model):
+        from langchain_anthropic import ChatAnthropic
+
+        return ChatAnthropic(
+            model=model,
+            api_key=settings.ANTHROPIC_API_KEY,
+            max_tokens=4096,
+            output_config={"effort": _effort(effort)},
+        )
+    from langchain_openai import ChatOpenAI
+
+    return ChatOpenAI(
+        model=model,
+        api_key=settings.OPENAI_API_KEY,
+        **chat_model_params(model, temperature=temperature, effort=effort),
+    )
