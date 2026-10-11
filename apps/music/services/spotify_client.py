@@ -3,6 +3,7 @@ import threading
 import time
 
 import spotipy
+from django.core.cache import cache
 from spotipy.exceptions import SpotifyException
 
 from .spotify_auth import get_valid_access_token
@@ -18,6 +19,79 @@ _playback_cache = {}  # floor -> {"data": ..., "fetched_at": epoch}
 
 # Timestamp (epoch) por piso hasta el cual NO se debe llamar a Spotify por rate limit.
 _rate_limited_until = {}  # floor -> epoch
+
+# Equipos en los que ha sonado musica en cada piso (el ultimo y todos los
+# conocidos). Cuando no hay dispositivo activo se despierta uno de ESOS: la
+# cuenta puede tener otros conectados (un TV donde alguien inicio sesion) y
+# mandar la musica ahi la saca del local. Vive en la cache (Redis en prod) para
+# sobrevivir a un reinicio.
+DEVICES_TTL = 60 * 60 * 24 * 60  # 60 dias
+MAX_KNOWN_DEVICES = 10
+
+# Tras comprobar que no hay ningun Spotify abierto, el sync no vuelve a
+# intentarlo hasta que pase este tiempo (cada intento son dos llamadas).
+_no_device_until = {}  # floor -> epoch
+NO_DEVICE_RETRY_SECONDS = 30
+
+# Cuando el staff pausa un piso desde el panel. Spotify suelta el dispositivo
+# tras un rato en pausa y el playback vuelve vacio; sin esta marca el sync lo
+# tomaba por "no suena nada" y despertaba el equipo con la siguiente solicitud.
+# Tambien en la cache, para que un reinicio no la borre.
+PAUSE_TTL = 60 * 60 * 12
+
+
+def _cache_get(key, default=None):
+    # Un Redis caido no puede tumbar la musica: sin cache se sigue sin memoria.
+    try:
+        return cache.get(key, default)
+    except Exception:
+        return default
+
+
+def _cache_set(key, value, timeout):
+    try:
+        cache.set(key, value, timeout)
+    except Exception:
+        logger.debug(f"[Spotify] No se pudo guardar {key} en cache")
+
+
+def _cache_delete(key):
+    try:
+        cache.delete(key)
+    except Exception:
+        logger.debug(f"[Spotify] No se pudo borrar {key} de cache")
+
+
+def _devices_key(floor):
+    return f"spotify:devices:{floor}"
+
+
+def _pause_key(floor):
+    return f"spotify:paused:{floor}"
+
+
+def _remember_device(floor, device_id):
+    memory = _cache_get(_devices_key(floor)) or {"last": None, "known": []}
+    known = [d for d in memory["known"] if d != device_id] + [device_id]
+    _cache_set(
+        _devices_key(floor),
+        {"last": device_id, "known": known[-MAX_KNOWN_DEVICES:]},
+        DEVICES_TTL,
+    )
+
+
+def _mark_paused(floor):
+    _cache_set(_pause_key(floor), time.time(), PAUSE_TTL)
+
+
+def _clear_paused(floor, since=None):
+    """Quita la marca de pausa. Con `since`, solo si la pausa es anterior a ese
+    instante: una lectura que salio antes de pausar no puede deshacer la pausa."""
+    if since is not None:
+        paused_at = _cache_get(_pause_key(floor))
+        if paused_at is None or paused_at >= since:
+            return
+    _cache_delete(_pause_key(floor))
 
 PLAYBACK_CACHE_TTL = 4.0  # seg - los endpoints reutilizan el playback reciente
 
@@ -124,18 +198,98 @@ def _call_on_device(floor, sp, func, **kwargs):
     el, lo que ademas lo despierta. Si no hay ninguno abierto, SpotifyNoDeviceError.
     """
     try:
-        return _call(floor, func, **kwargs)
+        result = _call(floor, func, **kwargs)
     except SpotifyException as e:
         if e.http_status != 404:
             raise
+    else:
+        _no_device_until.pop(floor, None)
+        return result
 
     devices = (_call(floor, sp.devices) or {}).get("devices", [])
-    usable = [d for d in devices if d.get("id") and not d.get("is_restricted")]
-    if not usable:
+    device = _pick_device(floor, devices)
+    if not device:
+        _no_device_until[floor] = time.time() + NO_DEVICE_RETRY_SECONDS
+        names = ", ".join(d.get("name", "?") for d in devices) or "ninguno"
+        logger.warning(f"[Spotify] Piso {floor}: no hay Spotify abierto (equipos de la cuenta: {names})")
         raise SpotifyNoDeviceError(f"No hay ningún Spotify abierto en el piso {floor}")
-    device = next((d for d in usable if d.get("is_active")), usable[0])
     logger.info(f"[Spotify] Piso {floor}: sin dispositivo activo, uso '{device.get('name')}'")
-    return _call(floor, func, device_id=device["id"], **kwargs)
+    try:
+        result = _call(floor, func, device_id=device["id"], **kwargs)
+    except SpotifyException as e:
+        if e.http_status != 404:
+            raise
+        # El equipo se cerro entre listar y reintentar: es "no hay Spotify
+        # abierto" (recuperable), no un error que tumbe la solicitud.
+        _no_device_until[floor] = time.time() + NO_DEVICE_RETRY_SECONDS
+        raise SpotifyNoDeviceError(f"El Spotify del piso {floor} se cerró") from e
+    _no_device_until.pop(floor, None)
+    return result
+
+
+def _pick_device(floor, devices):
+    """Elige el equipo del piso donde reproducir, o None si no esta abierto.
+
+    Primero el activo, luego el ultimo donde sono musica y despues cualquiera
+    donde ya haya sonado. Si hay historial y ninguno de esos esta abierto, no se
+    usa un equipo desconocido: puede ser el TV de alguien fuera del local. Sin
+    historial (piso recien conectado) se prefiere un equipo que no sea TV, y el
+    TV solo si es el unico abierto: en el local a veces suena en el TV y a veces
+    en el celular.
+    """
+    usable = [d for d in devices if d.get("id") and not d.get("is_restricted")]
+    active = next((d for d in usable if d.get("is_active")), None)
+    if active:
+        return active
+    memory = _cache_get(_devices_key(floor)) or {"last": None, "known": []}
+    by_id = {d["id"]: d for d in usable}
+    if memory["last"] in by_id:
+        return by_id[memory["last"]]
+    for device_id in reversed(memory["known"]):
+        if device_id in by_id:
+            return by_id[device_id]
+    if memory["known"]:
+        return None
+    not_tv = [d for d in usable if (d.get("type") or "").lower() != "tv"]
+    return (not_tv or usable or [None])[0]
+
+
+def is_paused_by_staff(floor) -> bool:
+    """True si el staff pauso el piso y nadie lo ha vuelto a poner a sonar."""
+    return _cache_get(_pause_key(floor)) is not None
+
+
+def is_waiting_for_device(floor) -> bool:
+    """True si hace poco se comprobo que el piso no tiene ningun Spotify abierto."""
+    return time.time() < _no_device_until.get(floor, 0.0)
+
+
+def claim_request(pk, expected_status, new_status) -> bool:
+    """Pasa una solicitud de estado solo si nadie la toco antes (atomico).
+
+    La vista que recibe la solicitud y el hilo de sync pueden ir por la misma a
+    la vez; el que no la reclama no llama a Spotify, asi no se encola dos veces.
+    """
+    from django.utils import timezone
+
+    from apps.music.models import SongRequest
+
+    fields = {"status": new_status, "updated_at": timezone.now()}
+    if new_status == SongRequest.Status.PLAYING:
+        fields["played_at"] = fields["updated_at"]
+    return SongRequest.objects.filter(pk=pk, status=expected_status).update(**fields) == 1
+
+
+def release_request(pk, claimed_status, back_status):
+    """Devuelve una solicitud reclamada a su estado anterior si Spotify fallo."""
+    from django.utils import timezone
+
+    from apps.music.models import SongRequest
+
+    SongRequest.objects.filter(pk=pk, status=claimed_status).update(
+        status=back_status, updated_at=timezone.now(),
+        **({"played_at": None} if claimed_status == SongRequest.Status.PLAYING else {}),
+    )
 
 
 def search_tracks(query, floor, limit=10):
@@ -165,7 +319,15 @@ def add_to_queue(track_uri, floor):
 def _fetch_current_playback(floor):
     """Lee el playback actual del piso desde Spotify y actualiza la cache."""
     sp = _get_spotify_client(floor)
+    asked_at = time.time()
     current = _call(floor, sp.current_playback)
+    device = (current or {}).get("device") or {}
+    if current and current.get("is_playing"):
+        # Volvio a sonar (desde el panel o desde el mismo Spotify): ya no esta
+        # pausado, salvo que la pausa llegara mientras esta lectura viajaba.
+        _clear_paused(floor, since=asked_at)
+        if device.get("id"):
+            _remember_device(floor, device["id"])
     if not current or not current.get("item"):
         data = None
     else:
@@ -240,12 +402,14 @@ def pause_playback(floor):
     """Pausa la reproducción del piso"""
     sp = _get_spotify_client(floor)
     _call_on_device(floor, sp, sp.pause_playback)
+    _mark_paused(floor)
 
 
 def resume_playback(floor):
     """Reanuda la reproducción del piso"""
     sp = _get_spotify_client(floor)
     _call_on_device(floor, sp, sp.start_playback)
+    _clear_paused(floor)
 
 
 def skip_to_next(floor):
@@ -253,21 +417,19 @@ def skip_to_next(floor):
     from apps.music.models import SongRequest
 
     sp = _get_spotify_client(floor)
-
-    # Marcar la canción actual como completada
-    playing_requests = SongRequest.objects.filter(
-        floor=floor, status=SongRequest.Status.PLAYING
-    )
-    for req in playing_requests:
-        req.mark_as_completed()
-
     _call_on_device(floor, sp, sp.next_track)
+    _clear_paused(floor)
+
+    # Solo si Spotify salto de verdad: la actual queda completada
+    for req in SongRequest.objects.filter(floor=floor, status=SongRequest.Status.PLAYING):
+        req.mark_as_completed()
 
 
 def skip_to_previous(floor):
     """Vuelve a la canción anterior en el piso"""
     sp = _get_spotify_client(floor)
     _call_on_device(floor, sp, sp.previous_track)
+    _clear_paused(floor)
 
 
 def play_track(track_uri, floor):
@@ -275,6 +437,12 @@ def play_track(track_uri, floor):
     from apps.music.models import SongRequest
 
     sp = _get_spotify_client(floor)
+
+    # Reproducir inmediatamente. Las demás canciones siguen en la cola de Spotify.
+    # Va antes de tocar la DB: si no hay equipo abierto, cada intento fallido
+    # marcaba la solicitud como sonando y el sync la daba por completada.
+    _call_on_device(floor, sp, sp.start_playback, uris=[track_uri])
+    _clear_paused(floor)
 
     # Marcar la canción que estaba sonando como completada
     for req in SongRequest.objects.filter(floor=floor, status=SongRequest.Status.PLAYING):
@@ -292,9 +460,6 @@ def play_track(track_uri, floor):
     )
     if matching:
         matching.mark_as_playing()
-
-    # Reproducir inmediatamente. Las demás canciones siguen en la cola de Spotify.
-    _call_on_device(floor, sp, sp.start_playback, uris=[track_uri])
 
 
 def set_volume(volume_percent, floor):

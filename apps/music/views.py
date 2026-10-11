@@ -23,6 +23,8 @@ from .serializers import (
 from .services.spotify_client import (
     search_tracks,
     add_to_queue,
+    claim_request,
+    release_request,
     get_currently_playing,
     get_queue,
     is_connected,
@@ -127,29 +129,35 @@ class SongRequestViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         song_request = serializer.save()
 
-        # Intentar agregar a la cola de Spotify del piso automáticamente
-        if song_request.spotify_track_uri:
+        # Intentar agregar a la cola de Spotify del piso automáticamente.
+        # Se reclama antes de llamar a Spotify: el hilo de sync no toma una
+        # solicitud que ya no esta PENDING, asi no se encola dos veces.
+        if song_request.spotify_track_uri and claim_request(
+            song_request.pk, SongRequest.Status.PENDING, SongRequest.Status.QUEUED
+        ):
+            pending = (song_request.pk, SongRequest.Status.QUEUED, SongRequest.Status.PENDING)
             try:
                 add_to_queue(song_request.spotify_track_uri, floor=song_request.floor)
-                song_request.status = SongRequest.Status.QUEUED
-                song_request.save(update_fields=["status", "updated_at"])
             except SpotifyNotConnectedError:
+                release_request(*pending)
                 logger.warning(
                     f"Spotify no conectado en piso {song_request.floor}, "
                     "la solicitud queda pendiente"
                 )
             except SpotifyRateLimitedError:
                 # Queda en PENDING para que se encole luego cuando pase el cooldown.
+                release_request(*pending)
                 logger.warning("Spotify rate-limited, solicitud queda pendiente")
             except SpotifyNoDeviceError:
+                release_request(*pending)
                 logger.warning(
                     f"Sin Spotify abierto en piso {song_request.floor}, "
                     "la solicitud queda pendiente"
                 )
             except Exception as e:
                 logger.error(f"Error al encolar en Spotify: {e}")
-                song_request.status = SongRequest.Status.FAILED
-                song_request.save(update_fields=["status", "updated_at"])
+                release_request(song_request.pk, SongRequest.Status.QUEUED, SongRequest.Status.FAILED)
+            song_request.refresh_from_db()
 
         broadcast_music_update(floor=song_request.floor)
 
