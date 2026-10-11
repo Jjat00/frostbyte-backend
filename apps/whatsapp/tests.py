@@ -3598,7 +3598,9 @@ class EscaladaAHumanoTests(TestCase):
         config.save()
         self.contact.last_phone_number_id = "pn-1"
         self.contact.save()
-        with patch("apps.whatsapp.tools.kapso.send_text") as enviar:
+        with patch("apps.whatsapp.tools.kapso.send_text") as enviar, patch(
+            "apps.whatsapp.tools._aviso_al_hilo_del_dueno"
+        ):
             self.tools["solicitar_humano"].invoke({"motivo": "pago en disputa"})
         enviar.assert_called_once()
         _, destino, cuerpo = enviar.call_args[0]
@@ -3647,6 +3649,40 @@ class EscaladaAHumanoTests(TestCase):
         self.assertEqual(contacto, dueno)
         self.assertEqual(entradas[0][0], "assistant")
         self.assertIn("pide un pitillo", entradas[0][1])
+
+    def test_el_aviso_crea_el_contacto_del_dueno_si_no_existe(self):
+        config = AgentSettings.load()
+        config.owner_phones = "573164277879"
+        config.save()
+        self.contact.last_phone_number_id = "pn-1"
+        self.contact.save()
+        with patch("apps.whatsapp.tools.kapso.send_text"), patch(
+            "apps.whatsapp.agent.record_messages"
+        ) as record:
+            self.tools["solicitar_humano"].invoke({"motivo": "queja"})
+        dueno = WhatsAppContact.objects.get(phone="573164277879")
+        self.assertEqual(record.call_args[0][0], dueno)
+
+    def test_el_aviso_espera_el_turno_del_dueno(self):
+        """El turno del dueño pisaría el aviso si se escribe a la vez."""
+        from .worker import _phone_lock
+
+        WhatsAppContact.objects.create(phone="573164277879")
+        config = AgentSettings.load()
+        config.owner_phones = "573164277879"
+        config.save()
+        self.contact.last_phone_number_id = "pn-1"
+        self.contact.save()
+        lock = _phone_lock("573164277879")
+        with patch("apps.whatsapp.tools.kapso.send_text"), patch(
+            "apps.whatsapp.agent.record_messages"
+        ) as record, patch("apps.whatsapp.tools.OWNER_LOCK_TIMEOUT_SECONDS", 0.05):
+            with lock:  # el dueño está a mitad de su turno
+                self.tools["solicitar_humano"].invoke({"motivo": "queja"})
+                record.assert_not_called()
+            self.tools["solicitar_humano"].invoke({"motivo": "queja"})
+        record.assert_called_once()
+        self.assertFalse(lock.locked())
 
     def test_el_interruptor_del_panel_sigue_siendo_permanente(self):
         """Apagar el agente a mano no caduca: eso lo decide una persona."""

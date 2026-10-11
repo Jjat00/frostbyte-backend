@@ -361,6 +361,11 @@ def _catalogo_de_hoy():
     return "\n".join(lineas) if lineas else "Hoy no hay ningún producto activo."
 
 
+# Cuánto espera el turno del cliente a que el dueño termine su propio turno
+# antes de dejar el aviso en su hilo (el aviso por WhatsApp ya salió igual).
+OWNER_LOCK_TIMEOUT_SECONDS = 60
+
+
 def _aviso_al_hilo_del_dueno(numero, aviso):
     """Deja el aviso en el hilo del agente con el dueño.
 
@@ -368,11 +373,26 @@ def _aviso_al_hilo_del_dueno(numero, aviso):
     le contesta ("sí, regálale el pitillo"), el agente no sabe de qué le habla.
     """
     from .agent import record_messages
+    from .worker import _phone_lock
 
     try:
         dueno = WhatsAppContact.objects.filter(phone__endswith=numero[-10:]).first()
-        if dueno is not None:
+        if dueno is None:
+            # Un dueño que nunca le ha escrito al agente aún no tiene contacto:
+            # se crea con el mismo número al que salió el aviso, que es el que
+            # llega después en su webhook, para que su hilo nazca con el aviso.
+            dueno, _ = WhatsAppContact.objects.get_or_create(phone=numero)
+        # Con el mismo lock del worker: si el dueño está a mitad de un turno,
+        # al terminar ese turno pisaría el checkpoint y el aviso se perdería.
+        # Con tope de espera, para no dejar colgado el turno del cliente.
+        lock = _phone_lock(dueno.phone)
+        if not lock.acquire(timeout=OWNER_LOCK_TIMEOUT_SECONDS):
+            logger.warning("Hilo del dueño %s ocupado: el aviso no quedó en su hilo", numero)
+            return
+        try:
             record_messages(dueno, [("assistant", aviso)])
+        finally:
+            lock.release()
     except Exception:
         logger.exception("No se pudo guardar el aviso en el hilo del dueño %s", numero)
 
