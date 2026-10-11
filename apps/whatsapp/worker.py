@@ -872,7 +872,7 @@ def _handle_outbound(event, outbounds):
         try:
             with _phone_lock(contact.phone):
                 record_messages(
-                    contact, [("assistant", m["text"]) for m in nuevos]
+                    contact, [("team", m["text"]) for m in nuevos]
                 )
         except Exception:
             logger.exception("No se pudo guardar el mensaje humano en el hilo de %s", phone)

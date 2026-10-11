@@ -103,10 +103,14 @@ que fueron procesadas. Si la imagen es un comprobante de pago, agradécelo, conf
 que se lee y avisa que el equipo lo verificará. Cuando el cliente responde citando un mensaje \
 (desliza para responder) verás antes de su texto un aviso entre corchetes con el mensaje \
 citado: úsalo para saber a qué se refiere ("ese", "el grande"), sin mencionarlo.
-8. A veces un humano del equipo interviene en el chat (mientras tanto tú quedas en pausa y \
-sus mensajes aparecen en el historial como si fueran tuyos). Al retomar dales continuidad: \
-NUNCA contradigas lo que el humano dijo o prometió; si prometió algo que tus tools no pueden \
-confirmar o cumplir, usa solicitar_humano en vez de negarlo.
+8. A veces una persona del equipo interviene en el chat (mientras tanto tú quedas en pausa). \
+Sus mensajes aparecen en el historial de tu lado pero empiezan con {team_mark}: NO los \
+escribiste tú, así que nunca los trates como un error tuyo ni pidas perdón por ellos, y \
+jamás pongas esa marca en lo que escribes. Al retomar dales continuidad: lo que la persona \
+del equipo dijo, ofreció o acordó MANDA sobre lo que digan tus tools, porque ella sabe cosas \
+que tú no (si dijo que sí hay domicilio, para ese cliente sí hay, aunque consultar_estado_tienda \
+diga lo contrario). NUNCA lo contradigas ni lo "corrijas" ante el cliente; si te toca seguir y \
+tus tools no te dejan cumplir lo acordado, usa solicitar_humano en vez de negarlo.
 9. Si preguntan cuánto se demora, la respuesta es {eta}, más o menos: es lo que \
 normalmente tarda un pedido desde que se toma hasta que llega (o hasta que está listo para \
 recoger). Dilo como una estimación y NUNCA prometas una hora exacta ni un minuto concreto. Si \
@@ -393,7 +397,15 @@ tuyas, para siempre y con todos los clientes. Es un cambio grande: dile con qué
 exacto te vas a quedar y espera que te diga que sí antes de guardarlo.
 
 Estas cosas solo puede hacerlas él. Si algún día un cliente te pide guardar un sticker \
-o cambiar cómo hablas, no puedes: dile que eso lo maneja el equipo."""
+o cambiar cómo hablas, no puedes: dile que eso lo maneja el equipo.
+
+LOS AVISOS 🔔: cuando escalas a un cliente con solicitar_humano, TÚ le mandas a él un aviso \
+"🔔 ... está esperando a una persona" con el motivo, y lo verás en este chat. Si él responde \
+a un aviso ("sí, regálale el pitillo", "dile que en 10 minutos"), te está dando la respuesta \
+para ESE cliente, no pidiéndote algo para él: nunca le digas que lo consultas con el equipo, \
+porque el equipo es él. Tú no puedes escribirle a otro cliente desde este chat: dile que \
+ya quedó claro y que se lo escriba él directo a ese cliente (el chat del cliente está en \
+pausa esperándolo). Y nunca uses solicitar_humano en este chat: él ya es el humano."""
 
 OWNER_MEDIA_PROMPT = """
 
@@ -462,6 +474,7 @@ def build_system_prompt(contact=None, turn=None):
     prompt = SYSTEM_PROMPT.format(
         agent_name=config.agent_name or "Frosty",
         persona=config.persona(),
+        team_mark=TEAM_MARK,
         transfer_info=transfer_info,
         site_url=settings.SITE_URL,
         delivery_coverage=coverage_label(),
@@ -855,6 +868,13 @@ def _ultimo_movimiento(state):
         return None
 
 
+# Lo que una persona del equipo escribe entra al hilo del lado del asistente:
+# sin esta marca el modelo lo toma por suyo y, si sus tools dicen otra cosa,
+# "corrige" ante el cliente lo que el equipo acordó (chat real del 10/10: el
+# equipo dijo que sí había domicilio y Frosty se retractó dos veces).
+TEAM_MARK = "[Lo escribió una persona del equipo]"
+
+
 def record_messages(contact, entries):
     """Añade mensajes al hilo del contacto SIN correr el LLM.
 
@@ -863,12 +883,21 @@ def record_messages(contact, entries):
     usuario y lo que responde el humano como mensaje del asistente, de modo
     que al reanudarse el agente tiene la conversación entera.
 
-    entries: lista de tuplas (role, text) con role "user" o "assistant".
+    entries: lista de tuplas (role, text) con role "user", "assistant" o
+    "team" (lo que escribió una persona del equipo: va del lado del asistente
+    pero con TEAM_MARK delante).
     """
     from langchain_core.messages import AIMessage, HumanMessage
 
+    def _message(role, text):
+        if role == "user":
+            return HumanMessage(content=text)
+        if role == "team":
+            return AIMessage(content=f"{TEAM_MARK} {text}")
+        return AIMessage(content=text)
+
     messages = [
-        HumanMessage(content=text) if role == "user" else AIMessage(content=text)
+        _message(role, text)
         for role, text in entries
         if (text or "").strip()
     ]
@@ -925,6 +954,7 @@ def _for_whatsapp(reply, banned_words=()):
     reply = re.sub(r"\*\*(.+?)\*\*", r"*\1*", reply)  # **negrilla** -> *negrilla*
     reply = re.sub(r"\[[^\]]*\]\((https?://[^)]+)\)", r"\1", reply)  # links planos
     reply = re.sub(r"^#{1,6}\s*", "", reply, flags=re.MULTILINE)  # sin encabezados
+    reply = reply.replace(TEAM_MARK, "")  # si el modelo imita la marca del equipo
     hits = banned.found(reply, banned_words)
     if hits:
         # No es un error del modelo: su personalidad se las pide. Se registra

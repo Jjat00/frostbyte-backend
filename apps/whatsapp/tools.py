@@ -27,7 +27,7 @@ from . import intencion
 from . import kapso
 from . import missing
 from . import stickers as stickers_media
-from .models import AgentSettings, Sticker, StickerDraft
+from .models import AgentSettings, Sticker, StickerDraft, WhatsAppContact
 
 logger = logging.getLogger(__name__)
 
@@ -361,6 +361,22 @@ def _catalogo_de_hoy():
     return "\n".join(lineas) if lineas else "Hoy no hay ningún producto activo."
 
 
+def _aviso_al_hilo_del_dueno(numero, aviso):
+    """Deja el aviso en el hilo del agente con el dueño.
+
+    El aviso sale por Kapso, por fuera del modelo: sin esto, cuando el dueño
+    le contesta ("sí, regálale el pitillo"), el agente no sabe de qué le habla.
+    """
+    from .agent import record_messages
+
+    try:
+        dueno = WhatsAppContact.objects.filter(phone__endswith=numero[-10:]).first()
+        if dueno is not None:
+            record_messages(dueno, [("assistant", aviso)])
+    except Exception:
+        logger.exception("No se pudo guardar el aviso en el hilo del dueño %s", numero)
+
+
 def _avisar_escalada(contact, motivo):
     """Le avisa al dueño por WhatsApp que un chat quedó esperando a una persona.
 
@@ -393,6 +409,7 @@ def _avisar_escalada(contact, motivo):
             if numero[-10:] == normalize_phone(contact.phone)[-10:]:
                 continue  # el dueño probando no se avisa a sí mismo
             kapso.send_text(phone_number_id, numero, aviso)
+            _aviso_al_hilo_del_dueno(numero, aviso)
     except Exception:
         logger.exception("No se pudo avisar al dueño de la escalada de %s", contact.phone)
 
@@ -1364,6 +1381,14 @@ def build_tools(contact, turn=None):
         # suyo renueva la pausa por su cuenta (ver worker); si nadie entra, el
         # agente vuelve solo en vez de dejar el chat mudo para siempre.
         # human_handoff queda para el interruptor manual del panel.
+        if AgentSettings.load().is_owner(contact.phone):
+            # El dueño ES el humano: pausar su chat solo lo deja hablando solo
+            # (10/10: respondió a un aviso 🔔 y quedó una hora sin agente).
+            return (
+                "No: este chat es el del dueño y el humano es él. No se pausó nada. "
+                "Respóndele tú; si lo que dijo era la respuesta a un aviso de otro "
+                "cliente, dile que se la escriba él directo a ese cliente."
+            )
         pausa = timezone.now() + timedelta(
             minutes=settings.WHATSAPP_HANDOFF_PAUSE_MINUTES
         )

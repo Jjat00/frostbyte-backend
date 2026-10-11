@@ -1842,6 +1842,16 @@ class PersonalidadYStickersTests(TestCase):
         self.assertFalse(turn.posted, "una reacción no es un mensaje")
         self.assertEqual(send.call_args.args[2:], ("wamid.7", "❤️"))
 
+    def test_si_el_modelo_imita_la_marca_del_equipo_no_sale(self):
+        from .agent import TEAM_MARK
+
+        self.assertEqual(_for_whatsapp(f"{TEAM_MARK} Listo, va en camino"), "Listo, va en camino")
+
+    def test_el_prompt_explica_la_marca_del_equipo(self):
+        from .agent import TEAM_MARK
+
+        self.assertIn(TEAM_MARK, build_system_prompt())
+
     def test_un_turno_que_solo_reacciona_no_manda_texto_de_relleno(self):
         turn = TurnContext(phone_number_id=PHONE_NUMBER_ID, message_id="wamid.7")
         tool = next(t for t in build_tools(self.contact, turn) if t.name == "reaccionar")
@@ -3607,6 +3617,37 @@ class EscaladaAHumanoTests(TestCase):
         self.contact.refresh_from_db()
         self.assertGreater(self.contact.human_until, timezone.now())
 
+    def test_el_dueno_no_se_escala_a_si_mismo(self):
+        """Chat real del 10/10: el dueño contestó un aviso 🔔 y el agente lo
+        escaló a él mismo; su chat quedó una hora sin respuesta."""
+        config = AgentSettings.load()
+        config.owner_phones = PHONE
+        config.save()
+        with patch("apps.whatsapp.tools._avisar_escalada") as avisar:
+            resultado = self.tools["solicitar_humano"].invoke({"motivo": "pitillo"})
+        self.contact.refresh_from_db()
+        self.assertIsNone(self.contact.human_until)
+        avisar.assert_not_called()
+        self.assertIn("dueño", resultado)
+
+    def test_el_aviso_queda_en_el_hilo_del_dueno(self):
+        """Sin el aviso en su hilo, el agente no entiende la respuesta del dueño."""
+        dueno = WhatsAppContact.objects.create(phone="573164277879")
+        config = AgentSettings.load()
+        config.owner_phones = "573164277879"
+        config.save()
+        self.contact.last_phone_number_id = "pn-1"
+        self.contact.save()
+        with patch("apps.whatsapp.tools.kapso.send_text"), patch(
+            "apps.whatsapp.agent.record_messages"
+        ) as record:
+            self.tools["solicitar_humano"].invoke({"motivo": "pide un pitillo"})
+        record.assert_called_once()
+        contacto, entradas = record.call_args[0]
+        self.assertEqual(contacto, dueno)
+        self.assertEqual(entradas[0][0], "assistant")
+        self.assertIn("pide un pitillo", entradas[0][1])
+
     def test_el_interruptor_del_panel_sigue_siendo_permanente(self):
         """Apagar el agente a mano no caduca: eso lo decide una persona."""
         self.contact.human_handoff = True
@@ -4215,6 +4256,14 @@ class MensajeViejoQueSeRelleTests(TestCase):
         self._procesar(app_reply_payload("Buenas tardes si señor"), "nuevo-1")
         self.assertIsNotNone(self.contact.human_until)
         self.assertGreater(self.contact.human_until, timezone.now())
+
+    def test_lo_del_equipo_entra_al_hilo_marcado_como_del_equipo(self):
+        """Chat real del 10/10: sin marca, el agente tomó por suyo el "Si
+        tenemos domicilio" del equipo y se retractó ante la clienta."""
+        with patch("apps.whatsapp.agent.record_messages") as record:
+            self._procesar(app_reply_payload("Si tenemos domicilio"), "equipo-1")
+        record.assert_called_once()
+        self.assertEqual(record.call_args[0][1], [("team", "Si tenemos domicilio")])
 
     def test_un_retraso_normal_de_kapso_sigue_contando_como_intervencion(self):
         """Kapso entrega en segundos y se le han visto 3 min de retraso."""
