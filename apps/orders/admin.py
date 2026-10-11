@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django.utils.html import format_html
 from django.db.models import Count
-from .models import Order, OrderItem, Table, PageVisit, SocialClick, StoreSettings
+from .models import Order, OrderItem, Table, PageVisit, SocialClick, StoreSettings, StoreStatusEvent
 from apps.search import PlainSearchAdminMixin
 
 
@@ -210,3 +210,13 @@ class StoreSettingsAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
 
     def has_delete_permission(self, request, obj=None):
         return False
+
+
+@admin.register(StoreStatusEvent)
+class StoreStatusEventAdmin(admin.ModelAdmin):
+    """Historial de aperturas y cierres; se corrige aquí si alguien se equivocó de botón."""
+
+    list_display = ("created_at", "is_open", "changed_by")
+    list_filter = ("is_open",)
+    date_hierarchy = "created_at"
+    raw_id_fields = ("changed_by",)

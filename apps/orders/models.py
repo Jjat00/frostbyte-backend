@@ -1007,3 +1007,33 @@ class StoreSettings(models.Model):
         """Devuelve la única instancia de configuración, creándola si no existe."""
         obj, _ = cls.objects.get_or_create(pk=1)
         return obj
+
+
+class StoreStatusEvent(models.Model):
+    """Cada vez que alguien abre o cierra el local.
+
+    StoreSettings solo recuerda el último cambio; este registro guarda todos
+    para saber a qué hora se abre y se cierra normalmente (ver
+    analytics/schedule.py). Empezó a llenarse el 2026-10-11: antes de esa
+    fecha no hay historial.
+    """
+
+    is_open = models.BooleanField(verbose_name="Abrió")
+    created_at = models.DateTimeField(default=timezone.now, db_index=True, verbose_name="Fecha")
+    changed_by = models.ForeignKey(
+        "accounts.User",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+        verbose_name="Cambiado por",
+    )
+
+    class Meta:
+        ordering = ["created_at"]
+        verbose_name = "Apertura o cierre del local"
+        verbose_name_plural = "Aperturas y cierres del local"
+
+    def __str__(self):
+        accion = "Abrió" if self.is_open else "Cerró"
+        return f"{accion} {timezone.localtime(self.created_at):%Y-%m-%d %H:%M}"

@@ -20,6 +20,7 @@ from .models import (
     PageVisit,
     SocialClick,
     StoreSettings,
+    StoreStatusEvent,
     MIN_DELIVERY_RADIUS_KM,
     MAX_DELIVERY_RADIUS_KM,
 )
@@ -163,6 +164,13 @@ class OrderViewSet(viewsets.ModelViewSet):
 
             if update_fields:
                 cfg.save(update_fields=update_fields + ["updated_at"])
+                # Historial de aperturas y cierres para la gráfica de horario.
+                if "is_open" in update_fields:
+                    StoreStatusEvent.objects.create(
+                        is_open=cfg.is_open,
+                        created_at=cfg.status_changed_at,
+                        changed_by=request.user,
+                    )
 
         return Response({
             "is_open": cfg.is_open,
