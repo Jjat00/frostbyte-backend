@@ -397,7 +397,7 @@ def _resolve_media(msg, phone_number_id, contact=None):
                 return (
                     f"[El cliente te mandó un sticker: {gesto} Es un gesto, no una pregunta: "
                     "devuélveselo con otro sticker o con una línea corta, y si no hace falta "
-                    "nada, no escribas.]"
+                    "nada, responde solo la marca de silencio de la regla 11.]"
                 )
     except Exception:
         logger.exception("No se pudo procesar el media %s", media.get("media_id"))

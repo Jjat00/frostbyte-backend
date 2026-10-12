@@ -103,8 +103,8 @@ NOTA_DOMICILIOS = (
     "en una línea que los domicilios ya están activos y ofrécele retomar justo lo "
     "que quería, con sus mismas palabras—. Si venía a otra cosa, si prefirió pasar "
     "a recoger, si ya le resolviste lo que pedía o si nunca hubo un pedido en "
-    "juego, NO escribas nada. No te disculpes ni menciones fallas nuestras, y no "
-    "prometas tiempos.]"
+    "juego, NO escribas nada: responde solo la marca de silencio de la regla 11. "
+    "No te disculpes ni menciones fallas nuestras, y no prometas tiempos.]"
 )
 
 

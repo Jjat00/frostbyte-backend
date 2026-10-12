@@ -31,6 +31,15 @@ from .models import AgentSettings, Sticker, StickerDraft, WhatsAppContact
 
 logger = logging.getLogger(__name__)
 
+# Cómo dice el modelo que este turno no lleva texto (regla 11 del prompt). Una
+# respuesta vacía no le sale natural: el 11/10, al retomar un chat que el equipo
+# ya había cerrado, Haiku decidió callarse pero lo escribió ("Sin mensaje
+# adicional: la clienta solo confirmó y el equipo ya le respondió") y eso le
+# llegó a la clienta. Con la marca, callarse es una respuesta literal que la
+# salida reconoce (agent._for_whatsapp). Vive aquí porque las tools que mandan
+# texto por su cuenta tampoco pueden dejarla salir.
+SILENCE_MARK = "[SIN RESPUESTA]"
+
 
 def normalize_phone(phone):
     """Deja solo dígitos (ej. '+57 300 123-4567' -> '573001234567')."""
@@ -423,7 +432,7 @@ def _avisar_escalada(contact, motivo):
         quien = contact.customer_name or contact.profile_name or "un cliente"
         aviso = (
             f"🔔 {quien} ({contact.phone}) está esperando a una persona.\n"
-            f"Motivo: {motivo or 'sin motivo'}"
+            f"Motivo: {(motivo or '').replace(SILENCE_MARK, '').strip() or 'sin motivo'}"
         )
         for numero in numeros:
             if numero[-10:] == normalize_phone(contact.phone)[-10:]:
@@ -1453,7 +1462,8 @@ def build_tools(contact, turn=None):
         turn.sticker = sticker
         return (
             f"Listo: el sticker «{sticker.label}» sale al final de este turno. Si el gesto "
-            "era toda tu respuesta, no escribas nada más y ya está; si aún te falta decir "
+            "era toda tu respuesta, no escribas nada más: responde solo la marca de silencio de "
+            "la regla 11; si aún te falta decir "
             "algo, escríbelo y saldrá antes del sticker. No lo menciones ni lo describas."
         )
 
@@ -1499,6 +1509,11 @@ def build_tools(contact, turn=None):
         choices = [str(o).strip() for o in opciones if str(o).strip()][:3]
         if len(choices) < 2:
             return "Los botones necesitan al menos dos opciones. Pregúntalo con texto normal."
+        if SILENCE_MARK in texto or any(SILENCE_MARK in c for c in choices):
+            return (
+                f"Los botones no pueden llevar {SILENCE_MARK}: esa marca solo va sola en tu "
+                "respuesta final. Quítala y vuelve a intentar."
+            )
         if any(len(c) > 20 for c in choices):
             return (
                 "Alguna opción pasa de 20 caracteres y WhatsApp la rechaza. "
@@ -1511,7 +1526,8 @@ def build_tools(contact, turn=None):
         turn.posted = True
         return (
             "Botones enviados con esa pregunta. YA ESTÁ DICHA: no la repitas en texto, "
-            "responde vacío y espera a que el cliente toque una."
+            "responde solo la marca de silencio de la regla 11 y espera a que el cliente "
+            "toque una."
         )
 
     @tool

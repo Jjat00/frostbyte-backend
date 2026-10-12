@@ -53,14 +53,14 @@ NOTA_PENDIENTE = (
     "respuesta. Puede que un compañero estuviera atendiendo y ya no esté, o que algo "
     "nuestro fallara. El cliente sigue esperando: retoma donde quedó y contéstale. No "
     "le cuentes que hubo un problema ni te disculpes más de una vez, y si de verdad no "
-    "hacía falta responder nada, no escribas.]"
+    "hacía falta responder nada, responde solo la marca de silencio de la regla 11.]"
 )
 
 NOTA_PERDIDA = (
     "[Aviso del sistema, no del cliente: este mensaje suyo llegó hace {cuanto} y se "
     "quedó sin responder por algo nuestro. Atiéndelo como si acabara de llegar. No le "
     "cuentes que hubo un problema ni te disculpes más de una vez, y si de verdad no "
-    "hacía falta responder nada, no escribas.]\n{texto}"
+    "hacía falta responder nada, responde solo la marca de silencio de la regla 11.]\n{texto}"
 )
 
 
@@ -73,9 +73,9 @@ NOTA_HUMANO = (
     " Ojo: un compañero del equipo estuvo atendiendo este chat hace poco, y lo que él dijo "
     "vale. Lee lo que ya quedó resuelto entre ellos: no repitas sus preguntas, no vuelvas a "
     "empezar el flujo del pedido y no le pidas datos que él ya cerró. Si lo último del "
-    "cliente fue solo un agradecimiento o una despedida, no escribas nada. Pero si estaba "
-    "contestando algo que el compañero le preguntó —confirmando el pedido, dando un dato—, "
-    "eso sí se atiende: ahí lo que falte lo haces tú."
+    "cliente fue solo un agradecimiento o una despedida, responde solo la marca de silencio "
+    "de la regla 11. Pero si estaba contestando algo que el compañero le preguntó "
+    "—confirmando el pedido, dando un dato—, eso sí se atiende: ahí lo que falte lo haces tú."
 )
 
 

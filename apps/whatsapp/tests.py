@@ -1818,6 +1818,20 @@ class PersonalidadYStickersTests(TestCase):
         self.assertIn("dos opciones", una)
         self.assertIn("20 caracteres", larga)
 
+    def test_los_botones_no_dejan_salir_la_marca_de_silencio(self):
+        """Los botones salen por fuera de _for_whatsapp: la marca no puede ir ahí."""
+        from .tools import SILENCE_MARK
+
+        turn = TurnContext(phone_number_id=PHONE_NUMBER_ID)
+        tool = next(t for t in build_tools(self.contact, turn) if t.name == "enviar_botones")
+        with patch("apps.whatsapp.kapso.send_buttons") as send:
+            en_texto = tool.invoke({"texto": f"¿Confirmas? {SILENCE_MARK}", "opciones": ["Sí", "No"]})
+            en_opcion = tool.invoke({"texto": "¿Confirmas?", "opciones": ["Sí", SILENCE_MARK]})
+        send.assert_not_called()
+        self.assertFalse(turn.posted)
+        self.assertIn(SILENCE_MARK, en_texto)
+        self.assertIn(SILENCE_MARK, en_opcion)
+
     def test_los_botones_se_mandan_con_ids_propios(self):
         turn = TurnContext(phone_number_id=PHONE_NUMBER_ID)
         tool = next(t for t in build_tools(self.contact, turn) if t.name == "enviar_botones")
@@ -1841,6 +1855,22 @@ class PersonalidadYStickersTests(TestCase):
             tool.invoke({"emoji": "❤️"})
         self.assertFalse(turn.posted, "una reacción no es un mensaje")
         self.assertEqual(send.call_args.args[2:], ("wamid.7", "❤️"))
+
+    def test_la_marca_de_silencio_no_manda_nada(self):
+        """Chat real del 11/10: Haiku decidió callarse pero lo escribió y la
+        nota le llegó a la clienta."""
+        from .agent import SILENCE_MARK
+
+        self.assertEqual(_for_whatsapp(SILENCE_MARK), "")
+        self.assertEqual(
+            _for_whatsapp(f"Sin mensaje adicional: el equipo ya le respondió. {SILENCE_MARK}"),
+            "",
+        )
+
+    def test_el_prompt_explica_la_marca_de_silencio(self):
+        from .agent import SILENCE_MARK
+
+        self.assertIn(SILENCE_MARK, build_system_prompt())
 
     def test_si_el_modelo_imita_la_marca_del_equipo_no_sale(self):
         from .agent import TEAM_MARK
@@ -3649,6 +3679,22 @@ class EscaladaAHumanoTests(TestCase):
         self.assertEqual(contacto, dueno)
         self.assertEqual(entradas[0][0], "assistant")
         self.assertIn("pide un pitillo", entradas[0][1])
+
+    def test_el_aviso_al_dueno_no_lleva_la_marca_de_silencio(self):
+        from .tools import SILENCE_MARK
+
+        config = AgentSettings.load()
+        config.owner_phones = "573164277879"
+        config.save()
+        self.contact.last_phone_number_id = "pn-1"
+        self.contact.save()
+        with patch("apps.whatsapp.tools.kapso.send_text") as send, patch(
+            "apps.whatsapp.agent.record_messages"
+        ):
+            self.tools["solicitar_humano"].invoke({"motivo": f"pide un pitillo {SILENCE_MARK}"})
+        aviso = send.call_args.args[2]
+        self.assertNotIn(SILENCE_MARK, aviso)
+        self.assertIn("pide un pitillo", aviso)
 
     def test_el_aviso_crea_el_contacto_del_dueno_si_no_existe(self):
         config = AgentSettings.load()

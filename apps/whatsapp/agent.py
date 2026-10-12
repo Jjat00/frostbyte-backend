@@ -24,7 +24,7 @@ from . import banned, kapso
 from .llm import agent_chat_model, chat_model_params, is_anthropic_model
 from .mood import sticker_urge
 from .models import AgentSettings, Sticker, StickerDraft
-from .tools import TurnContext, build_tools
+from .tools import SILENCE_MARK, TurnContext, build_tools
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +68,9 @@ siempre, en el paso e). Con el local ABIERTO siempre se puede pasar a recoger: e
 apaga, si estamos abiertos el cliente puede venir por su pedido. Lo único que puede faltar es \
 el domicilio; si está sin servicio, NO despidas al cliente: dile "justo en este momento no \
 tenemos servicio de domicilios" y ofrécele encargarlo y pasar por él al local (sin costo de \
-envío); si acepta, tómalo con para_recoger=True. Y quien YA ESTÁ en el local también pide por \
+envío); si acepta, tómalo con para_recoger=True. Si pregunta cuándo vuelven los domicilios, \
+no inventes una hora, no le pidas que te escriba más tarde ni le prometas avisarle: dile que \
+no tienes la hora exacta y vuelve a ofrecerle encargarlo para recoger. Y quien YA ESTÁ en el local también pide por \
 aquí: eso tampoco depende de los domicilios (ver paso b). NUNCA digas al cliente que un \
 servicio está "pausado", "desactivado" ni "apagado": eso es jerga interna.
 2. Habla SOLO de lo que devuelven las tools del menú. Nunca inventes productos, precios ni \
@@ -121,7 +123,8 @@ NUNCA le digas "escríbenos": escribir es justo lo que está haciendo. Separa do
    - Si lo que pregunta cuelga del pedido que están armando ahora y ni el menú ni las \
 opciones del producto te dejan contestarlo —un extra o un acompañamiento que nadie vende por \
 separado, si le pueden subir el domicilio hasta la puerta o la habitación, un cambio de \
-preparación que no esté entre las opciones—, no lo niegues ni lo remitas: dile que se lo \
+preparación que no esté entre las opciones, que le saquen el pedido al carro o a la puerta \
+del local—, no lo niegues ni lo remitas: dile que se lo \
 preguntas al equipo y usa solicitar_humano. Lo que sí está en las opciones del producto \
 (quitarle la cebolla, el sabor, el tamaño) lo resuelves tú y va en las notas del item. El equipo lo \
 contesta en este mismo chat en un minuto, y casi siempre la respuesta es que sí. Negar por tu \
@@ -135,6 +138,12 @@ que LLAME. Para reservas de mesa o de la Sala VIP el número es otro: {reservati
 lo que sí tienes cómo consultar (menú, precios, horario y estado del local, cuánto nos \
 demoramos, cobertura, pedidos): ahí usa la tool y responde. Comparte un número una sola vez \
 por conversación y sigue atendiendo con normalidad.
+11. A veces lo correcto es no decir nada: el cliente solo dio las gracias o se despidió, un \
+compañero del equipo ya le respondió, o ya contestaste con una reacción o un sticker. Entonces \
+tu respuesta es EXACTAMENTE {silence_mark}, sola, sin nada más: no la expliques ni la \
+acompañes. Todo lo que escribas fuera de esa marca le llega al cliente tal cual, así que nunca \
+escribas notas sobre tu decisión ("sin mensaje adicional", "no hace falta responder"): esas \
+notas le llegan al cliente. La marca va solo ahí, en tu respuesta: nunca dentro de una tool.
 
 FLUJO DEL PEDIDO (no te saltes pasos):
 ANTES DE CADA PREGUNTA MIRA LO QUE YA TE DIJO: un dato que está en la conversación no se \
@@ -475,6 +484,7 @@ def build_system_prompt(contact=None, turn=None):
         agent_name=config.agent_name or "Frosty",
         persona=config.persona(),
         team_mark=TEAM_MARK,
+        silence_mark=SILENCE_MARK,
         transfer_info=transfer_info,
         site_url=settings.SITE_URL,
         delivery_coverage=coverage_label(),
@@ -954,6 +964,9 @@ def _for_whatsapp(reply, banned_words=()):
     reply = re.sub(r"\*\*(.+?)\*\*", r"*\1*", reply)  # **negrilla** -> *negrilla*
     reply = re.sub(r"\[[^\]]*\]\((https?://[^)]+)\)", r"\1", reply)  # links planos
     reply = re.sub(r"^#{1,6}\s*", "", reply, flags=re.MULTILINE)  # sin encabezados
+    if SILENCE_MARK in reply:
+        # Lo que la acompañe es la nota que el modelo no debía escribir
+        return ""
     reply = reply.replace(TEAM_MARK, "")  # si el modelo imita la marca del equipo
     hits = banned.found(reply, banned_words)
     if hits:
