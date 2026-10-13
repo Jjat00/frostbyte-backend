@@ -53,6 +53,21 @@ class VigiaDeVidaTests(SimpleTestCase):
         with patch.dict("os.environ", {}, clear=True):
             self.assertIsNone(liveness.start())
 
+    def test_fuera_de_daphne_no_arranca_aunque_haya_port(self):
+        """Un test o un manage.py que importe config.asgi con PORT heredado."""
+        with patch.dict("os.environ", {"PORT": "8080"}), patch(
+            "sys.argv", ["manage.py", "test"]
+        ), patch("threading.Thread.start") as arrancar:
+            self.assertIsNone(liveness.start())
+        arrancar.assert_not_called()
+
+    def test_en_daphne_arranca(self):
+        with patch.dict("os.environ", {"PORT": "8080"}), patch(
+            "sys.argv", ["/opt/venv/bin/daphne", "-p", "8080"]
+        ), patch("threading.Thread.start") as arrancar:
+            self.assertIsNotNone(liveness.start())
+        arrancar.assert_called_once()
+
     def test_se_puede_apagar(self):
         with patch.dict("os.environ", {"PORT": "8080", "DISABLE_LIVENESS": "1"}):
             self.assertIsNone(liveness.start())

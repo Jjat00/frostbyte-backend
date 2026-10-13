@@ -74,10 +74,20 @@ def _vigilar(url, dormir=time.sleep, responde=_responde, morir=_morir):
         dormir(INTERVALO_SECONDS)
 
 
+def _es_el_servidor():
+    """True solo si este proceso es daphne.
+
+    PORT no basta: dentro del contenedor también lo heredan los tests y los
+    comandos de manage.py, y si alguno importa config.asgi el vigía no
+    encontraría a nadie en ese puerto y lo terminaría con os._exit.
+    """
+    return os.path.basename(sys.argv[0] or "") == "daphne"
+
+
 def start():
-    """Arranca el vigía si este proceso es el servidor web (hay PORT)."""
+    """Arranca el vigía si este proceso es el servidor web (daphne con PORT)."""
     port = os.getenv("PORT")
-    if not port or os.getenv("DISABLE_LIVENESS") == "1":
+    if not port or os.getenv("DISABLE_LIVENESS") == "1" or not _es_el_servidor():
         return None
     url = f"http://127.0.0.1:{port}/healthz/"
     hilo = threading.Thread(target=_vigilar, args=(url,), name="liveness", daemon=True)
