@@ -45,3 +45,9 @@ application = ProtocolTypeRouter({
     "http": django_asgi_app,
     "websocket": websocket_middleware,
 })
+
+# Solo el servidor importa este módulo: los comandos de manage.py no arrancan
+# el vigía. Ver config/liveness.py.
+from config import liveness  # noqa: E402
+
+liveness.start()

@@ -160,6 +160,14 @@ if not _IS_MANAGEMENT_COMMAND:
     if DB_IDLE_TX_TIMEOUT_MS > 0:
         _pg_flags.append(
             f'-c idle_in_transaction_session_timeout={DB_IDLE_TX_TIMEOUT_MS}')
+    # Keepalive TCP: una conexión que la red de Railway deja muerta a mitad
+    # de una consulta se detecta en ~1 min en vez de esperar para siempre.
+    # statement_timeout lo aplica el servidor y no sirve si el servidor ya no
+    # está del otro lado.
+    _db_options.setdefault('keepalives', 1)
+    _db_options.setdefault('keepalives_idle', 30)
+    _db_options.setdefault('keepalives_interval', 10)
+    _db_options.setdefault('keepalives_count', 3)
     if _pg_flags:
         # Respetar lo que ya venga en la URL de conexion en vez de pisarlo.
         _existing = _db_options.get('options', '').strip()

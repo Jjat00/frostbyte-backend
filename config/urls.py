@@ -6,7 +6,11 @@ from django.conf.urls.static import static
 from django.contrib import admin
 from django.urls import path, include
 
+from config.liveness import healthz
+
 urlpatterns = [
+    # Lo pide el vigía de vida (config/liveness.py) y el healthcheck de Railway
+    path('healthz/', healthz),
     path('admin/', admin.site.urls),
     # Auth & Users
     path('api/v1/', include('apps.accounts.urls')),
