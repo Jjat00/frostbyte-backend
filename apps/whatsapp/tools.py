@@ -877,7 +877,8 @@ def build_tools(contact, turn=None):
         Para recoger (para_recoger=True): llámala cuando el cliente confirme el
         resumen (items y TOTAL de cotizar_pedido). NO pidas dirección,
         ubicación, teléfono ni método de pago (paga al recoger en el local, sin
-        envío); responde que el pedido quedó creado.
+        envío); pero si el cliente YA DIJO cómo paga, pásalo en metodo_pago
+        (y el billete en paga_con). Responde que el pedido quedó creado.
         En el local (piso=2 o 3): el cliente ya está sentado en Frostbyte y se
         le lleva el pedido a su piso. Solo hace falta el piso: NO pidas
         dirección, ubicación, teléfono ni método de pago (paga en el local).
@@ -886,11 +887,13 @@ def build_tools(contact, turn=None):
             items: items del pedido con variante_id, cantidad y notas
             nombre_cliente: nombre de quien recibe o de quien pasa a recoger; si
                 lo omites se usa el nombre ya conocido del cliente
-            metodo_pago: cash o nequi (los únicos que acepta el local; un pago
-                por llave Bre-B va como nequi, porque la llave es ese mismo
-                número). Pregúntalo siempre a domicilio, pero si el cliente no
-                lo dijo déjalo vacío y crea el pedido igual; para recoger va
-                vacío (paga al recoger)
+            metodo_pago: cash o nequi (los únicos que acepta el local;
+                efectivo es cash y un pago por llave Bre-B va como nequi,
+                porque la llave es ese mismo número). SIEMPRE que el cliente
+                lo haya dicho en la conversación ("pago por Nequi", "en
+                efectivo"), pásalo, también para recoger o en el local. Se
+                pregunta solo a domicilio; vacío ÚNICAMENTE si el cliente no lo
+                dijo, y el pedido se crea igual
             direccion: dirección escrita del cliente (solo domicilio) y SOLO
                 si la dio por su cuenta; déjala vacía si no la dijo, porque no
                 se le pide: la ubicación que compartió es la dirección
@@ -992,7 +995,9 @@ def build_tools(contact, turn=None):
             pendientes.append("el método de pago")
         if not para_recoger and kapso.is_bsuid(contact.phone) and not celular:
             pendientes.append("el celular de contacto")
-        if metodo_pago == Order.PaymentMethod.CASH and not paga_con:
+        # Para recoger el billete no se pregunta (paga en la caja): no es un
+        # pendiente aunque el cliente haya dicho que paga en efectivo
+        if not para_recoger and metodo_pago == Order.PaymentMethod.CASH and not paga_con:
             pendientes.append("con qué billete paga")
 
         variants = {}

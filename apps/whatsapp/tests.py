@@ -721,7 +721,41 @@ class PedidoParaRecogerTests(TestCase):
         self.assertIn("confirma y espera su respuesta", prompt)
         self.assertNotIn("DE INMEDIATO", prompt)
 
-    def test_el_local_cerrado_manda_sobre_los_dos_canales(self):
+    def test_para_recoger_guarda_el_metodo_de_pago_que_dijo_el_cliente(self):
+        """Eval del 09/10 (Parkboard #132): "para recoger ... pago por Nequi" y
+        el pedido quedaba sin método, porque el schema decía que para recoger
+        iba vacío. No se pregunta, pero si lo dijo se guarda."""
+        from apps.orders.models import Order
+
+        resultado = self._crear(para_recoger=True, metodo_pago="nequi", paga_con="")
+        self.assertIn("PEDIDO CREADO", resultado)
+        self.assertNotIn("OJO", resultado)
+        self.assertEqual(Order.objects.get().payment_method, Order.PaymentMethod.NEQUI)
+
+    def test_para_recoger_en_efectivo_sin_billete_no_queda_pendiente(self):
+        """Para recoger el billete no se pregunta: no es un dato que falte."""
+        from apps.orders.models import Order
+
+        resultado = self._crear(para_recoger=True, metodo_pago="cash", paga_con="")
+        self.assertIn("PEDIDO CREADO", resultado)
+        self.assertNotIn("billete", resultado)
+        order = Order.objects.get()
+        self.assertEqual(order.payment_method, Order.PaymentMethod.CASH)
+        self.assertNotIn("billete", order.customer_notes)
+
+    def test_para_recoger_en_efectivo_anota_el_billete_que_dijo(self):
+        from apps.orders.models import Order
+
+        self._crear(para_recoger=True, metodo_pago="cash", paga_con="50000")
+        self.assertIn("Paga en efectivo con $50.000", Order.objects.get().customer_notes)
+
+    def test_el_schema_y_el_prompt_piden_pasar_el_pago_que_ya_dijo(self):
+        """La causa del #132: el texto le ordenaba al modelo dejarlo vacío."""
+        descripcion = self.tools["crear_pedido"].description
+        self.assertNotIn("para recoger va\n                vacío", descripcion)
+        self.assertNotIn("para recoger va vacío", descripcion)
+        self.assertIn("también para recoger o en el local", descripcion)
+        self.assertIn("pásalo en metodo_pago", build_system_prompt())
         self.cfg.is_open = False
         self.cfg.save()
         self.assertIn("CERRADO", self._crear(para_recoger=True))
