@@ -44,6 +44,19 @@ def _operating_day(dt):
     return local.date()
 
 
+def operating_today():
+    """La noche en curso: a la 1 a. m. sigue siendo la de ayer."""
+    return _operating_day(timezone.now())
+
+
+def _night_start(day):
+    """El momento en que empieza la noche `day` (a la hora de corte, hora local)."""
+    return timezone.make_aware(
+        timezone.datetime.combine(day, timezone.datetime.min.time())
+        + timedelta(hours=OPERATING_DAY_CUTOFF_HOUR)
+    )
+
+
 def _share(part, total):
     return round(part / total, 4) if total else 0.0
 
@@ -71,19 +84,15 @@ class _Bucket:
 def build_stats(start=None, end=None, floor=None):
     """Todas las series de la pantalla de estadísticas de música.
 
-    `start`/`end` son fechas (inclusive) en hora local; `floor` filtra a un
-    piso o los trae todos si es None.
+    `start`/`end` son noches (inclusive): la del 10 va del 10 a la hora de
+    corte al 11 a la misma hora, así un rango de un día trae la noche entera.
+    `floor` filtra a un piso o los trae todos si es None.
     """
     qs = SongRequest.objects.all()
     if start:
-        qs = qs.filter(created_at__gte=timezone.make_aware(
-            timezone.datetime.combine(start, timezone.datetime.min.time())
-        ))
+        qs = qs.filter(created_at__gte=_night_start(start))
     if end:
-        limite = timezone.make_aware(
-            timezone.datetime.combine(end + timedelta(days=1), timezone.datetime.min.time())
-        )
-        qs = qs.filter(created_at__lt=limite)
+        qs = qs.filter(created_at__lt=_night_start(end + timedelta(days=1)))
     if floor:
         qs = qs.filter(floor=floor)
 

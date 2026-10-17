@@ -11,7 +11,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.views import APIView
 
 from .models import SongRequest, MusicSettings, FLOOR_CHOICES, DEFAULT_FLOOR
-from .stats import build_stats
+from .stats import build_stats, operating_today
 from .consumers import broadcast_music_update
 from .serializers import (
     SongRequestSerializer,
@@ -556,8 +556,9 @@ class MusicSettingsView(APIView):
 class MusicStatsView(APIView):
     """Estadísticas de lo que la gente pide: géneros, pisos, horas y tops.
 
-    Solo para el equipo. El rango llega como `days` (los últimos N días de
-    operación) o como `start`/`end` en formato ISO; sin parámetros devuelve la
+    Solo para el equipo. El rango llega como `days` (las últimas N noches de
+    operación) o como `start`/`end` en formato ISO, que son noches: la de una
+    fecha termina a la hora de corte del día siguiente; sin parámetros devuelve la
     historia completa, que es lo interesante cuando se compara un piso con el
     otro. `floor` acota a un piso.
     """
@@ -572,7 +573,10 @@ class MusicStatsView(APIView):
     def _range(self, request):
         params = request.query_params
         if params.get("start") or params.get("end"):
-            return self._parse_date(params.get("start")), self._parse_date(params.get("end"))
+            start, end = self._parse_date(params.get("start")), self._parse_date(params.get("end"))
+            if start and end and start > end:
+                start, end = end, start
+            return start, end
 
         days = params.get("days")
         if not days or days == "all":
@@ -581,7 +585,7 @@ class MusicStatsView(APIView):
             days = int(days)
         except (TypeError, ValueError):
             return None, None
-        hoy = timezone.localdate()
+        hoy = operating_today()
         return hoy - timedelta(days=max(days, 1) - 1), hoy
 
     @staticmethod
