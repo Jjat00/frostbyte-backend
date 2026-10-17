@@ -1,6 +1,6 @@
 # Frostbyte Backend
 
-API REST para gestión de negocios de bebidas preparadas (granizados, frappés, cócteles), bares y restaurantes. Construida con Django y Django REST Framework. Incluye autenticación JWT, WebSockets para juegos en tiempo real y generación de imágenes con IA.
+API REST para gestión de negocios de bebidas preparadas (granizados, frappés, cócteles), bares y restaurantes. Construida con Django y Django REST Framework. Incluye autenticación JWT (staff) y con Google (clientes), pedidos en el local y a domicilio, **Frosty** (agente de IA que toma pedidos por WhatsApp), reservas, varios negocios bajo un mismo panel, WebSockets en tiempo real y generación de imágenes con IA.
 
 ## Stack Tecnológico
 
@@ -12,42 +12,53 @@ API REST para gestión de negocios de bebidas preparadas (granizados, frappés, 
 | Django Channels | 4.3.2 | WebSocket support |
 | PostgreSQL | - | Base de datos |
 | Redis | - | Channel layers (producción) |
-| OpenAI | 2.15.0 | Generación de imágenes (GPT Image 1.5) |
+| LangChain + LangGraph | 1.3 / 1.2 | Agente de WhatsApp (Frosty) con memoria en Postgres |
+| Anthropic (`langchain-anthropic`) | 1.7.5 | Modelo principal de Frosty (Claude Haiku 5.5) |
+| Kapso | - | Puente con la API de WhatsApp (webhook + envío de mensajes) |
+| OpenAI | 2.45.0 | Generación de imágenes (GPT Image 1.5 / 2), respaldo de Frosty, visión, transcripción y textos cortos |
 | Google GenAI | 1.68.0 | Generación de imágenes (Gemini Pro/Flash) |
 | rembg | 2.0.73 | Remoción de fondo con IA (para Gemini) |
 | Cloudflare R2 | - | Almacenamiento de archivos |
 | Spotipy | 2.26+ | SDK Python para Spotify Web API |
 | YouTube Data API v3 | - | Búsqueda y datos de videos de YouTube |
-| Gunicorn + Daphne | - | Servidores de producción |
+| Daphne | 4.2.1 | Servidor ASGI de producción (HTTP + WebSocket) |
 
 ## Arquitectura
 
 ```
 frostbyte-backend/
 ├── apps/
-│   ├── accounts/       # Autenticación y usuarios
+│   ├── accounts/       # Autenticación (staff con JWT, clientes con Google)
+│   ├── business/       # Negocios dentro de Frostbyte (bebidas, Frostbyte Food)
 │   ├── products/       # Catálogo de productos
 │   ├── inventory/      # Control de inventario
-│   ├── orders/         # Gestión de pedidos
+│   ├── orders/         # Pedidos en el local, para recoger y a domicilio
 │   ├── expenses/       # Gastos operacionales
-│   ├── games/          # Salas de juego WebSocket
-│   ├── analytics/      # Reportes y dashboards
+│   ├── games/          # Salas de juego WebSocket (Duelo Frostbyte)
+│   ├── impostor/       # Juego del impostor (palabras por categoría)
+│   ├── analytics/      # Finanzas, canales y clientes, horario real del local
 │   ├── ai_generator/   # Generación de imágenes IA
 │   ├── music/          # Solicitudes de música (Spotify + configuración)
 │   ├── youtube/        # Solicitudes de video / reproductor TV
 │   ├── feedback/       # Feedback de clientes
-│   └── motivational/   # Frases motivacionales
+│   ├── motivational/   # Frases, recomendaciones y tarjetas de celebración
+│   ├── recetarios/     # Guías de preparación paso a paso
+│   ├── whatsapp/       # Frosty: agente de pedidos por WhatsApp (Kapso + LangGraph)
+│   ├── reservations/   # Reservas de mesas, grupos y Sala VIP
+│   ├── contests/       # Concursos con inscripción paga (disfraces de Halloween)
+│   └── polla/          # Solo modelos: datos históricos de la Polla del Mundial 2026
 ├── config/
 │   ├── settings.py     # Configuración Django
 │   ├── urls.py         # Rutas principales
 │   ├── asgi.py         # Config ASGI (WebSocket)
+│   ├── liveness.py     # Vigía de vida: reinicia el proceso si se congela
 │   └── wsgi.py         # Config WSGI
 └── media/              # Archivos subidos
 ```
 
 ## Features de IA Integrados
 
-Frostbyte incluye múltiples capacidades de IA usando **OpenAI API**, distribuidas en vistas públicas y privadas:
+Frostbyte incluye múltiples capacidades de IA (OpenAI, Google Gemini y Anthropic), distribuidas en vistas públicas, privadas y en el agente de WhatsApp:
 
 ### Backend - APIs de IA
 
@@ -62,7 +73,7 @@ Frostbyte incluye múltiples capacidades de IA usando **OpenAI API**, distribuid
 #### Privadas (Requiere Autenticación)
 | Feature | Endpoint | Modelo | Descripción |
 |---------|----------|--------|-------------|
-| **Generador de Imágenes** | `POST /ai/generations/` | Gemini Pro Image / GPT Image 1.5 | Genera imágenes profesionales de productos a partir de foto + prompt (modelo seleccionable) |
+| **Generador de Imágenes** | `POST /ai/generations/` | GPT Image 1.5 / GPT Image 2 / Gemini Pro / Gemini Flash | Genera imágenes profesionales de productos a partir de foto + prompt (modelo seleccionable) |
 | **Sugerencia de Descripción** | `POST /ai/suggest-description/` | GPT-4o-mini | Genera descripciones cortas y atractivas para productos |
 | **Galería de Generaciones** | `GET /ai/generations/` | - | Historial de imágenes generadas por el usuario |
 | **Persistencia a R2** | `POST /ai/generations/{id}/save_to_r2/` | - | Guarda imágenes generadas en Cloudflare R2 |
@@ -89,8 +100,9 @@ Frostbyte incluye múltiples capacidades de IA usando **OpenAI API**, distribuid
 ## Módulos Principales
 
 ### Autenticación (`/apps/accounts/`)
-- Modelo de usuario personalizado con roles
-- JWT con access token (12h) y refresh token (7 días)
+- Modelo de usuario personalizado con roles (admin, employee, customer)
+- Clientes con cuenta de Google (`/auth/google/`) para pedir a domicilio, inscribirse en concursos y reservar
+- JWT con access token (12h) y refresh token (90 días, ventana deslizante)
 - Rotación automática de tokens
 - Endpoints: login, logout, refresh, me, change-password
 
@@ -100,8 +112,15 @@ Frostbyte incluye múltiples capacidades de IA usando **OpenAI API**, distribuid
 - Gestión de imágenes
 - Estados: activo, inactivo, agotado
 
+### Negocios (`/apps/business/`)
+- Cada negocio (Frostbyte bebidas en el piso 2, Frostbyte Food en el piso 3) tiene su propio catálogo, inventario y gastos
+- Lo anterior a la dimensión multi-negocio pertenece a `frostbyte`, el negocio por defecto
+
 ### Pedidos (`/apps/orders/`)
 - Ciclo de vida: Pendiente → Preparando → Listo → Entregado
+- Canales: en el local (por mesa y piso), para recoger y a domicilio (cliente con Google o por WhatsApp)
+- Domicilios: zona de cobertura dibujada como polígono, interruptor fechado para prender o apagar el servicio
+- Pedidos pendientes de pago (deudas) y métodos de pago por pedido
 - Métodos de pago: Efectivo, tarjeta, transferencia, Nequi, Daviplata
 - Items con notas (alergias, preferencias)
 - Tracking por mesa
@@ -150,7 +169,29 @@ Frostbyte incluye múltiples capacidades de IA usando **OpenAI API**, distribuid
   - `manage.py load_artist_genres` carga los ~1.000 ya clasificados desde `fixtures/artist_genres.json` sin gastar llamadas; `--dump` regenera el archivo tras clasificar artistas nuevos
 - **Front**: `/musica/estadisticas` (pestaña del panel de música)
 
-### Juegos (`/apps/games/`)
+### Frosty, agente de WhatsApp (`/apps/whatsapp/`)
+- Toma pedidos a domicilio y para recoger de principio a fin; los pedidos son `Order` normales (`source=whatsapp`) y llegan al KDS
+- Modelo principal **Claude Haiku 5.5** (`WHATSAPP_AGENT_MODEL`) con respaldo **GPT-5.6 Terra** (`WHATSAPP_AGENT_FALLBACK_MODEL`); visión, resumen y transcripción con modelos de OpenAI configurables
+- Una respuesta por ráfaga de mensajes, memoria por contacto con resumen de conversaciones largas, totales calculados por la tool `cotizar_pedido` (el modelo nunca suma)
+- Avisa al cliente los cambios de estado del pedido, retoma conversaciones que quedaron esperando y cede la conversación al equipo cuando hace falta
+- Bandeja de chats de solo lectura para el personal (`/whatsapp/conversations/`), stickers y tonos del agente configurables
+- Detalle: [docs/whatsapp-agent.md](docs/whatsapp-agent.md)
+
+### Reservas (`/apps/reservations/`)
+- Mesas (gratis), grupos grandes (anticipo abonable) y Sala VIP del piso 3 (anticipo + consumo mínimo, por turnos)
+- Panel del staff y avisos en tiempo real por `ws/reservations/`
+
+### Concursos (`/apps/contests/`)
+- Inscripción paga con cuenta de Google; el staff marca pago, cédula y seguimiento en Instagram desde la barra
+- Primer concurso: disfraces de Halloween 2026. Cuenta visitas únicas a la página del concurso
+
+### Analytics (`/apps/analytics/`)
+- `financial`: ventas, gastos y margen
+- `channels`: canales, domicilios y registros con Google
+- `schedule`: horario real de apertura y cierre del local por jornada
+
+### Juegos (`/apps/games/` + `/apps/impostor/`)
+- "Impostor": sesiones con palabras por categoría (generadas con GPT-4o-mini)
 - "Duelo Frostbyte" - Juego de reacción multijugador
 - WebSocket con Django Channels
 - Salas con códigos únicos
@@ -159,13 +200,14 @@ Frostbyte incluye múltiples capacidades de IA usando **OpenAI API**, distribuid
 ### Generador IA (`/apps/ai_generator/`)
 **Generación Profesional de Imágenes de Productos con IA (Gemini / OpenAI)**
 - **Modelos disponibles** (seleccionables desde el frontend):
-  - `gemini-3-pro-image-preview` - Google Gemini Pro Image (default, mejor calidad)
+  - `gpt-image-1.5` - OpenAI GPT Image 1.5 (default, transparencia nativa)
+  - `gpt-image-2` - OpenAI GPT Image 2 (sin fondo transparente)
+  - `gemini-3-pro-image-preview` - Google Gemini Pro Image
   - `gemini-3.1-flash-image-preview` - Google Gemini Flash Image (rápido)
-  - `gpt-image-1.5` - OpenAI GPT Image 1.5 (transparencia nativa)
 - **Flujo**:
   1. Usuario carga imagen original (foto básica/celular)
   2. Opcionalmente agrega imagen de referencia para aplicar estilo
-  3. Selecciona modelo de IA (Gemini Pro por defecto)
+  3. Selecciona modelo de IA (GPT Image 1.5 por defecto)
   4. Escribe prompt detallado o usa plantillas preestablecidas
   5. IA procesa y genera imagen profesional
   6. Opción de fondo transparente (OpenAI: nativo, Gemini: rembg post-procesado)
@@ -203,18 +245,28 @@ Base URL: `http://localhost:8000/api/v1/`
 
 | Módulo | Endpoint | Descripción |
 |--------|----------|-------------|
-| Auth | `/auth/login/` | Login con JWT |
+| Auth | `/auth/login/` | Login con JWT (staff) |
+| Auth | `/auth/google/` | Login de clientes con Google |
 | Auth | `/auth/refresh/` | Refrescar token |
 | Auth | `/auth/me/` | Usuario actual |
+| Business | `/businesses/` | Negocios |
 | Products | `/categories/` | CRUD categorías |
 | Products | `/products/` | CRUD productos |
 | Products | `/variants/` | CRUD variantes |
 | Orders | `/orders/` | CRUD pedidos |
 | Orders | `/tables/` | Mesas del restaurante |
+| Orders | `/public-orders/` · `/my-orders/` | Pedidos del cliente con Google |
 | Inventory | `/inventory/materials/` | Materias primas |
 | Inventory | `/inventory/recipes/` | Recetas |
 | Expenses | `/expenses/` | Gastos operacionales |
 | Games | `/games/rooms/` | Salas de juego |
+| Impostor | `/impostor/categories/` · `/impostor/sessions/` | Juego del impostor |
+| Recetarios | `/recetarios/recipes/` | Recetarios de preparación |
+| WhatsApp | `/whatsapp/webhook/` | Webhook de Kapso (firma HMAC) |
+| WhatsApp | `/whatsapp/conversations/` | Bandeja de chats (solo lectura, staff) |
+| WhatsApp | `/whatsapp/agent-settings/` · `/whatsapp/agent-tones/` · `/whatsapp/stickers/` | Configuración de Frosty |
+| Reservations | `/reservations/` · `/reservations/admin/` | Reservas del cliente y panel del staff |
+| Contests | `/contests/current/` · `/contests/admin/` | Concurso vigente, inscripción y panel de barra |
 | Music | `/song-requests/` | CRUD solicitudes de canciones |
 | Music | `/song-requests/search/` | Buscar canciones en Spotify |
 | Music | `/song-requests/now_playing/` | Canción reproduciéndose |
@@ -251,13 +303,18 @@ Base URL: `http://localhost:8000/api/v1/`
 | **AI - Motivacional** | **`POST /motivational/recommend-mood/`** | **Recomendar por estado de ánimo (GPT-4o-mini)** |
 | **AI - Motivacional** | **`POST /motivational/recommend-quiz/`** | **Recomendar por preferencias (GPT-4o-mini)** |
 | **AI - Motivacional** | **`POST /motivational/transcribe/`** | **Transcribir audio a texto (Whisper)** |
-| Analytics | `/analytics/` | Reportes |
+| Analytics | `/analytics/financial/` · `/analytics/channels/` · `/analytics/schedule/` | Finanzas, canales y clientes, horario del local |
+
+Fuera de `/api/v1/`: `GET /healthz/` (salud del proceso, no toca la base).
 
 ### WebSocket
 ```
-ws://localhost:8000/ws/games/rooms/{room_id}/
+ws://localhost:8000/ws/game/room/{room_id}/
+ws://localhost:8000/ws/games/admin/
+ws://localhost:8000/ws/orders/
 ws://localhost:8000/ws/music/
 ws://localhost:8000/ws/youtube/
+ws://localhost:8000/ws/reservations/
 ```
 
 **Mensajes en `/ws/youtube/`:**
@@ -320,6 +377,11 @@ Ver [.env.example](.env.example) para todas las variables de entorno disponibles
 | `SECRET_KEY` | Clave secreta Django | Sí | Seguridad |
 | `DEBUG` | Modo debug | No | Desarrollo |
 | **`OPENAI_API_KEY`** | **API key de OpenAI** | **Para IA** | **Generación de imágenes (GPT Image 1.5), frases motivacionales, recomendaciones, transcripción de audio y sugerencias de descripción** |
+| `ANTHROPIC_API_KEY` | API key de Anthropic | Para Frosty | Modelo principal del agente de WhatsApp |
+| `KAPSO_API_KEY` · `KAPSO_WEBHOOK_SECRET` · `KAPSO_PHONE_NUMBER_IDS` | Credenciales de Kapso y números propios | Para Frosty | Webhook y envío de mensajes de WhatsApp |
+| `WHATSAPP_AGENT_*` · `WHATSAPP_*` | Modelo, respaldo, esfuerzo, esperas, rescates y teléfonos del agente | No (tienen default) | Ajustes de Frosty |
+| `GOOGLE_CLIENT_ID` | Client ID de Google | Para clientes | Login de clientes con Google |
+| `DELIVERY_CENTER_LAT` · `DELIVERY_CENTER_LNG` · `DELIVERY_RADIUS_KM` | Centro y radio de respaldo de domicilios | No | Cobertura de domicilios |
 | **`GEMINI_API_KEY`** | **API key de Google Gemini** | **Para IA** | **Generación de imágenes con Gemini (proveedor por defecto)** |
 | `R2_*` | Credenciales Cloudflare R2 | Para almacenamiento | Persistencia de imágenes generadas |
 | `REDIS_URL` | URL de Redis | Producción | Channel layers y caché |
@@ -418,7 +480,7 @@ Acceder a `http://localhost:8000/admin/` con las credenciales del superusuario.
 
 ## Producción
 
-- Servidor ASGI: Daphne (WebSocket) + Gunicorn (HTTP)
+- Servidor ASGI: Daphne para HTTP y WebSocket (Gunicorn está en las dependencias pero no se usa en el arranque)
 - Archivos estáticos: WhiteNoise
 - Base de datos: PostgreSQL
 - Channel layers: Redis
@@ -426,7 +488,9 @@ Acceder a `http://localhost:8000/admin/` con las credenciales del superusuario.
 
 ### Configuración Railway
 
-El proyecto incluye `railway.toml` para deployment automático.
+El proyecto incluye `railway.toml` (Nixpacks) y Railway despliega solo con cada push a `main`. El arranque corre `migrate`, los seeds `seed_cocktail_histories` y `seed_food`, `collectstatic` y luego Daphne.
+
+- **Vigía de vida** (`config/liveness.py`): un hilo se pide `/healthz/` por el mismo camino que cualquier request; si falla varias veces seguidas, vuelca la pila al log y termina el proceso. Railway lo levanta de nuevo (`restartPolicyType = "ON_FAILURE"`), porque por sí solo no detecta un proceso vivo pero congelado.
 
 ## Autenticación
 
@@ -439,6 +503,7 @@ El proyecto incluye `railway.toml` para deployment automático.
 ### Roles
 - `admin`: Acceso completo
 - `employee`: Acceso limitado a operaciones
+- `customer`: Cliente con cuenta de Google (pedidos, reservas, concursos)
 
 ## Testing
 
@@ -449,7 +514,8 @@ python manage.py test
 ## Estructura de Modelos
 
 ### Principales
-- `User` - Usuario con rol (admin/employee)
+- `User` - Usuario con rol (admin/employee/customer)
+- `Business` - Negocio (catálogo, inventario y gastos propios)
 - `Category` - Categorías de productos
 - `Product` - Productos del menú
 - `ProductVariant` - Variantes con precios
@@ -465,3 +531,6 @@ python manage.py test
 - `MusicSettings` - Singleton con la fuente activa (spotify | youtube, default youtube)
 - `VideoRequest` - Solicitudes de videos YouTube (estados: pending, queued, playing, completed, cancelled)
 - `TVState` - Singleton con el estado actual de la pantalla TV (incluye videos del Mix)
+- `WhatsAppContact` - Contacto del agente de WhatsApp con sus preferencias
+- `Reservation` - Reservas de mesas, grupos y Sala VIP
+- `Contest` / `ContestEntry` - Concursos e inscripciones
