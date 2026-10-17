@@ -17,6 +17,8 @@ _SKIP_SYNC_COMMANDS = {
     "loaddata",
     "dumpdata",
     "check",
+    "classify_artist_genres",
+    "load_artist_genres",
 }
 
 
@@ -37,4 +39,6 @@ class MusicConfig(AppConfig):
         if not _should_start_sync():
             return
         from apps.music.services.spotify_sync import start_sync
+        from apps.music.genre_schedule import start as start_genre_schedule
         start_sync()
+        start_genre_schedule()

@@ -428,6 +428,8 @@ WHATSAPP_SUMMARY_KEEP_MESSAGES = int(os.getenv('WHATSAPP_SUMMARY_KEEP_MESSAGES',
 # Clasificar el género de un artista es trabajo mecánico y de una sola vez por
 # artista (el resultado se cachea en music.ArtistGenre): va con el modelo barato.
 MUSIC_GENRE_MODEL = os.getenv('MUSIC_GENRE_MODEL', 'gpt-5.6-luna')
+# Una vez por semana se clasifican los artistas nuevos (apps/music/genre_schedule.py).
+MUSIC_GENRE_WEEKLY_ENABLED = os.getenv('MUSIC_GENRE_WEEKLY_ENABLED', 'True').lower() == 'true'
 # Datos de pago por transferencia que el agente comparte (Nequi/cuenta/etc.)
 WHATSAPP_TRANSFER_INFO = os.getenv('WHATSAPP_TRANSFER_INFO', '')
 # Número al que el agente remite cuando no sabe algo (contacto directo del local)
