@@ -13,7 +13,7 @@ API REST para gestión de negocios de bebidas preparadas (granizados, frappés, 
 | PostgreSQL | - | Base de datos |
 | Redis | - | Channel layers (producción) |
 | LangChain + LangGraph | 1.3 / 1.2 | Agente de WhatsApp (Frosty) con memoria en Postgres |
-| Anthropic (`langchain-anthropic`) | 1.7.5 | Modelo principal de Frosty (Claude Haiku 5.5) |
+| Anthropic (`langchain-anthropic`) | 1.7.5 | Modelo principal de Frosty (Claude Sonnet 5.5) |
 | Kapso | - | Puente con la API de WhatsApp (webhook + envío de mensajes) |
 | OpenAI | 2.45.0 | Generación de imágenes (GPT Image 1.5 / 2), respaldo de Frosty, visión, transcripción y textos cortos |
 | Google GenAI | 1.68.0 | Generación de imágenes (Gemini Pro/Flash) |
@@ -171,7 +171,7 @@ Frostbyte incluye múltiples capacidades de IA (OpenAI, Google Gemini y Anthropi
 
 ### Frosty, agente de WhatsApp (`/apps/whatsapp/`)
 - Toma pedidos a domicilio y para recoger de principio a fin; los pedidos son `Order` normales (`source=whatsapp`) y llegan al KDS
-- Modelo principal **Claude Haiku 5.5** (`WHATSAPP_AGENT_MODEL`) con respaldo **GPT-5.6 Terra** (`WHATSAPP_AGENT_FALLBACK_MODEL`); visión, resumen y transcripción con modelos de OpenAI configurables
+- Modelo principal **Claude Sonnet 5.5** (`WHATSAPP_AGENT_MODEL`, esfuerzo `medium`) con respaldo **GPT-5.6 Terra** (`WHATSAPP_AGENT_FALLBACK_MODEL`); visión, resumen y transcripción con modelos de OpenAI configurables
 - Una respuesta por ráfaga de mensajes, memoria por contacto con resumen de conversaciones largas, totales calculados por la tool `cotizar_pedido` (el modelo nunca suma)
 - Avisa al cliente los cambios de estado del pedido, retoma conversaciones que quedaron esperando y cede la conversación al equipo cuando hace falta
 - Bandeja de chats de solo lectura para el personal (`/whatsapp/conversations/`), stickers y tonos del agente configurables

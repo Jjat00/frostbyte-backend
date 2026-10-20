@@ -16,7 +16,7 @@ Cliente WhatsApp
       │                        │
       │                        ▼
       └──API mensajes──  Agente LangChain/LangGraph (agent.py)
-                               │   modelo: claude-haiku-5-5 (WHATSAPP_AGENT_MODEL),
+                               │   modelo: claude-sonnet-5-5 (WHATSAPP_AGENT_MODEL),
                                │   respaldo gpt-5.6-terra (…_FALLBACK_MODEL), esfuerzo bajo
                                │   memoria: PostgresSaver, thread por contacto+día
                                ▼
@@ -126,14 +126,16 @@ Cliente WhatsApp
 
 ## El modelo
 
-Desde el 2026-10-09 el agente conversa con **`claude-haiku-5-5`** (Anthropic,
-vía `ChatAnthropic`) y, si Claude falla o se niega, `ModelFallbackMiddleware`
+Desde el 2026-10-19 el agente conversa con **`claude-sonnet-5-5`** (Anthropic,
+vía `ChatAnthropic`, esfuerzo `medium`) y, si Claude falla o se niega, `ModelFallbackMiddleware`
 repite el turno con **`gpt-5.6-terra`** (`WHATSAPP_AGENT_FALLBACK_MODEL`). Una
 negativa de Claude llega como respuesta vacía con `stop_reason` «refusal» y un
 middleware la convierte en error para que también salte el respaldo. Sin
 `ANTHROPIC_API_KEY` el agente arranca directo con Terra. La eval de ese día (240
-conversaciones, 20 escenarios) dejó a los dos empatados en calidad y a Haiku
-más rápido.
+conversaciones, 20 escenarios) dejó a Haiku 5.5 y Terra empatados y Haiku fue
+el principal hasta el 2026-10-19; se cambió a Sonnet porque en los chats reales
+del 16 al 18-10 Haiku (esfuerzo `low`) se saltaba reglas en pedidos de varios
+productos, como preguntar la carne de una salchipapa.
 
 Lo que sigue describe a **`gpt-5.6-terra`** (OpenAI, familia GPT-5.6), un modelo
 que razona antes de responder. Eso cambia cómo se lo llama y `llm.py` arma los
@@ -168,10 +170,10 @@ seguir al del agente: el cliente está esperando en el chat.
 | `KAPSO_WEBHOOK_SECRET` | Secret definido al crear el webhook en Kapso |
 | `KAPSO_PHONE_NUMBER_IDS` | `phone_number_id` de los números propios, separados por coma |
 | `WHATSAPP_AGENT_ENABLED` | `False` apaga al agente (los webhooks se registran igual) |
-| `WHATSAPP_AGENT_MODEL` | Modelo principal (default `claude-haiku-5-5`; `claude-*` va por Anthropic, el resto por OpenAI) |
+| `WHATSAPP_AGENT_MODEL` | Modelo principal (default `claude-sonnet-5-5`; `claude-*` va por Anthropic, el resto por OpenAI) |
 | `WHATSAPP_AGENT_FALLBACK_MODEL` | Modelo de respaldo si el principal falla o se niega (default `gpt-5.6-terra`) |
 | `ANTHROPIC_API_KEY` | Clave de Anthropic; sin ella el agente usa directo el modelo de respaldo |
-| `WHATSAPP_AGENT_REASONING_EFFORT` | Cuánto razona antes de responder: `none`, `low` (default), `medium`, `high`, `xhigh`, `max`. Solo aplica a modelos de razonamiento (GPT-5 en adelante); más esfuerzo = mejor criterio pero más lento y más caro |
+| `WHATSAPP_AGENT_REASONING_EFFORT` | Cuánto razona antes de responder: `none`, `low`, `medium` (default), `high`, `xhigh`, `max`. Aplica a Claude y a los modelos de razonamiento (GPT-5 en adelante); más esfuerzo = mejor criterio pero más lento y más caro |
 | `WHATSAPP_VISION_MODEL` | Modelo que describe las imágenes del cliente (default `gpt-5.6-luna`) |
 | `WHATSAPP_TRANSCRIBE_MODEL` | Modelo que transcribe las notas de voz (default `gpt-4o-mini-transcribe`) |
 | `WHATSAPP_TRANSFER_INFO` | Datos de pago por transferencia que comparte el agente |
