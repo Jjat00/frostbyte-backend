@@ -410,11 +410,13 @@ WHATSAPP_AGENT_MODEL = os.getenv('WHATSAPP_AGENT_MODEL', 'claude-sonnet-5-5')
 WHATSAPP_AGENT_FALLBACK_MODEL = os.getenv('WHATSAPP_AGENT_FALLBACK_MODEL', 'gpt-5.6-terra')
 ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY', '')
 # Cuánto razona antes de responder (none|low|medium|high|xhigh|max). Lo usan
-# los modelos de razonamiento (GPT-5 en adelante) y Claude. 'medium' porque cada
-# turno encadena varias herramientas y reglas (cotizar, opciones, pago); con
-# 'low' se le pasaban pasos. Solo lo usa el agente: visión, resumen e intención
-# fijan el suyo.
-WHATSAPP_AGENT_REASONING_EFFORT = os.getenv('WHATSAPP_AGENT_REASONING_EFFORT', 'medium')
+# los modelos de razonamiento (GPT-5 en adelante) y Claude. 'high' con Sonnet
+# 5.5: con 'medium' muchas veces no abría el bloque de pensamiento y razonaba
+# en el texto visible, y la nota le llegaba al cliente ("Perro Especial no es
+# personalizable. Falta el pago." antes de la respuesta; 4 de 4 corridas el
+# 2026-10-19, 0 de 8 con 'high' y sin más latencia). Solo lo usa el agente (y
+# su respaldo): visión, resumen e intención fijan el suyo.
+WHATSAPP_AGENT_REASONING_EFFORT = os.getenv('WHATSAPP_AGENT_REASONING_EFFORT', 'high')
 # Leer lo que manda el cliente (audios e imágenes) es trabajo mecánico: va con
 # modelos baratos aparte, y el modelo caro del agente queda solo para conversar
 # y decidir. Un comprobante de pago sí se lee con visión buena: los montos.

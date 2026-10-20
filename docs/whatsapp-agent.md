@@ -17,7 +17,7 @@ Cliente WhatsApp
       │                        ▼
       └──API mensajes──  Agente LangChain/LangGraph (agent.py)
                                │   modelo: claude-sonnet-5-5 (WHATSAPP_AGENT_MODEL),
-                               │   respaldo gpt-5.6-terra (…_FALLBACK_MODEL), esfuerzo medium
+                               │   respaldo gpt-5.6-terra (…_FALLBACK_MODEL), esfuerzo high
                                │   memoria: PostgresSaver, thread por contacto+día
                                ▼
                          Tools → ORM (tools.py): menú activo, búsqueda
@@ -127,7 +127,7 @@ Cliente WhatsApp
 ## El modelo
 
 Desde el 2026-10-19 el agente conversa con **`claude-sonnet-5-5`** (Anthropic,
-vía `ChatAnthropic`, esfuerzo `medium`) y, si Claude falla o se niega, `ModelFallbackMiddleware`
+vía `ChatAnthropic`, esfuerzo `high`) y, si Claude falla o se niega, `ModelFallbackMiddleware`
 repite el turno con **`gpt-5.6-terra`** (`WHATSAPP_AGENT_FALLBACK_MODEL`). Una
 negativa de Claude llega como respuesta vacía con `stop_reason` «refusal» y un
 middleware la convierte en error para que también salte el respaldo. Sin
@@ -135,7 +135,10 @@ middleware la convierte en error para que también salte el respaldo. Sin
 conversaciones, 20 escenarios) dejó a Haiku 5.5 y Terra empatados y Haiku fue
 el principal hasta el 2026-10-19; se cambió a Sonnet porque en los chats reales
 del 16 al 18-10 Haiku (esfuerzo `low`) se saltaba reglas en pedidos de varios
-productos, como preguntar la carne de una salchipapa.
+productos, como preguntar la carne de una salchipapa. Con Sonnet el esfuerzo
+tiene que ser `high`: con `medium` muchas veces no piensa en un bloque aparte y
+escribe su razonamiento en la respuesta («Perro Especial no es personalizable.
+Falta el pago.» antes del mensaje), y esa nota le llega al cliente.
 
 Lo que sigue describe a **`gpt-5.6-terra`** (OpenAI, familia GPT-5.6), un modelo
 que razona antes de responder. Eso cambia cómo se lo llama y `llm.py` arma los
@@ -173,7 +176,7 @@ seguir al del agente: el cliente está esperando en el chat.
 | `WHATSAPP_AGENT_MODEL` | Modelo principal (default `claude-sonnet-5-5`; `claude-*` va por Anthropic, el resto por OpenAI) |
 | `WHATSAPP_AGENT_FALLBACK_MODEL` | Modelo de respaldo si el principal falla o se niega (default `gpt-5.6-terra`) |
 | `ANTHROPIC_API_KEY` | Clave de Anthropic; sin ella el agente usa directo el modelo de respaldo |
-| `WHATSAPP_AGENT_REASONING_EFFORT` | Cuánto razona antes de responder: `none`, `low`, `medium` (default), `high`, `xhigh`, `max`. Aplica a Claude y a los modelos de razonamiento (GPT-5 en adelante); más esfuerzo = mejor criterio pero más lento y más caro |
+| `WHATSAPP_AGENT_REASONING_EFFORT` | Cuánto razona antes de responder: `none`, `low`, `medium`, `high` (default), `xhigh`, `max`. Aplica a Claude y a los modelos de razonamiento (GPT-5 en adelante); más esfuerzo = mejor criterio pero más lento y más caro |
 | `WHATSAPP_VISION_MODEL` | Modelo que describe las imágenes del cliente (default `gpt-5.6-luna`) |
 | `WHATSAPP_TRANSCRIBE_MODEL` | Modelo que transcribe las notas de voz (default `gpt-4o-mini-transcribe`) |
 | `WHATSAPP_TRANSFER_INFO` | Datos de pago por transferencia que comparte el agente |

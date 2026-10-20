@@ -171,7 +171,7 @@ Frostbyte incluye múltiples capacidades de IA (OpenAI, Google Gemini y Anthropi
 
 ### Frosty, agente de WhatsApp (`/apps/whatsapp/`)
 - Toma pedidos a domicilio y para recoger de principio a fin; los pedidos son `Order` normales (`source=whatsapp`) y llegan al KDS
-- Modelo principal **Claude Sonnet 5.5** (`WHATSAPP_AGENT_MODEL`, esfuerzo `medium`) con respaldo **GPT-5.6 Terra** (`WHATSAPP_AGENT_FALLBACK_MODEL`); visión, resumen y transcripción con modelos de OpenAI configurables
+- Modelo principal **Claude Sonnet 5.5** (`WHATSAPP_AGENT_MODEL`, esfuerzo `high`) con respaldo **GPT-5.6 Terra** (`WHATSAPP_AGENT_FALLBACK_MODEL`); visión, resumen y transcripción con modelos de OpenAI configurables
 - Una respuesta por ráfaga de mensajes, memoria por contacto con resumen de conversaciones largas, totales calculados por la tool `cotizar_pedido` (el modelo nunca suma)
 - Avisa al cliente los cambios de estado del pedido, retoma conversaciones que quedaron esperando y cede la conversación al equipo cuando hace falta
 - Bandeja de chats de solo lectura para el personal (`/whatsapp/conversations/`), stickers y tonos del agente configurables
