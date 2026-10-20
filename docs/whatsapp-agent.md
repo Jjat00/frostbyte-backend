@@ -17,7 +17,7 @@ Cliente WhatsApp
       │                        ▼
       └──API mensajes──  Agente LangChain/LangGraph (agent.py)
                                │   modelo: claude-sonnet-5-5 (WHATSAPP_AGENT_MODEL),
-                               │   respaldo gpt-5.6-terra (…_FALLBACK_MODEL), esfuerzo bajo
+                               │   respaldo gpt-5.6-terra (…_FALLBACK_MODEL), esfuerzo medium
                                │   memoria: PostgresSaver, thread por contacto+día
                                ▼
                          Tools → ORM (tools.py): menú activo, búsqueda
