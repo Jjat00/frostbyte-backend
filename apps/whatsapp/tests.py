@@ -5609,8 +5609,8 @@ class DomiciliosQueVuelvenTests(TestCase):
         self.assertEqual(self.domicilios.pendientes(), [])
 
     def test_el_tope_por_reactivacion_corta_la_tanda(self):
-        """El corte que en Ungga faltó: la primera corrida habría mandado
-        ochenta avisos de golpe."""
+        """Sin el tope, la primera corrida podría mandar decenas de avisos
+        de golpe."""
         for i in range(4):
             phone = f"57300111000{i}"
             WhatsAppContact.objects.create(

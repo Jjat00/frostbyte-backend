@@ -501,8 +501,8 @@ WHATSAPP_DELIVERY_REENGAGE_WINDOW_HOURS = int(
 WHATSAPP_DELIVERY_REENGAGE_AFTER_MINUTES = int(
     os.getenv('WHATSAPP_DELIVERY_REENGAGE_AFTER_MINUTES', '2')
 )
-# Tope por reactivación, no por barrido: es el corte que en Ungga faltó, donde
-# la primera corrida habría mandado 80 avisos de golpe.
+# Tope por reactivación, no por barrido: sin él, la primera corrida podría
+# mandar decenas de avisos de golpe.
 WHATSAPP_DELIVERY_REENGAGE_MAX = int(os.getenv('WHATSAPP_DELIVERY_REENGAGE_MAX', '10'))
 BACKEND_PUBLIC_URL = os.getenv(
     'BACKEND_PUBLIC_URL', 'https://frostbyte-backend-production.up.railway.app'

@@ -45,8 +45,8 @@ entró a atenderlo o el propio cliente escribió, el turno se descarta sin
 mandarse. Lo último no se puede mirar en la memoria del proceso —el turno normal
 pudo entrar, contestar y terminar mientras tanto—, así que se relee de la base.
 
-El tope por reactivación es el corte que en Ungga faltó: allí la primera
-corrida habría mandado ochenta avisos de golpe. Y como la marca es un campo
+El tope por reactivación evita que la primera corrida mande decenas de
+avisos de golpe. Y como la marca es un campo
 nuevo, el día que esto se despliegue nadie la tiene: el pasado no se barre.
 """
 
