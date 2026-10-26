@@ -949,6 +949,19 @@ class PreguntasDeMasTests(TestCase):
         self.assertIn("un pedido sin número es de UNO", SYSTEM_PROMPT)
         self.assertNotIn("Confirma también la cantidad", SYSTEM_PROMPT)
 
+    def test_para_uno_elige_el_tamano_personal(self):
+        """Chat real: una clienta pidió la salchipapa Clásica y corrigió
+        "No para 1"; el agente contestó "Entendido, la Clásica para 2".
+        El prompt ponía "para uno" como ejemplo de CANTIDAD, así que el modelo
+        lo leyó como "una" y dejó el tamaño que ella acababa de rechazar."""
+        from apps.whatsapp.agent import SYSTEM_PROMPT
+
+        self.assertIn('ELIGEN el tamaño Personal', SYSTEM_PROMPT)
+        self.assertIn("manda lo último que dijo: cambia la variante", SYSTEM_PROMPT)
+        # Un tamaño ya dicho no se vuelve a preguntar: el SIEMPRE incondicional chocaba.
+        self.assertNotIn("pregunta SIEMPRE cuál quiere", SYSTEM_PROMPT)
+        self.assertIn("Si ya la dijo, está elegida", SYSTEM_PROMPT)
+
     def test_el_prompt_manda_mirar_el_chat_antes_de_preguntar(self):
         from apps.whatsapp.agent import SYSTEM_PROMPT
 
