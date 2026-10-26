@@ -171,10 +171,34 @@ def _words_match(a, b):
     return False
 
 
+# "Listo" es el nombre del estado en el panel, pero en un domicilio READY es
+# que ya salió con el domiciliario (el aviso al cliente dice "va en camino").
+# Con "Listo" a secas el modelo le dijo a una clienta que su pedido estaba
+# "listo para salir" cuando el equipo ya le había dicho que iba en camino
+# (chat del 24/10), así que el estado se cuenta como lo vive el cliente.
+_READY_BY_TYPE = {
+    Order.OrderType.DELIVERY: "ya va en camino con el domiciliario",
+    Order.OrderType.PICKUP: "listo, esperando a que pase por él al local",
+    Order.OrderType.DINE_IN: "listo, se lo están llevando a la mesa",
+}
+_STATUS_FOR_CUSTOMER = {
+    Order.Status.PENDING: "recibido, aún no entra a la cocina",
+    Order.Status.PREPARING: "en la cocina, preparándose",
+    Order.Status.DELIVERED: "entregado",
+    Order.Status.CANCELLED: "cancelado",
+}
+
+
+def _status_for_customer(order):
+    if order.status == Order.Status.READY:
+        return _READY_BY_TYPE.get(order.order_type, order.get_status_display())
+    return _STATUS_FOR_CUSTOMER.get(order.status, order.get_status_display())
+
+
 def _order_summary(order):
     lines = [
         f"Pedido {order.order_number} · {order.get_order_type_display()} · "
-        f"estado: {order.get_status_display()}"
+        f"estado: {_status_for_customer(order)}"
     ]
     items = order.items.select_related("product_variant__product")
     grouped = {}
