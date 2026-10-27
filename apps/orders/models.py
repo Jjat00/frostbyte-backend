@@ -868,7 +868,18 @@ class StoreSettings(models.Model):
         verbose_name="Radio sin pedido mínimo (metros)",
         help_text=(
             "A esta distancia del local o menos (en línea recta) se puede pedir de "
-            "cualquier valor. 0 = el mínimo aplica en toda la zona."
+            "cualquier valor. 0 = el mínimo aplica en toda la zona. Solo se usa "
+            "mientras no haya una zona sin mínimo dibujada en el mapa."
+        ),
+    )
+    delivery_min_order_free_area = models.JSONField(
+        default=list,
+        blank=True,
+        verbose_name="Zona sin pedido mínimo (polígono)",
+        help_text=(
+            "Figuras dibujadas en el mapa donde se pide de cualquier valor, mismo "
+            "formato que la zona de domicilios. Si tiene contenido, manda sobre el "
+            "radio sin mínimo; vacío ([]) vuelve al círculo."
         ),
     )
     customer_ordering_enabled = models.BooleanField(

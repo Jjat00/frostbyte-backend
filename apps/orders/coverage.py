@@ -15,10 +15,11 @@ Hay dos formas de definir la zona, y el polígono manda:
 El centro sigue en settings (env DELIVERY_CENTER_LAT/LNG: el local no se
 mueve) y `settings.DELIVERY_RADIUS_KM` es el valor semilla del radio.
 
-Aparte de la zona está el pedido mínimo (`min_order_for`): dentro de un radio
-corto alrededor del local se pide de cualquier valor, y más lejos el subtotal
-debe llegar a `StoreSettings.delivery_min_order`. Ambos valores se editan
-desde el dashboard.
+Aparte de la zona está el pedido mínimo (`min_order_for`): cerca del local se
+pide de cualquier valor, y más lejos el subtotal debe llegar a
+`StoreSettings.delivery_min_order`. "Cerca" se define igual que la zona: un
+polígono dibujado (`delivery_min_order_free_area`) que manda, o un radio en
+metros de respaldo. Todo se edita desde el dashboard.
 """
 
 import math
@@ -208,13 +209,29 @@ def format_cop(value):
     return "$" + f"{value:,.0f}".replace(",", ".")
 
 
+def min_order_free_area():
+    """Figuras sin pedido mínimo, o `[]` si esa zona es el círculo.
+
+    Tolerante como `delivery_area`: un dato inservible cae al radio.
+    """
+    try:
+        raw = _store_settings().delivery_min_order_free_area
+    except DatabaseError:
+        return []
+    try:
+        return clean_delivery_area(raw)
+    except ValueError:
+        return []
+
+
 def min_order_for(lat, lng):
     """Pedido mínimo (en productos, sin envío) para entregar en esa ubicación.
 
     Cerca del local (las cuadras de al lado) se puede pedir de cualquier valor;
-    más lejos, el domicilio solo compensa desde cierto monto. Sin ubicación no
-    hay cómo saber si está cerca, así que aplica el mínimo: quien vive al lado
-    lo resuelve compartiendo la ubicación. Devuelve `Decimal("0")` si no aplica.
+    más lejos, el domicilio solo compensa desde cierto monto. "Cerca" es la
+    zona dibujada si la hay, y si no el radio en metros. Sin ubicación no hay
+    cómo saber si está cerca, así que aplica el mínimo: quien vive al lado lo
+    resuelve compartiendo la ubicación. Devuelve `Decimal("0")` si no aplica.
     """
     try:
         cfg = _store_settings()
@@ -223,13 +240,16 @@ def min_order_for(lat, lng):
     minimum = cfg.delivery_min_order or Decimal("0")
     if minimum <= 0:
         return Decimal("0")
-    if (
-        lat is not None
-        and lng is not None
-        and distance_from_store_m(lat, lng) <= cfg.delivery_min_order_free_radius_m
-    ):
-        return Decimal("0")
-    return minimum
+    if lat is None or lng is None:
+        return minimum
+    free_area = min_order_free_area()
+    if free_area:
+        near = any(
+            point_in_polygon(float(lat), float(lng), poly) for poly in free_area
+        )
+    else:
+        near = distance_from_store_m(lat, lng) <= cfg.delivery_min_order_free_radius_m
+    return Decimal("0") if near else minimum
 
 
 def min_order_rule():
@@ -244,7 +264,14 @@ def min_order_rule():
         f"el pedido mínimo a domicilio es de {format_cop(cfg.delivery_min_order)} en "
         "productos (sin contar el envío)"
     )
-    if cfg.delivery_min_order_free_radius_m:
+    free_area = min_order_free_area()
+    if free_area:
+        regla += (
+            ", salvo en la zona cercana al local marcada en el mapa (hasta "
+            f"~{area_reach_km(free_area) * 1000:.0f} m según el sector), donde se "
+            "puede pedir de cualquier valor"
+        )
+    elif cfg.delivery_min_order_free_radius_m:
         regla += (
             f", salvo a {cfg.delivery_min_order_free_radius_m} m o menos del local, "
             "donde se puede pedir de cualquier valor"

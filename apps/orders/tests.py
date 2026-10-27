@@ -312,6 +312,41 @@ class PedidoMinimoPorDistanciaTests(TestCase):
         cfg.save()
         self.assertTrue(self._serializer(1, self.LEJOS).is_valid())
 
+    def test_la_zona_dibujada_manda_sobre_el_radio(self):
+        """Un cuadrado de ~1.2 km de lado al norte: lo lejano queda libre y lo
+        que esta a 100 m del local, fuera de la figura, ya no."""
+        lat0, lng0 = float(self.lat0), float(self.lng0)
+        cfg = StoreSettings.load()
+        cfg.delivery_min_order_free_area = [[
+            [lng0 - 0.005, lat0 + 0.004],
+            [lng0 + 0.005, lat0 + 0.004],
+            [lng0 + 0.005, lat0 + 0.015],
+            [lng0 - 0.005, lat0 + 0.015],
+        ]]
+        cfg.save()
+        self.assertTrue(self._serializer(1, self.LEJOS).is_valid())
+        self.assertFalse(self._serializer(1, self.CERCA).is_valid())
+        cfg.delivery_min_order_free_area = []
+        cfg.save()
+        self.assertTrue(self._serializer(1, self.CERCA).is_valid())
+
+    def test_la_zona_sin_minimo_se_valida_al_guardarla(self):
+        from rest_framework.test import APIClient
+
+        admin = User.objects.create_user(
+            username="admin-zona-min", password="x", role="admin")
+        client = APIClient()
+        client.force_authenticate(admin)
+        url = reverse("order-store-settings")
+        respuesta = client.patch(
+            url, {"delivery_min_order_free_area": [[[0, 0], [1, 1]]]}, format="json")
+        self.assertEqual(respuesta.status_code, 400)
+        figura = [[-77.79, 0.908], [-77.789, 0.908], [-77.789, 0.909]]
+        respuesta = client.patch(
+            url, {"delivery_min_order_free_area": [figura]}, format="json")
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertEqual(respuesta.json()["delivery_min_order_free_area"], [figura])
+
     def test_solo_el_admin_cambia_el_minimo(self):
         empleado = User.objects.create_user(
             username="empleado-min", password="x", role="employee")
