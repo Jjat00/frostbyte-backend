@@ -2,7 +2,7 @@ from rest_framework import serializers
 from decimal import Decimal
 
 from apps.products.models import ProductVariant
-from .coverage import coverage_label, is_within_delivery_area
+from .coverage import coverage_label, format_cop, is_within_delivery_area, min_order_for
 from .models import Order, OrderItem, StoreSettings, Table
 
 
@@ -641,6 +641,22 @@ class CustomerOrderCreateSerializer(serializers.ModelSerializer):
                     f"({coverage_label()})."
                 )
             })
+        # El mínimo se mide en productos: el envío es del domiciliario
+        minimum = min_order_for(attrs["delivery_lat"], attrs["delivery_lng"])
+        if minimum:
+            subtotal = sum(
+                (item["product_variant_id"].price or Decimal("0.00"))
+                * item.get("quantity", 1)
+                for item in attrs["items"]
+            )
+            if subtotal < minimum:
+                raise serializers.ValidationError({
+                    "items": (
+                        f"El pedido mínimo para domicilio a tu ubicación es de "
+                        f"{format_cop(minimum)} en productos (sin contar el envío). "
+                        f"Te faltan {format_cop(minimum - subtotal)}."
+                    )
+                })
         return attrs
 
     def create(self, validated_data):

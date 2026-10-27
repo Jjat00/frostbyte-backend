@@ -23,6 +23,7 @@ from .models import (
     StoreStatusEvent,
     MIN_DELIVERY_RADIUS_KM,
     MAX_DELIVERY_RADIUS_KM,
+    MAX_MIN_ORDER_FREE_RADIUS_M,
 )
 from .consumers import broadcast_orders_update
 from .coverage import clean_delivery_area
@@ -84,9 +85,11 @@ class OrderViewSet(viewsets.ModelViewSet):
         """Estado operativo del local para el staff (abierto/cerrado, domicilios).
 
         GET  -> estado actual.
-        PATCH-> actualiza `is_open`, `customer_ordering_enabled`, `opening_time`
-                y/o `delivery_radius_km`. Al cambiar `is_open` se registra quién y
-                cuándo; el radio solo lo puede cambiar un admin.
+        PATCH-> actualiza `is_open`, `customer_ordering_enabled`, `opening_time`,
+                la zona (`delivery_radius_km`/`delivery_area`) y/o el pedido
+                mínimo (`delivery_min_order`/`delivery_min_order_free_radius_m`).
+                Al cambiar `is_open` se registra quién y cuándo; zona y mínimo
+                solo los puede cambiar un admin.
         """
         cfg = StoreSettings.load()
 
@@ -119,14 +122,58 @@ class OrderViewSet(viewsets.ModelViewSet):
                     cfg.opening_time = parsed
                     update_fields.append("opening_time")
 
-            # La zona define hasta dónde vendemos: decisión de negocio,
-            # reservada al admin, se exprese como radio o como polígono.
+            # La zona y el pedido mínimo definen hasta dónde y desde cuánto
+            # vendemos: decisión de negocio, reservada al admin.
             if {"delivery_radius_km", "delivery_area"} & set(request.data):
                 if not request.user.is_admin:
                     return Response(
                         {"detail": "Solo un administrador puede cambiar la zona de domicilios."},
                         status=status.HTTP_403_FORBIDDEN,
                     )
+            if {"delivery_min_order", "delivery_min_order_free_radius_m"} & set(request.data):
+                if not request.user.is_admin:
+                    return Response(
+                        {"detail": "Solo un administrador puede cambiar el pedido mínimo."},
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
+
+            if "delivery_min_order" in request.data:
+                try:
+                    minimum = Decimal(str(request.data.get("delivery_min_order"))).quantize(
+                        Decimal("1"))
+                except (InvalidOperation, TypeError, ValueError):
+                    return Response(
+                        {"delivery_min_order": "Ingresa el valor en pesos (ej: 16000)."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                if minimum < 0 or minimum >= Decimal("100000000"):
+                    return Response(
+                        {"delivery_min_order": "El pedido mínimo debe ser 0 o un valor positivo."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                if minimum != cfg.delivery_min_order:
+                    # Pesos enteros, guardados como el campo los devuelve (16000.00)
+                    cfg.delivery_min_order = minimum.quantize(Decimal("0.01"))
+                    update_fields.append("delivery_min_order")
+
+            if "delivery_min_order_free_radius_m" in request.data:
+                try:
+                    free_radius = int(request.data.get("delivery_min_order_free_radius_m"))
+                except (TypeError, ValueError):
+                    return Response(
+                        {"delivery_min_order_free_radius_m": "Ingresa la distancia en metros (ej: 200)."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                if not (0 <= free_radius <= MAX_MIN_ORDER_FREE_RADIUS_M):
+                    return Response(
+                        {"delivery_min_order_free_radius_m": (
+                            f"La distancia debe estar entre 0 y {MAX_MIN_ORDER_FREE_RADIUS_M} m."
+                        )},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                if free_radius != cfg.delivery_min_order_free_radius_m:
+                    cfg.delivery_min_order_free_radius_m = free_radius
+                    update_fields.append("delivery_min_order_free_radius_m")
 
             if "delivery_radius_km" in request.data:
                 try:
@@ -183,6 +230,8 @@ class OrderViewSet(viewsets.ModelViewSet):
             "delivery_fee": str(cfg.delivery_fee),
             "delivery_radius_km": float(cfg.delivery_radius_km),
             "delivery_area": cfg.delivery_area or [],
+            "delivery_min_order": str(cfg.delivery_min_order),
+            "delivery_min_order_free_radius_m": cfg.delivery_min_order_free_radius_m,
             "status_changed_at": cfg.status_changed_at,
         })
 
@@ -1642,4 +1691,8 @@ class CustomerOrderViewSet(mixins.CreateModelMixin,
             # polígono manda él, y si viene vacío se usa el círculo.
             "delivery_radius_km": float(cfg.delivery_radius_km),
             "delivery_area": cfg.delivery_area or [],
+            # Pedido mínimo: lejos del local el subtotal debe llegar a este
+            # valor; dentro del radio libre se pide de cualquier valor.
+            "delivery_min_order": str(cfg.delivery_min_order),
+            "delivery_min_order_free_radius_m": cfg.delivery_min_order_free_radius_m,
         })

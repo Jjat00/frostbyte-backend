@@ -247,3 +247,93 @@ class DomicilioTomadoEnElLocalTests(TestCase):
         self.assertEqual(order.delivery_address, "")
         self.assertEqual(order.delivery_fee, Decimal("0.00"))
         self.assertEqual(order.total, Decimal("12000"))
+
+
+class PedidoMinimoPorDistanciaTests(TestCase):
+    """Pedido minimo segun donde se entrega (2026-10-26, pedido de Jaime).
+
+    A un par de cuadras del local (200 m por defecto) se pide de cualquier
+    valor; mas lejos el subtotal en productos debe llegar a $16.000. El envio
+    no cuenta: es del domiciliario.
+    """
+
+    # ~100 m y ~1 km al norte del local; los dos dentro del radio de 1.5 km
+    CERCA = Decimal("0.0009")
+    LEJOS = Decimal("0.009")
+
+    def setUp(self):
+        from django.conf import settings as dj_settings
+
+        self.lat0 = Decimal(str(dj_settings.DELIVERY_CENTER_LAT))
+        self.lng0 = Decimal(str(dj_settings.DELIVERY_CENTER_LNG))
+        business = Business.objects.create(name="Negocio del minimo")
+        category = Category.objects.create(business=business, name="Cat minimo")
+        product = Product.objects.create(
+            business=business, category=category, name="Producto minimo",
+            description="para la prueba",
+        )
+        self.variant = ProductVariant.objects.create(
+            product=product, name="Personal", sku="MIN-PE", price=Decimal("8000"),
+        )
+        StoreSettings.load()
+
+    def _serializer(self, cantidad, dlat):
+        from apps.orders.serializers import CustomerOrderCreateSerializer
+
+        return CustomerOrderCreateSerializer(data={
+            "customer_name": "Cliente",
+            "customer_phone": "3001234567",
+            "payment_method": "cash",
+            "delivery_address": "Calle 1",
+            "delivery_lat": str((self.lat0 + dlat).quantize(Decimal("0.0000001"))),
+            "delivery_lng": str(self.lng0),
+            "items": [{"product_variant_id": self.variant.id, "quantity": cantidad}],
+        })
+
+    def test_cerca_del_local_se_pide_de_cualquier_valor(self):
+        self.assertTrue(self._serializer(1, self.CERCA).is_valid())
+
+    def test_lejos_un_pedido_por_debajo_del_minimo_no_pasa(self):
+        serializer = self._serializer(1, self.LEJOS)
+        self.assertFalse(serializer.is_valid())
+        self.assertIn("$16.000", str(serializer.errors["items"]))
+        self.assertIn("Te faltan $8.000", str(serializer.errors["items"]))
+
+    def test_lejos_un_pedido_que_llega_al_minimo_pasa(self):
+        self.assertTrue(self._serializer(2, self.LEJOS).is_valid())
+
+    def test_los_valores_se_cambian_desde_la_configuracion(self):
+        cfg = StoreSettings.load()
+        cfg.delivery_min_order_free_radius_m = 2000
+        cfg.save()
+        self.assertTrue(self._serializer(1, self.LEJOS).is_valid())
+        cfg.delivery_min_order_free_radius_m = 200
+        cfg.delivery_min_order = Decimal("0")
+        cfg.save()
+        self.assertTrue(self._serializer(1, self.LEJOS).is_valid())
+
+    def test_solo_el_admin_cambia_el_minimo(self):
+        empleado = User.objects.create_user(
+            username="empleado-min", password="x", role="employee")
+        admin = User.objects.create_user(
+            username="admin-min", password="x", role="admin")
+        from rest_framework.test import APIClient
+
+        url = reverse("order-store-settings")
+        client = APIClient()
+
+        client.force_authenticate(empleado)
+        respuesta = client.patch(url, {"delivery_min_order": 20000}, format="json")
+        self.assertEqual(respuesta.status_code, 403)
+
+        client.force_authenticate(admin)
+        respuesta = client.patch(
+            url,
+            {"delivery_min_order": 20000, "delivery_min_order_free_radius_m": 300},
+            format="json",
+        )
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertEqual(respuesta.json()["delivery_min_order"], "20000.00")
+        cfg = StoreSettings.load()
+        self.assertEqual(cfg.delivery_min_order, Decimal("20000"))
+        self.assertEqual(cfg.delivery_min_order_free_radius_m, 300)

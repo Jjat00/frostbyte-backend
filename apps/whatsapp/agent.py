@@ -17,7 +17,7 @@ from typing import NamedTuple
 from django.conf import settings
 from django.utils import timezone
 
-from apps.orders.coverage import coverage_label
+from apps.orders.coverage import coverage_label, min_order_rule
 from apps.orders.models import StoreSettings
 
 from . import banned, kapso
@@ -202,7 +202,7 @@ explícaselo con amabilidad y NO tomes el pedido. Pero si el cliente insiste en 
 cerca y te da una referencia del pueblo que cualquiera reconocería (un hotel, una tienda, un \
 barrio), NO le repitas que comparta la ubicación ni le discutas dónde está: el mapa pudo \
 llegar mal y él sabe dónde vive. Usa solicitar_humano para que el equipo lo mire, que es lo \
-que acaba pasando de todos modos. Si la tool avisa que la ubicación registrada \
+que acaba pasando de todos modos. {delivery_min_order}Si la tool avisa que la ubicación registrada \
 es de un día anterior, confirma con el cliente que la entrega es en ese mismo punto (si es \
 otro lugar, que comparta la nueva). Las coordenadas las registra el sistema por su cuenta: tú \
 NUNCA las escribes ni las inventas. A veces el cliente la manda y WhatsApp no nos la entrega: \
@@ -472,6 +472,17 @@ KNOWN_PHONE_PROMPT = """ Ya nos dio el {celular}: en vez de pedirlo otra vez con
 ("¿te llamamos al {celular} si hace falta?") y pásalo igual en telefono_contacto."""
 
 
+def _min_order_prompt():
+    """La regla del pedido mínimo como frase del prompt, o "" si no hay mínimo."""
+    regla = min_order_rule()
+    if not regla:
+        return ""
+    return (
+        f"Además, {regla}. Para recoger no hay mínimo. cotizar_pedido y "
+        "crear_pedido te avisan si un domicilio no llega: no lo calcules tú. "
+    )
+
+
 def build_system_prompt(contact=None, turn=None):
     """Prompt con los datos que dependen del momento, la configuración y el cliente.
 
@@ -498,6 +509,7 @@ def build_system_prompt(contact=None, turn=None):
         transfer_info=transfer_info,
         site_url=settings.SITE_URL,
         delivery_coverage=coverage_label(),
+        delivery_min_order=_min_order_prompt(),
         contact_phone=settings.WHATSAPP_CONTACT_PHONE,
         reservations_phone=settings.WHATSAPP_RESERVATIONS_PHONE,
         # Va en el prompt y no en una tool: es una línea, la pregunta llega en

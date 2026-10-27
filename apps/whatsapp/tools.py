@@ -18,7 +18,12 @@ from django.utils import timezone
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 
-from apps.orders.coverage import coverage_label, is_within_delivery_area
+from apps.orders.coverage import (
+    coverage_label,
+    distance_from_store_m,
+    is_within_delivery_area,
+    min_order_for,
+)
 from apps.orders.models import Order, OrderItem, StoreSettings
 from apps.products.models import Category, Product, ProductVariant
 
@@ -511,6 +516,35 @@ def build_tools(contact, turn=None):
     """
     config = AgentSettings.load()
 
+    def _falta_para_minimo(subtotal):
+        """Aviso para el modelo si el domicilio no llega al pedido mínimo, o "".
+
+        El mínimo depende de dónde se entrega: a unas cuadras del local no hay,
+        más lejos sí. Sin ubicación no se puede saber, y un pedido sin ubicación
+        se crea igual (chat de Estefa del 06/09): ahí no se bloquea, se anota
+        para el equipo (ver `_minimo_sin_ubicacion`).
+        """
+        contact.refresh_from_db(fields=["last_location_lat", "last_location_lng"])
+        lat, lng = contact.last_location_lat, contact.last_location_lng
+        if lat is None or lng is None:
+            return ""
+        minimo = min_order_for(lat, lng)
+        if not minimo or subtotal >= minimo:
+            return ""
+        return (
+            f"NO LLEGA AL PEDIDO MÍNIMO: a domicilio a esa ubicación el mínimo es "
+            f"{_cop(minimo)} en productos (sin contar el envío) y este pedido suma "
+            f"{_cop(subtotal)}; le faltan {_cop(minimo - subtotal)}. Díselo con "
+            "amabilidad y ofrécele agregar algo más o pasar a recogerlo (para "
+            "recoger no hay mínimo)."
+        )
+
+    def _minimo_sin_ubicacion(subtotal):
+        """Mínimo que aplicaría si la entrega queda lejos, cuando aún no hay
+        ubicación y el pedido no llega a él; Decimal 0 si no hay nada que avisar."""
+        minimo = min_order_for(None, None)
+        return minimo if minimo and subtotal < minimo else Decimal("0")
+
     @tool
     def consultar_estado_tienda() -> str:
         """Consulta si Frostbyte está abierto y qué canales admiten pedido ahora
@@ -849,6 +883,17 @@ def build_tools(contact, turn=None):
         else:
             lines.append(f"Envío: {_cop(envio)}")
         lines.append(f"TOTAL: {_cop(total)}")
+        if not (para_recoger or en_local):
+            falta = _falta_para_minimo(subtotal)
+            if falta:
+                lines.append(falta)
+            elif contact.last_location_lat is None and _minimo_sin_ubicacion(subtotal):
+                lines.append(
+                    f"OJO: sin ubicación no sé si llega al pedido mínimo "
+                    f"({_cop(_minimo_sin_ubicacion(subtotal))} en productos, salvo "
+                    "muy cerca del local). Pídele la ubicación como siempre; si no "
+                    "llega, el pedido se crea igual y el equipo lo revisa."
+                )
         billete = re.sub(r"\D", "", paga_con)
         if billete:
             billete = Decimal(billete)
@@ -1032,6 +1077,22 @@ def build_tools(contact, turn=None):
                 ).get(pk=item.variante_id, is_active=True, product__is_active=True)
             except ProductVariant.DoesNotExist:
                 return f"ERROR: la variante {item.variante_id} no existe o no está activa. Revisa el menú."
+
+        if not para_recoger:
+            subtotal = sum(
+                (variants[item.variante_id].price or Decimal("0.00")) * item.cantidad
+                for item in items
+            )
+            falta = _falta_para_minimo(subtotal)
+            if falta:
+                return "ERROR: " + falta + " NO crees el pedido todavía."
+            if sin_ubicacion and _minimo_sin_ubicacion(subtotal):
+                # Sin coordenadas no se sabe si está cerca: el pedido entra y
+                # el equipo revisa el mínimo al confirmar la dirección.
+                pendientes.append(
+                    f"revisar el pedido mínimo ({_cop(_minimo_sin_ubicacion(subtotal))}) "
+                    "si la entrega es lejos del local"
+                )
 
         customer_notes = notas.strip()
         if paga_al_recibir and metodo_pago != Order.PaymentMethod.CASH:
@@ -1402,6 +1463,20 @@ def build_tools(contact, turn=None):
             lines.append(
                 "DENTRO de la zona de domicilios: se puede entregar en esa ubicación."
             )
+            minimo = min_order_for(contact.last_location_lat, contact.last_location_lng)
+            metros = distance_from_store_m(
+                contact.last_location_lat, contact.last_location_lng
+            )
+            if minimo:
+                lines.append(
+                    f"Pedido mínimo para esa ubicación: {_cop(minimo)} en productos "
+                    "(sin contar el envío). Díselo solo si su pedido no llega."
+                )
+            else:
+                lines.append(
+                    f"Está a unos {metros:.0f} m del local: SIN pedido mínimo, puede "
+                    "pedir de cualquier valor."
+                )
         else:
             lines.append(
                 f"FUERA de la zona de domicilios ({coverage_label()}): NO se "

@@ -803,6 +803,9 @@ class SocialClick(models.Model):
 # mismo) y un valor absurdo por un dedazo en la UI.
 MIN_DELIVERY_RADIUS_KM = Decimal("0.10")
 MAX_DELIVERY_RADIUS_KM = Decimal("50.00")
+# Hasta dónde puede llegar el radio sin pedido mínimo: más allá de 5 km ya no
+# es "las cuadras de al lado", es quitar el mínimo (para eso está el 0).
+MAX_MIN_ORDER_FREE_RADIUS_M = 5000
 
 
 class StoreSettings(models.Model):
@@ -846,6 +849,26 @@ class StoreSettings(models.Model):
             "Figuras dibujadas en el mapa: lista de polígonos, cada uno una lista "
             "de puntos [longitud, latitud]. Si tiene contenido, manda sobre el "
             "radio; vacío ([]) vuelve al círculo. Se edita desde el dashboard."
+        ),
+    )
+    delivery_min_order = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=Decimal("16000.00"),
+        validators=[MinValueValidator(Decimal("0.00"))],
+        verbose_name="Pedido mínimo a domicilio",
+        help_text=(
+            "Valor mínimo en productos (sin contar el envío) para llevar un pedido "
+            "lejos del local. 0 = sin mínimo."
+        ),
+    )
+    delivery_min_order_free_radius_m = models.PositiveIntegerField(
+        default=200,
+        validators=[MaxValueValidator(MAX_MIN_ORDER_FREE_RADIUS_M)],
+        verbose_name="Radio sin pedido mínimo (metros)",
+        help_text=(
+            "A esta distancia del local o menos (en línea recta) se puede pedir de "
+            "cualquier valor. 0 = el mínimo aplica en toda la zona."
         ),
     )
     customer_ordering_enabled = models.BooleanField(

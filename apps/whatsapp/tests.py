@@ -1505,6 +1505,102 @@ class DomicilioConUbicacionSinDireccionTests(TestCase):
         self.assertNotIn("dirección escrita EXACTA", prompt)
 
 
+class PedidoMinimoPorDistanciaTests(TestCase):
+    """Pedido mínimo según dónde se entrega (2026-10-26, pedido de Jaime).
+
+    A un par de cuadras del local se pide de cualquier valor; más lejos el
+    domicilio exige $16.000 en productos. Frosty no suma nada: las tools le
+    dicen si llega o no.
+    """
+
+    def setUp(self):
+        from apps.business.models import Business
+        from apps.orders.models import StoreSettings
+        from apps.products.models import Category, Product, ProductVariant
+        from django.conf import settings as dj_settings
+
+        food, _ = Business.objects.get_or_create(
+            slug="frostbyte-food", defaults={"name": "Frostbyte Food"}
+        )
+        categoria = Category.objects.create(name="Bebidas min", slug="bebidas-min", business=food)
+        producto = Product.objects.create(
+            name="Jugo Hit", category=categoria, business=food, description="Mango"
+        )
+        self.variante = ProductVariant.objects.create(
+            product=producto, name="Personal", sku="HIT-MIN", price=5000
+        )
+        cfg = StoreSettings.load()
+        cfg.is_open = True
+        cfg.customer_ordering_enabled = True
+        cfg.save()
+        self.lat0 = dj_settings.DELIVERY_CENTER_LAT
+        self.lng0 = dj_settings.DELIVERY_CENTER_LNG
+        self.contact = WhatsAppContact.objects.create(phone=PHONE)
+        self.tools = {t.name: t for t in build_tools(self.contact)}
+
+    def _ubicar(self, dlat):
+        self.contact.last_location_lat = round(self.lat0 + dlat, 7)
+        self.contact.last_location_lng = self.lng0
+        self.contact.last_location_at = timezone.now()
+        self.contact.save()
+
+    def _items(self, cantidad=1):
+        return [{"variante_id": self.variante.id, "cantidad": cantidad, "notas": ""}]
+
+    def _crear(self, cantidad=1, **extra):
+        datos = {"items": self._items(cantidad), "nombre_cliente": "Ana", "metodo_pago": "nequi"}
+        datos.update(extra)
+        return self.tools["crear_pedido"].invoke(datos)
+
+    def test_a_dos_cuadras_se_pide_de_cualquier_valor(self):
+        self._ubicar(0.0009)  # ~100 m
+        self.assertIn("SIN pedido mínimo", self.tools["verificar_cobertura"].invoke({}))
+        self.assertIn("PEDIDO CREADO", self._crear())
+
+    def test_lejos_por_debajo_del_minimo_no_se_crea(self):
+        self._ubicar(0.009)  # ~1 km
+        self.assertIn("$16.000", self.tools["verificar_cobertura"].invoke({}))
+        cotizacion = self.tools["cotizar_pedido"].invoke({"items": self._items()})
+        self.assertIn("NO LLEGA AL PEDIDO MÍNIMO", cotizacion)
+        self.assertIn("le faltan $11.000", cotizacion)
+        resultado = self._crear()
+        self.assertTrue(resultado.startswith("ERROR"))
+        self.assertFalse(Order.objects.exists())
+
+    def test_lejos_llegando_al_minimo_se_crea(self):
+        self._ubicar(0.009)
+        self.assertNotIn(
+            "MÍNIMO", self.tools["cotizar_pedido"].invoke({"items": self._items(4)})
+        )
+        self.assertIn("PEDIDO CREADO", self._crear(4))
+
+    def test_para_recoger_no_hay_minimo(self):
+        self._ubicar(0.009)
+        self.assertIn("PEDIDO CREADO", self._crear(para_recoger=True, metodo_pago=""))
+
+    def test_sin_ubicacion_el_pedido_entra_y_el_minimo_queda_por_revisar(self):
+        """Un pedido sin ubicación se crea igual (chat de Estefa, 06/09): sin
+        coordenadas no se sabe si está cerca, así que lo revisa el equipo."""
+        cotizacion = self.tools["cotizar_pedido"].invoke({"items": self._items()})
+        self.assertIn("sin ubicación no sé si llega al pedido mínimo", cotizacion)
+        self.assertIn("PEDIDO CREADO", self._crear())
+        notas = Order.objects.get().customer_notes
+        self.assertTrue(notas.startswith(missing.PREFIX))
+        self.assertIn("revisar el pedido mínimo ($16.000)", notas)
+
+    def test_el_prompt_explica_la_regla_y_sin_minimo_la_calla(self):
+        from apps.orders.models import StoreSettings
+
+        prompt = build_system_prompt(self.contact)
+        self.assertIn("pedido mínimo a domicilio es de $16.000", prompt)
+        self.assertIn("200 m o menos del local", prompt)
+        cfg = StoreSettings.load()
+        cfg.delivery_min_order = 0
+        cfg.save()
+        self.assertNotIn("pedido mínimo a domicilio", build_system_prompt(self.contact))
+        self.assertIn("PEDIDO CREADO", self._crear())
+
+
 class ParametrosDelModeloTests(TestCase):
     """Cada familia de modelos se llama distinto (2026-09-03, cambio a GPT-5.6 Terra).
 

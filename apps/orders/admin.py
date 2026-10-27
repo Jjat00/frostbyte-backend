@@ -181,6 +181,8 @@ class StoreSettingsAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
                 "delivery_fee",
                 "delivery_radius_km",
                 "delivery_area",
+                "delivery_min_order",
+                "delivery_min_order_free_radius_m",
                 "customer_ordering_enabled",
                 "ordering_changed_at",
             ),

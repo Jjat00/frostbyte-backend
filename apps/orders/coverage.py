@@ -14,9 +14,15 @@ Hay dos formas de definir la zona, y el polígono manda:
 
 El centro sigue en settings (env DELIVERY_CENTER_LAT/LNG: el local no se
 mueve) y `settings.DELIVERY_RADIUS_KM` es el valor semilla del radio.
+
+Aparte de la zona está el pedido mínimo (`min_order_for`): dentro de un radio
+corto alrededor del local se pide de cualquier valor, y más lejos el subtotal
+debe llegar a `StoreSettings.delivery_min_order`. Ambos valores se editan
+desde el dashboard.
 """
 
 import math
+from decimal import Decimal
 
 from django.conf import settings
 from django.db import DatabaseError
@@ -188,6 +194,62 @@ def area_reach_km(area):
         ),
         default=0.0,
     )
+
+
+def distance_from_store_m(lat, lng):
+    """Distancia en línea recta del local a la ubicación, en metros."""
+    return 1000 * distance_km(
+        settings.DELIVERY_CENTER_LAT, settings.DELIVERY_CENTER_LNG, lat, lng
+    )
+
+
+def format_cop(value):
+    """Pesos colombianos: 16000 -> $16.000"""
+    return "$" + f"{value:,.0f}".replace(",", ".")
+
+
+def min_order_for(lat, lng):
+    """Pedido mínimo (en productos, sin envío) para entregar en esa ubicación.
+
+    Cerca del local (las cuadras de al lado) se puede pedir de cualquier valor;
+    más lejos, el domicilio solo compensa desde cierto monto. Sin ubicación no
+    hay cómo saber si está cerca, así que aplica el mínimo: quien vive al lado
+    lo resuelve compartiendo la ubicación. Devuelve `Decimal("0")` si no aplica.
+    """
+    try:
+        cfg = _store_settings()
+    except DatabaseError:
+        return Decimal("0")
+    minimum = cfg.delivery_min_order or Decimal("0")
+    if minimum <= 0:
+        return Decimal("0")
+    if (
+        lat is not None
+        and lng is not None
+        and distance_from_store_m(lat, lng) <= cfg.delivery_min_order_free_radius_m
+    ):
+        return Decimal("0")
+    return minimum
+
+
+def min_order_rule():
+    """La regla del pedido mínimo en palabras, o "" si no hay mínimo."""
+    try:
+        cfg = _store_settings()
+    except DatabaseError:
+        return ""
+    if not cfg.delivery_min_order or cfg.delivery_min_order <= 0:
+        return ""
+    regla = (
+        f"el pedido mínimo a domicilio es de {format_cop(cfg.delivery_min_order)} en "
+        "productos (sin contar el envío)"
+    )
+    if cfg.delivery_min_order_free_radius_m:
+        regla += (
+            f", salvo a {cfg.delivery_min_order_free_radius_m} m o menos del local, "
+            "donde se puede pedir de cualquier valor"
+        )
+    return regla
 
 
 def coverage_label():
