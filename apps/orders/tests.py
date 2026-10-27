@@ -330,6 +330,16 @@ class PedidoMinimoPorDistanciaTests(TestCase):
         cfg.save()
         self.assertTrue(self._serializer(1, self.CERCA).is_valid())
 
+    def test_el_borde_de_la_zona_cuenta_como_dentro_como_en_el_front(self):
+        """Hallazgo de Codex (26/10): Turf cuenta el borde y el ray casting no."""
+        from apps.orders.coverage import point_in_polygon
+
+        rect = [[-77.791, 0.908], [-77.789, 0.908], [-77.789, 0.910], [-77.791, 0.910]]
+        for lat, lng in [(0.909, -77.789), (0.909, -77.791), (0.908, -77.790),
+                         (0.910, -77.790), (0.908, -77.791)]:
+            self.assertTrue(point_in_polygon(lat, lng, rect), (lat, lng))
+        self.assertFalse(point_in_polygon(0.909, -77.788, rect))
+
     def test_la_zona_sin_minimo_se_valida_al_guardarla(self):
         from rest_framework.test import APIClient
 

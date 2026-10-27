@@ -153,6 +153,17 @@ def delivery_area():
         return []
 
 
+def _on_segment(lat, lng, lat1, lng1, lat2, lng2, eps=1e-12):
+    """¿El punto cae sobre el lado (lat1, lng1)-(lat2, lng2)?"""
+    cross = (lng2 - lng1) * (lat - lat1) - (lat2 - lat1) * (lng - lng1)
+    if abs(cross) > eps:
+        return False
+    return (
+        min(lng1, lng2) - eps <= lng <= max(lng1, lng2) + eps
+        and min(lat1, lat2) - eps <= lat <= max(lat1, lat2) + eps
+    )
+
+
 def point_in_polygon(lat, lng, polygon):
     """Ray casting sobre lat/lng en grados (anillo cerrado implícitamente).
 
@@ -164,6 +175,10 @@ def point_in_polygon(lat, lng, polygon):
     for i in range(count):
         lng1, lat1 = polygon[i]
         lng2, lat2 = polygon[(i + 1) % count]
+        # El borde cuenta como dentro, igual que Turf en el front: si no, un
+        # punto justo en la línea pasa en el checkout y la API lo rechaza.
+        if _on_segment(lat, lng, lat1, lng1, lat2, lng2):
+            return True
         # ¿El lado cruza la horizontal que pasa por el punto?
         if (lat1 > lat) != (lat2 > lat):
             lng_at_lat = lng1 + (lat - lat1) * (lng2 - lng1) / (lat2 - lat1)
