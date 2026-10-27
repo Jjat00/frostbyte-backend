@@ -1318,6 +1318,29 @@ def build_tools(contact, turn=None):
             if nueva_referencia:
                 order.delivery_reference = nueva_referencia.strip()[:300]
             order.calculate_totals()
+            # Quitar productos no puede dejar un domicilio lejano por debajo del
+            # mínimo que se exigió al crearlo. Sin ubicación no se sabe la
+            # distancia: igual que al crearlo, no se bloquea.
+            if (
+                quitar_variante_id
+                and quitar_cantidad
+                and order.order_type == Order.OrderType.DELIVERY
+            ):
+                minimo = (
+                    min_order_for(order.delivery_lat, order.delivery_lng)
+                    if order.delivery_lat is not None and order.delivery_lng is not None
+                    else Decimal("0")
+                )
+                if minimo and order.subtotal < minimo:
+                    # Un return dentro del atomic confirmaría lo ya borrado
+                    transaction.set_rollback(True)
+                    return (
+                        f"ERROR: NO LLEGA AL PEDIDO MÍNIMO: sin eso el domicilio quedaría "
+                        f"en {_cop(order.subtotal)} en productos y el mínimo a esa "
+                        f"ubicación es {_cop(minimo)} (sin contar el envío). El pedido "
+                        "sigue como estaba: díselo con amabilidad y ofrécele cambiarlo "
+                        "por otra cosa o pasar a recogerlo."
+                    )
             order.save()
 
         from apps.orders.consumers import broadcast_orders_update

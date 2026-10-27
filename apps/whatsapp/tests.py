@@ -1574,6 +1574,21 @@ class PedidoMinimoPorDistanciaTests(TestCase):
         )
         self.assertIn("PEDIDO CREADO", self._crear(4))
 
+    def test_quitar_productos_no_deja_el_domicilio_bajo_el_minimo(self):
+        """Hallazgo de Codex (26/10): con modificar_pedido se esquivaba el mínimo."""
+        self._ubicar(0.009)
+        self.assertIn("PEDIDO CREADO", self._crear(4))
+        order = Order.objects.get()
+        resultado = self.tools["modificar_pedido"].invoke({
+            "numero_pedido": order.order_number,
+            "quitar_variante_id": self.variante.id,
+            "quitar_cantidad": 3,
+        })
+        self.assertIn("NO LLEGA AL PEDIDO MÍNIMO", resultado)
+        order.refresh_from_db()
+        self.assertEqual(order.items.count(), 4, "el pedido sigue como estaba")
+        self.assertEqual(order.subtotal, 20000)
+
     def test_para_recoger_no_hay_minimo(self):
         self._ubicar(0.009)
         self.assertIn("PEDIDO CREADO", self._crear(para_recoger=True, metodo_pago=""))
