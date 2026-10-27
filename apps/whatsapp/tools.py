@@ -1290,6 +1290,7 @@ def build_tools(contact, turn=None):
                         pk=item.variante_id, is_active=True, product__is_active=True
                     )
                 except ProductVariant.DoesNotExist:
+                    transaction.set_rollback(True)
                     return f"ERROR: la variante {item.variante_id} no existe o no está activa."
                 unit_price = variant.price or Decimal("0.00")
                 for _ in range(item.cantidad):
@@ -1308,10 +1309,14 @@ def build_tools(contact, turn=None):
                     )[:quitar_cantidad]
                 )
                 if len(removable) < quitar_cantidad:
+                    transaction.set_rollback(True)
                     return "ERROR: el pedido no tiene tantas unidades de esa variante."
                 for order_item in removable:
                     order_item.delete()
             if not order.items.exists():
+                # Los return de error dentro del atomic deshacen lo hecho: sin
+                # set_rollback la transacción se confirma y el pedido queda vacío
+                transaction.set_rollback(True)
                 return "ERROR: el pedido quedaría vacío; usa cancelar_pedido en su lugar."
             if nueva_direccion:
                 order.delivery_address = nueva_direccion.strip()[:300]
@@ -1332,7 +1337,6 @@ def build_tools(contact, turn=None):
                     else Decimal("0")
                 )
                 if minimo and order.subtotal < minimo:
-                    # Un return dentro del atomic confirmaría lo ya borrado
                     transaction.set_rollback(True)
                     return (
                         f"ERROR: NO LLEGA AL PEDIDO MÍNIMO: sin eso el domicilio quedaría "

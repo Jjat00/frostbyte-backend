@@ -1589,6 +1589,27 @@ class PedidoMinimoPorDistanciaTests(TestCase):
         self.assertEqual(order.items.count(), 4, "el pedido sigue como estaba")
         self.assertEqual(order.subtotal, 20000)
 
+    def test_un_error_al_modificar_deja_el_pedido_como_estaba(self):
+        """Hallazgo de Codex (26/10): quitar todo respondía error pero dejaba
+        el pedido confirmado sin productos."""
+        self._ubicar(0.009)
+        self.assertIn("PEDIDO CREADO", self._crear(4))
+        order = Order.objects.get()
+        resultado = self.tools["modificar_pedido"].invoke({
+            "numero_pedido": order.order_number,
+            "quitar_variante_id": self.variante.id,
+            "quitar_cantidad": 4,
+        })
+        self.assertIn("quedaría vacío", resultado)
+        order.refresh_from_db()
+        self.assertEqual(order.items.count(), 4)
+        resultado = self.tools["modificar_pedido"].invoke({
+            "numero_pedido": order.order_number,
+            "agregar_items": self._items(1) + [{"variante_id": 999999, "cantidad": 1, "notas": ""}],
+        })
+        self.assertIn("no existe", resultado)
+        self.assertEqual(order.items.count(), 4, "lo agregado antes del error se deshace")
+
     def test_para_recoger_no_hay_minimo(self):
         self._ubicar(0.009)
         self.assertIn("PEDIDO CREADO", self._crear(para_recoger=True, metodo_pago=""))
