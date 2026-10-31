@@ -47,6 +47,7 @@ frostbyte-backend/
 │   ├── reservations/   # Reservas de mesas, grupos y Sala VIP
 │   ├── contests/       # Concursos con inscripción paga (disfraces de Halloween)
 │   └── polla/          # Solo modelos: datos históricos de la Polla del Mundial 2026
+├── cli/                # CLI `frostbyte` para agentes y personas (Node, sin dependencias)
 ├── config/
 │   ├── settings.py     # Configuración Django
 │   ├── urls.py         # Rutas principales
@@ -120,6 +121,7 @@ Frostbyte incluye múltiples capacidades de IA (OpenAI, Google Gemini y Anthropi
 - Ciclo de vida: Pendiente → Preparando → Listo → Entregado
 - Canales: en el local (por mesa y piso), para recoger y a domicilio (cliente con Google o por WhatsApp)
 - Domicilios: zona de cobertura dibujada como polígono, interruptor fechado para prender o apagar el servicio
+- Pedido mínimo a domicilio según la distancia: lejos del local el subtotal en productos (sin el envío) debe llegar a `delivery_min_order`; cerca se pide de cualquier valor. "Cerca" es la zona sin mínimo dibujada como polígono o, si no hay, el radio en metros `delivery_min_order_free_radius_m` (0 = el mínimo aplica en toda la zona). Lo valida la creación del pedido del cliente con Google y Frosty lo avisa por WhatsApp; se edita en `/orders/store-settings/` (solo admin)
 - Pedidos pendientes de pago (deudas) y métodos de pago por pedido
 - Métodos de pago: Efectivo, tarjeta, transferencia, Nequi, Daviplata
 - Items con notas (alergias, preferencias)
@@ -477,6 +479,24 @@ python manage.py migrate
 ### Panel Admin
 
 Acceder a `http://localhost:8000/admin/` con las credenciales del superusuario.
+
+## CLI para agentes (`cli/`)
+
+`frostbyte` lee y edita Frostbyte por la API REST desde la terminal: carta e imágenes, productos y variantes, ventas, finanzas, pedidos y estado del local. Un solo archivo, Node 20+, sin dependencias.
+
+```bash
+ln -sf "$PWD/cli/frostbyte.mjs" ~/.local/bin/frostbyte   # desde la raíz del repo
+frostbyte login --username <admin>   # contraseña por FROSTBYTE_PASSWORD o sin eco en la TTY
+frostbyte product ls -c granizados
+frostbyte product set granizado-de-mora --description "…" --dry-run
+frostbyte sales summary --date month
+frostbyte schema                     # contrato para agentes de todos los comandos
+```
+
+- Por defecto apunta a producción; `frostbyte config --url local` (o `--url local` por comando, o `FROSTBYTE_URL`) usa el backend local en `:18000`.
+- Las escrituras aceptan `--dry-run` y quedan auditadas en `~/.local/state/frostbyte/audit/`. La salida es JSON si stdout no es una TTY (o con `--json`).
+- La sesión (refresh token, nunca la contraseña) vive en `~/.config/frostbyte/sessions/` con permisos 0600.
+- Detalle en [cli/README.md](cli/README.md) y manual para agentes en [cli/skills/frostbyte/SKILL.md](cli/skills/frostbyte/SKILL.md).
 
 ## Producción
 
