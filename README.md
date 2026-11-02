@@ -45,7 +45,7 @@ frostbyte-backend/
 │   ├── recetarios/     # Guías de preparación paso a paso
 │   ├── whatsapp/       # Frosty: agente de pedidos por WhatsApp (Kapso + LangGraph)
 │   ├── reservations/   # Reservas de mesas, grupos y Sala VIP
-│   ├── contests/       # Concursos con inscripción paga (disfraces de Halloween)
+│   ├── contests/       # Solo modelos: inscripciones del concurso de disfraces de Halloween 2026
 │   └── polla/          # Solo modelos: datos históricos de la Polla del Mundial 2026
 ├── cli/                # CLI `frostbyte` para agentes y personas (Node, sin dependencias)
 ├── config/
@@ -102,7 +102,7 @@ Frostbyte incluye múltiples capacidades de IA (OpenAI, Google Gemini y Anthropi
 
 ### Autenticación (`/apps/accounts/`)
 - Modelo de usuario personalizado con roles (admin, employee, customer)
-- Clientes con cuenta de Google (`/auth/google/`) para pedir a domicilio, inscribirse en concursos y reservar
+- Clientes con cuenta de Google (`/auth/google/`) para pedir a domicilio y reservar
 - JWT con access token (12h) y refresh token (90 días, ventana deslizante)
 - Rotación automática de tokens
 - Endpoints: login, logout, refresh, me, change-password
@@ -182,10 +182,6 @@ Frostbyte incluye múltiples capacidades de IA (OpenAI, Google Gemini y Anthropi
 ### Reservas (`/apps/reservations/`)
 - Mesas (gratis), grupos grandes (anticipo abonable) y Sala VIP del piso 3 (anticipo + consumo mínimo, por turnos)
 - Panel del staff y avisos en tiempo real por `ws/reservations/`
-
-### Concursos (`/apps/contests/`)
-- Inscripción paga con cuenta de Google; el staff marca pago, cédula y seguimiento en Instagram desde la barra
-- Primer concurso: disfraces de Halloween 2026. Cuenta visitas únicas a la página del concurso
 
 ### Analytics (`/apps/analytics/`)
 - `financial`: ventas, gastos y margen
@@ -268,7 +264,6 @@ Base URL: `http://localhost:8000/api/v1/`
 | WhatsApp | `/whatsapp/conversations/` | Bandeja de chats (solo lectura, staff) |
 | WhatsApp | `/whatsapp/agent-settings/` · `/whatsapp/agent-tones/` · `/whatsapp/stickers/` | Configuración de Frosty |
 | Reservations | `/reservations/` · `/reservations/admin/` | Reservas del cliente y panel del staff |
-| Contests | `/contests/current/` · `/contests/admin/` | Concurso vigente, inscripción y panel de barra |
 | Music | `/song-requests/` | CRUD solicitudes de canciones |
 | Music | `/song-requests/search/` | Buscar canciones en Spotify |
 | Music | `/song-requests/now_playing/` | Canción reproduciéndose |
@@ -523,7 +518,7 @@ El proyecto incluye `railway.toml` (Nixpacks) y Railway despliega solo con cada 
 ### Roles
 - `admin`: Acceso completo
 - `employee`: Acceso limitado a operaciones
-- `customer`: Cliente con cuenta de Google (pedidos, reservas, concursos)
+- `customer`: Cliente con cuenta de Google (pedidos y reservas)
 
 ## Testing
 
@@ -553,4 +548,4 @@ python manage.py test
 - `TVState` - Singleton con el estado actual de la pantalla TV (incluye videos del Mix)
 - `WhatsAppContact` - Contacto del agente de WhatsApp con sus preferencias
 - `Reservation` - Reservas de mesas, grupos y Sala VIP
-- `Contest` / `ContestEntry` - Concursos e inscripciones
+- `Contest` / `ContestEntry` - Concurso de disfraces de Halloween 2026 (solo datos históricos, sin API)

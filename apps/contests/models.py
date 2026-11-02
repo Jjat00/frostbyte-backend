@@ -1,5 +1,9 @@
 """Concursos con inscripción paga (el primero: disfraces de Halloween 2026).
 
+RETIRADO el 2026-11-02: la API, el admin y la UI se borraron. Solo quedan
+estos modelos y sus migraciones para conservar las inscripciones en la base.
+No agregar lógica aquí; para revivirlo, recuperar el código desde git.
+
 Flujo decidido el 2026-09-23:
 - El cliente se inscribe en la app con su cuenta de Google. Declara ser mayor
   de edad y deja su usuario de Instagram.

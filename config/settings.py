@@ -72,7 +72,7 @@ INSTALLED_APPS = [
     'apps.polla',  # solo modelos: conserva los datos del Mundial 2026
     'apps.whatsapp',
     'apps.reservations',
-    'apps.contests',
+    'apps.contests',  # solo modelos: conserva las inscripciones al concurso de Halloween 2026
 ]
 
 # Custom User Model
