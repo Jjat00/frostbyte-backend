@@ -539,6 +539,14 @@ def build_tools(contact, turn=None):
             "recoger no hay mínimo)."
         )
 
+    def _local_cerrado(cfg):
+        """Lo que responden cotizar y crear cuando el local ya no está abierto."""
+        return (
+            "ERROR: el local está CERRADO ahora mismo; no se pueden cotizar ni crear "
+            "pedidos de ningún tipo. Dile al cliente que está cerrado y que "
+            f"{cfg.reopening_hint()}; no le ofrezcas encargar ni recoger."
+        )
+
     def _minimo_sin_ubicacion(subtotal):
         """Mínimo que aplicaría si la entrega queda lejos, cuando aún no hay
         ubicación y el pedido no llega a él; Decimal 0 si no hay nada que avisar."""
@@ -854,12 +862,18 @@ def build_tools(contact, turn=None):
         """
         if not items:
             return "ERROR: no hay items para cotizar."
+        cfg = StoreSettings.load()
+        # Chat real del 01-11: el local cerró a las 7:20 p. m. y a las 8:31 el
+        # agente le armó a la clienta el resumen para recoger, porque el estado
+        # solo se consulta al empezar la conversación. Ella confirmó y ahí
+        # crear_pedido le dijo que no: el "no" tiene que llegar antes del resumen.
+        if not cfg.is_open:
+            return _local_cerrado(cfg)
         if piso and para_recoger:
             return "ERROR: un pedido es en el local (piso) o para recoger, no ambos."
         if piso and piso not in PISOS_DEL_LOCAL:
             return _entrega_en_local(piso, "")[3]
         en_local = bool(piso)
-        cfg = StoreSettings.load()
         lines = []
         subtotal = Decimal("0.00")
         for item in items:
@@ -987,11 +1001,7 @@ def build_tools(contact, turn=None):
         """
         cfg = StoreSettings.load()
         if not cfg.is_open:
-            return (
-                "ERROR: el local está CERRADO ahora mismo; no se pueden crear pedidos "
-                "de ningún tipo. Dile al cliente que está cerrado y que "
-                f"{cfg.reopening_hint()}; no le ofrezcas encargar ni recoger."
-            )
+            return _local_cerrado(cfg)
         en_local = bool(piso)
         if en_local and para_recoger:
             return "ERROR: un pedido es en el local (piso) o para recoger, no ambos."

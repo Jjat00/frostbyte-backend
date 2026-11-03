@@ -1043,6 +1043,17 @@ class LocalCerradoTests(TestCase):
         self.assertIn("CERRADO", error)
         self.assertIn("no le ofrezcas encargar ni recoger", error)
 
+    def test_cotizar_con_el_local_cerrado_no_arma_resumen(self):
+        """Chat real 2026-11-01: el local cerró a las 7:20 p. m. y a las 8:31 el
+        agente le mostró a Angela el resumen para recoger con su TOTAL; ella
+        confirmó y solo entonces crear_pedido dijo que estaba cerrado."""
+        cotizacion = self.tools["cotizar_pedido"].invoke(
+            {"items": [{"variante_id": 1, "cantidad": 1}], "para_recoger": True}
+        )
+        self.assertIn("CERRADO", cotizacion)
+        self.assertIn("no le ofrezcas encargar ni recoger", cotizacion)
+        self.assertNotIn("TOTAL", cotizacion)
+
     def _hint_a_las(self, hora, minuto, cerrado_el=None):
         """El aviso de reapertura tal como se leería a esa hora de hoy.
 
