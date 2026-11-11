@@ -125,10 +125,15 @@ _ALIAS = {
     "hambre": ("salchipapa",),
     "gaseosa": ("bebida",),
     "refresco": ("bebida",),
-    "trago": ("coctel",),
-    "licor": ("coctel",),
     "cocktail": ("coctel",),
 }
+
+# Lo que tiene alcohol vive en muchas categorías y casi nada lo dice en el
+# nombre: quien escribe "¿qué tienen con alcohol?" también pregunta por los
+# cócteles, las micheladas, las cervezas, los shots, los vinos y Los Cuates.
+_CON_ALCOHOL = ("coctel", "michelada", "cerveza", "shot", "vino", "cuate")
+for _palabra in ("alcohol", "alcoholico", "alcoholica", "licor", "trago", "guaro"):
+    _ALIAS[_palabra] = _CON_ALCOHOL
 
 # Cuántos productos se listan como mucho en una búsqueda
 _MAX_RESULTADOS = 12
@@ -158,10 +163,27 @@ def _tokens(text):
     }
 
 
+def _tokens_afirmados(text):
+    """Como _tokens, pero sin lo que el texto niega: "sin alcohol" no es alcohol.
+
+    Para las descripciones, que son prosa: la de la Pecera granizada dice "un
+    festín de sabores frutales sin alcohol" y a quien pedía algo con alcohol se
+    la devolvía como si lo tuviera.
+    """
+    palabras = re.findall(r"[a-z0-9]+", _normalize(text))
+    negadas = {palabras[i + 1] for i, w in enumerate(palabras[:-1]) if w == "sin"}
+    return {_singular(w) for w in palabras if len(w) >= 3 and w not in negadas}
+
+
+def _client_words(texto):
+    """Las palabras útiles que escribió el cliente, sin sinónimos."""
+    raw = {w for w in re.findall(r"[a-z0-9]+", _normalize(texto)) if len(w) >= 3}
+    return {_singular(w) for w in raw - _STOPWORDS} - _STOPWORDS
+
+
 def _search_words(texto):
     """Palabras útiles de lo que escribió el cliente, más sus sinónimos."""
-    raw = {w for w in re.findall(r"[a-z0-9]+", _normalize(texto)) if len(w) >= 3}
-    words = {_singular(w) for w in raw - _STOPWORDS} - _STOPWORDS
+    words = _client_words(texto)
     return words | {alias for w in words for alias in _ALIAS.get(w, ())}
 
 
@@ -251,14 +273,27 @@ def _customer_orders(contact):
     return Order.objects.filter(customer_phone__endswith=digits)
 
 
-def _coincidencias(products, words, exigir_variantes=True):
+def _coincidencias(products, words, exigir_variantes=True, sinonimos=frozenset()):
     """Puntúa los productos contra las palabras del cliente, de más a menos.
 
     Devuelve [(puntaje, producto, variantes activas)]. Se usa dos veces: con lo
     que está a la venta hoy y, si eso no da nada, con lo apagado, para poder
     distinguir "se acabó" de "no lo vendemos" (`exigir_variantes=False` porque
     un producto apagado puede tener las variantes apagadas también).
+
+    `sinonimos` son las palabras que puso _ALIAS y no el cliente: encuentran
+    productos, pero valen la mitad y no cuentan como palabra cubierta. Si no,
+    a "granizado con alcohol" un cóctel (que solo coincide por el sinónimo
+    "coctel") le ganaba al Venom, que es lo que de verdad pidió.
     """
+    products = list(products)
+    # Las palabras que en el catálogo nombran un tamaño ("grande", "personal",
+    # "24 oz"): esas no identifican ningún producto aunque salgan en una
+    # descripción, o "1 grande" traería medio menú
+    tamanos = set()
+    for product in products:
+        tamanos |= _tokens(" ".join(v.name for v in product.variants.all()))
+
     scored = []
     for product in products:
         variants = [v for v in product.variants.all() if v.is_active]
@@ -270,13 +305,10 @@ def _coincidencias(products, words, exigir_variantes=True):
             (_tokens(product.name), 3),
             (_tokens(product.category.name), 2),
         )
-        # el tamaño y la descripción solo desempatan: "1 grande" o "personal"
-        # no nombran ningún producto, y por sí solos traerían medio menú
-        debiles = (
-            (_tokens(" ".join(v.name for v in variants)), 1),
-            (_tokens(product.description), 1),
-        )
+        tamano = _tokens(" ".join(v.name for v in variants))
+        descripcion = _tokens_afirmados(product.description)
         score = 0
+        cubiertas = 0
         identificado = False
         for word in words:
             peso = max(
@@ -285,16 +317,30 @@ def _coincidencias(products, words, exigir_variantes=True):
             )
             if peso:
                 identificado = True
-            else:
-                peso = max(
-                    (w for tokens, w in debiles if any(_words_match(word, t) for t in tokens)),
-                    default=0,
-                )
+            elif any(_words_match(word, t) for t in descripcion):
+                # La descripción pesa poco, pero SÍ identifica: el Venom se
+                # llama solo "Venom" y lo de "granizado con alcohol" lo dice su
+                # descripción. Sin esto, a quien pedía un granizado con alcohol
+                # se le contestó tres veces (06 al 08-11) que solo había la
+                # Pecera, y el equipo tuvo que entrar a ofrecerlo.
+                peso = 1
+                if not any(_words_match(word, t) for t in tamanos):
+                    identificado = True
+            elif any(_words_match(word, t) for t in tamano):
+                peso = 1
+            if word in sinonimos:
+                peso /= 2
+            elif peso:
+                cubiertas += 1
             score += peso
         if identificado:
-            scored.append((score, product, variants))
-    scored.sort(key=lambda row: (-row[0], row[1].name))
-    return scored
+            scored.append((cubiertas, score, product, variants))
+    # Primero lo que cubre MÁS de lo que pidió el cliente y después el peso: a
+    # "granizado con alcohol" el Venom (categoría + descripción) le responde
+    # mejor que todos los granizados sin alcohol, que solo tienen "granizado"
+    # en el nombre y antes le ganaban y lo dejaban fuera del corte
+    scored.sort(key=lambda row: (-row[0], -row[1], row[2].name))
+    return [(score, product, variants) for _c, score, product, variants in scored]
 
 
 def _lo_que_mas_pide(contact):
@@ -701,6 +747,8 @@ def build_tools(contact, turn=None):
             texto: lo que el cliente pidió, con sus palabras
         """
         words = _search_words(texto)
+        propias = _client_words(texto)
+        sinonimos = frozenset(words - propias)
         if not words:
             return "ERROR: dame palabras del producto a buscar."
         products = (
@@ -713,7 +761,7 @@ def build_tools(contact, turn=None):
             .select_related("category", "category__business")
             .prefetch_related("variants", "modifier_links__group__options")
         )
-        scored = _coincidencias(products, words)
+        scored = _coincidencias(products, words, sinonimos=sinonimos)
 
         if not scored:
             # Dos cosas distintas que antes se decían igual y costaron ventas:
@@ -738,6 +786,7 @@ def build_tools(contact, turn=None):
                 .prefetch_related("variants"),
                 words,
                 exigir_variantes=False,
+                sinonimos=sinonimos,
             )
             hoy = _catalogo_de_hoy()
             if agotados:
@@ -775,11 +824,29 @@ def build_tools(contact, turn=None):
                     if _es_personalizable(product)
                     else ""
                 )
+                # Si lo encontró la descripción, se la mostramos: "Venom" a
+                # secas no le dice al modelo que es el granizado con alcohol
+                nombre = _tokens(product.name) | _tokens(product.category.name)
+                por_descripcion = any(
+                    not any(_words_match(w, t) for t in nombre)
+                    and any(_words_match(w, t) for t in _tokens_afirmados(product.description))
+                    for w in propias
+                )
+                if por_descripcion:
+                    extra += f" — {product.description.strip()[:120]}"
                 lines.append(f"  - {product.name}: {prices}{extra}")
         sobrantes = len(scored) - _MAX_RESULTADOS
         if sobrantes > 0:
+            # Las categorías que quedaron fuera del corte se nombran: a "¿qué
+            # tienen con alcohol?" no se le puede contestar solo con lo que
+            # cupo en las primeras 12 líneas
+            otras = []
+            for _score, product, _variants in scored[_MAX_RESULTADOS:]:
+                if product.category not in grouped and product.category.name not in otras:
+                    otras.append(product.category.name)
+            donde = f", también en: {', '.join(otras)}" if otras else ""
             lines.append(
-                f"(y {sobrantes} coincidencia(s) menos parecida(s); usa consultar_menu si hace falta)"
+                f"(y {sobrantes} coincidencia(s) menos parecida(s){donde}; usa consultar_menu si hace falta)"
             )
         return "Coincidencias en el menú:\n" + "\n".join(lines)
 

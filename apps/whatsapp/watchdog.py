@@ -68,14 +68,18 @@ NOTA_PERDIDA = (
 # llegara a una conversación intacta. Chat real del 19-09: el equipo cerró el
 # precio ("26.000") y el cliente respondió "Gracias"; diez minutos después el
 # vigía retomó con "¿Con qué billete vas a pagar, veci?", una pregunta de un
-# flujo que el humano ya había dejado resuelto.
+# flujo que el humano ya había dejado resuelto. Y el 08-11 el equipo cambió dos
+# granizados por dos Venom de $10.000; el vigía registró el pedido con los
+# granizados de antes de que el compañero entrara.
 NOTA_HUMANO = (
     " Ojo: un compañero del equipo estuvo atendiendo este chat hace poco, y lo que él dijo "
     "vale. Lee lo que ya quedó resuelto entre ellos: no repitas sus preguntas, no vuelvas a "
     "empezar el flujo del pedido y no le pidas datos que él ya cerró. Si lo último del "
     "cliente fue solo un agradecimiento o una despedida, responde solo la marca de silencio "
     "de la regla 11. Pero si estaba contestando algo que el compañero le preguntó "
-    "—confirmando el pedido, dando un dato—, eso sí se atiende: ahí lo que falte lo haces tú."
+    "—confirmando el pedido, dando un dato—, eso sí se atiende: ahí lo que falte lo haces tú. "
+    "Y si el compañero cambió los productos, el tamaño o el precio, el pedido que registres "
+    "lleva lo que él acordó, nunca lo que el cliente había pedido antes de que entrara."
 )
 
 

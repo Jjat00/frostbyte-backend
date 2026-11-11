@@ -596,6 +596,94 @@ class BusquedaDeProductosTests(TestCase):
         self.assertIn("Granizado de Mora", resultado)  # el catálogo de hoy, para que elija
         self.assertIn("búscalo otra vez con ESE nombre", resultado)
 
+    def _crear_venom(self):
+        from apps.products.models import Category, Product, ProductVariant
+
+        granizados = Category.objects.get(slug="granizados")
+        venom = Product.objects.create(
+            name="Venom",
+            category=granizados,
+            business=granizados.business,
+            description="Granizado de alcohol con whisky y vodka",
+        )
+        ProductVariant.objects.create(product=venom, name="Pequeño", sku="VN-1", price=10000)
+        return venom
+
+    def test_la_descripcion_encuentra_un_producto_de_nombre_propio(self):
+        """Chats reales del 06 al 08-11: "¿vienen con alcohol?" -> "No, los
+        granizados no llevan alcohol". El Venom se llama solo "Venom" y lo de
+        alcohol lo dice su descripción, que antes solo desempataba: con
+        "alcohol" a secas ni aparecía."""
+        self._crear_venom()
+        self.assertIn("Venom", self._buscar("tienen algo con alcohol"))
+
+    def test_lo_que_cubre_todo_lo_pedido_va_primero(self):
+        """Los granizados sin alcohol solo cubren "granizado" y por orden
+        alfabético dejaban al Venom fuera del corte de resultados."""
+        self._crear_venom()
+        resultado = self._buscar("un granizado con alcohol")
+        primero = [l for l in resultado.splitlines() if l.startswith("  - ")][0]
+        self.assertIn("Venom", primero)
+
+    def test_lo_que_la_descripcion_niega_no_cuenta(self):
+        """La Pecera granizada dice "sin alcohol" y salía al pedir alcohol."""
+        from apps.products.models import Product
+
+        Product.objects.filter(name="Granizado de Mora").update(
+            description="Fruta natural sin alcohol"
+        )
+        self._crear_venom()
+        resultado = self._buscar("algo con alcohol")
+        self.assertIn("Venom", resultado)
+        self.assertNotIn("Granizado de Mora", resultado)
+
+    def test_alcohol_a_secas_abarca_toda_la_carta_con_alcohol(self):
+        """Lo que tiene alcohol vive en cócteles, micheladas, cervezas, shots y
+        vinos, y casi nada lo dice en el nombre."""
+        from apps.products.models import Category, Product, ProductVariant
+
+        granizados = Category.objects.get(slug="granizados")
+        cocteles = Category.objects.create(
+            name="Cócteles", slug="cocteles", business=granizados.business
+        )
+        mojito = Product.objects.create(
+            name="Mojito", category=cocteles, business=granizados.business,
+            description="Hierbabuena, limón y soda",
+        )
+        ProductVariant.objects.create(product=mojito, name="Regular", sku="MJ-1", price=15000)
+        self._crear_venom()
+        resultado = self._buscar("que tienen con alcohol")
+        self.assertIn("Mojito", resultado)
+        self.assertIn("Venom", resultado)
+        # el Venom dice por qué salió: su nombre no lo cuenta
+        self.assertIn("whisky y vodka", resultado)
+
+    def test_el_sinonimo_no_le_gana_a_lo_que_pidio_el_cliente(self):
+        """A "granizado con alcohol" un cóctel solo coincide por el sinónimo."""
+        from apps.products.models import Category, Product, ProductVariant
+
+        granizados = Category.objects.get(slug="granizados")
+        cocteles = Category.objects.create(
+            name="Cócteles", slug="cocteles", business=granizados.business
+        )
+        coctel = Product.objects.create(
+            name="Blue Long", category=cocteles, business=granizados.business,
+            description="Licores blancos",
+        )
+        ProductVariant.objects.create(product=coctel, name="Regular", sku="BL-1", price=15000)
+        self._crear_venom()
+        resultado = self._buscar("un granizado con alcohol")
+        self.assertLess(resultado.index("Venom"), resultado.index("Blue Long"))
+
+    def test_un_tamano_en_la_descripcion_no_identifica(self):
+        """Lo del 2026-08-20 sigue en pie aunque una descripción diga "grande"."""
+        from apps.products.models import Product
+
+        Product.objects.filter(name="Granizado de Mora").update(
+            description="Un vaso mediano de fruta natural"
+        )
+        self.assertIn("Sin coincidencias", self._buscar("1 mediano"))
+
     def test_el_catalogo_que_se_le_da_al_modelo_no_lleva_precios(self):
         """Es material para que decida, no para volcarlo al chat."""
         resultado = self._buscar("tienen hamburguesas")
