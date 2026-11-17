@@ -476,7 +476,7 @@ WHATSAPP_BATCH_MAX_WAIT_SECONDS = float(
 # (con respaldo en texto libre). Apagado por defecto: en local el .env tiene
 # las credenciales buenas de Kapso y cada cierre de prueba le llegaría al dueño.
 OWNER_REPORTS_ENABLED = os.getenv('OWNER_REPORTS_ENABLED', 'False').lower() == 'true'
-WHATSAPP_REPORT_TEMPLATE_DAY = os.getenv('WHATSAPP_REPORT_TEMPLATE_DAY', 'resumen_cierre_dia')
+WHATSAPP_REPORT_TEMPLATE_DAY = os.getenv('WHATSAPP_REPORT_TEMPLATE_DAY', 'reporte_cierre_dia')
 WHATSAPP_REPORT_TEMPLATE_PERIOD = os.getenv('WHATSAPP_REPORT_TEMPLATE_PERIOD', 'resumen_periodo')
 WHATSAPP_REPORT_TEMPLATE_LANGUAGE = os.getenv('WHATSAPP_REPORT_TEMPLATE_LANGUAGE', 'es')
 # Vigía de clientes sin respuesta (apps/whatsapp/watchdog.py). Barre cada

@@ -66,6 +66,8 @@ CANALES = (
 # Textos de las plantillas tal como se registran en Meta. El respaldo en
 # texto libre usa los mismos, así el dueño lee lo mismo llegue por donde
 # llegue. Si se cambia uno aquí, hay que cambiar la plantilla en Kapso.
+# Nada de despedidas ni guiños: el 2026-11-16 Meta pasó a Marketing la primera
+# versión del cierre (resumen_cierre_dia) por terminar en "Buen descanso 🌙".
 TEMPLATE_DAY_TEXT = (
     "📊 Cierre del {{1}}\n"
     "Ventas: {{2}}\n"
@@ -73,7 +75,7 @@ TEMPLATE_DAY_TEXT = (
     "Por canal: {{5}}\n"
     "Más vendido: {{6}}\n"
     "Abierto: {{7}}\n"
-    "Buen descanso 🌙"
+    "Reporte automático generado al cerrar el local."
 )
 TEMPLATE_PERIOD_TEXT = (
     "📈 Resumen de {{1}}\n"

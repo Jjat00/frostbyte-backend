@@ -174,7 +174,7 @@ class EnvioTests(TestCase):
     @patch("apps.whatsapp.kapso.send_template", return_value=None)
     def test_plantilla_rechazada_cae_a_texto_libre(self, template, text):
         params = ["sábado 14 de noviembre", "$45.000", "3", "$15.000", "Local 3", "Lujuria (3)", "x"]
-        self.assertTrue(resumenes._enviar("resumen_cierre_dia", resumenes.TEMPLATE_DAY_TEXT, params))
+        self.assertTrue(resumenes._enviar("reporte_cierre_dia", resumenes.TEMPLATE_DAY_TEXT, params))
 
         template.assert_called_once()
         self.assertEqual(template.call_args.args[1], "573164277879")
@@ -199,7 +199,7 @@ class EnvioTests(TestCase):
 
     @patch("apps.whatsapp.kapso._post_message")
     def test_send_template_aplana_saltos_de_linea(self, post):
-        kapso.send_template("pn-1", "573164277879", "resumen_cierre_dia", "es", ["a\nb", "", "c    d"])
+        kapso.send_template("pn-1", "573164277879", "reporte_cierre_dia", "es", ["a\nb", "", "c    d"])
         payload = post.call_args.args[1]
         textos = [p["text"] for p in payload["template"]["components"][0]["parameters"]]
         self.assertEqual(textos, ["a b", "-", "c d"])
