@@ -774,3 +774,32 @@ class StickerDraft(models.Model):
         return cls.objects.update_or_create(
             contact=contact, defaults={"kind": kind, "data": data, "mime": mime}
         )[0]
+
+
+class OwnerReport(models.Model):
+    """Resumen de semana o de mes ya enviado al dueño (ver resumenes.py).
+
+    Existe para no repetirlo: el vigía revisa cada minuto si toca, y un
+    reinicio del proceso justo después de enviar no puede mandarlo otra vez.
+    La fila se crea ANTES de enviar; si el envío falla no se reintenta.
+    """
+
+    class Kind(models.TextChoices):
+        WEEK = "week", "Semana"
+        MONTH = "month", "Mes"
+
+    kind = models.CharField(max_length=10, choices=Kind.choices, verbose_name="Tipo")
+    period_start = models.DateField(verbose_name="Inicio del periodo")
+    sent_at = models.DateTimeField(auto_now_add=True, verbose_name="Enviado")
+
+    class Meta:
+        verbose_name = "Resumen enviado al dueño"
+        verbose_name_plural = "Resúmenes enviados al dueño"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["kind", "period_start"], name="owner_report_unico_por_periodo"
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.get_kind_display()} desde {self.period_start}"

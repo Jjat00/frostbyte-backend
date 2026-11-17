@@ -232,11 +232,15 @@ class OrderViewSet(viewsets.ModelViewSet):
                 cfg.save(update_fields=update_fields + ["updated_at"])
                 # Historial de aperturas y cierres para la gráfica de horario.
                 if "is_open" in update_fields:
-                    StoreStatusEvent.objects.create(
+                    evento = StoreStatusEvent.objects.create(
                         is_open=cfg.is_open,
                         created_at=cfg.status_changed_at,
                         changed_by=request.user,
                     )
+                    # Al cerrar, el resumen del día le llega al dueño por WhatsApp.
+                    from apps.whatsapp.resumenes import enviar_cierre
+
+                    transaction.on_commit(lambda: enviar_cierre(evento))
 
         return Response({
             "is_open": cfg.is_open,

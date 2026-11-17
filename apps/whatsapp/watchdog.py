@@ -253,6 +253,14 @@ def _una_vuelta():
         barrer(ahora)
     except Exception:
         logger.exception("Error en el barrido del vigía")
+    # El resumen de la semana y del mes al dueño va de último y con su propio
+    # try: no puede retrasar ni tumbar a quien está esperando respuesta.
+    try:
+        from . import resumenes
+
+        resumenes.barrer(ahora)
+    except Exception:
+        logger.exception("Error en los resúmenes al dueño")
 
 
 def _loop():

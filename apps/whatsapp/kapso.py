@@ -97,6 +97,8 @@ def _archive_body(payload):
     if kind == "image":
         caption = (payload.get("image") or {}).get("caption", "")
         return f"[Foto] {caption}".strip()
+    if kind == "template":
+        return f"[Plantilla {(payload.get('template') or {}).get('name', '')}]"
     return ""
 
 
@@ -230,6 +232,34 @@ def send_text(phone_number_id, to, body):
             )
         )
     return results[-1] if results else None
+
+
+def send_template(phone_number_id, to, name, language, params):
+    """Envía una plantilla aprobada por Meta con variables de texto en el cuerpo.
+
+    Es lo único que llega fuera de la ventana de 24 h. Las variables no
+    pueden llevar saltos de línea, tabs ni más de cuatro espacios seguidos:
+    Meta rechaza el envío entero (error 132018), así que se aplanan aquí.
+    """
+    clean = [" ".join(str(p).split()) or "-" for p in params]
+    return _post_message(
+        phone_number_id,
+        {
+            "messaging_product": "whatsapp",
+            **destination(to),
+            "type": "template",
+            "template": {
+                "name": name,
+                "language": {"code": language},
+                "components": [
+                    {
+                        "type": "body",
+                        "parameters": [{"type": "text", "text": p} for p in clean],
+                    }
+                ],
+            },
+        },
+    )
 
 
 def send_typing_indicator(phone_number_id, message_id):
