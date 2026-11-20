@@ -134,11 +134,11 @@ class BarridoTests(TestCase):
 
     @patch("apps.whatsapp.resumenes._enviar")
     def test_semana_sale_una_sola_vez_el_lunes(self, enviar):
-        resumenes.barrer(_at(2026, 11, 16, 5, 59))  # domingo sin cerrar: nada
+        resumenes.barrer(_at(2026, 11, 16, 7, 59))  # antes de las 8: nada
         self.assertEqual(enviar.call_count, 0)
 
-        resumenes.barrer(_at(2026, 11, 16, 6, 1))
-        resumenes.barrer(_at(2026, 11, 16, 6, 2))
+        resumenes.barrer(_at(2026, 11, 16, 8, 1))
+        resumenes.barrer(_at(2026, 11, 16, 8, 2))
         self.assertEqual(enviar.call_count, 1)
         self.assertTrue(
             OwnerReport.objects.filter(kind=OwnerReport.Kind.WEEK, period_start=date(2026, 11, 9)).exists()
@@ -152,13 +152,13 @@ class BarridoTests(TestCase):
 
     @patch("apps.whatsapp.resumenes._enviar")
     def test_lunes_uno_manda_semana_y_mes(self, enviar):
-        resumenes.barrer(_at(2027, 2, 1, 6, 1))  # lunes 1 de febrero
+        resumenes.barrer(_at(2027, 2, 1, 8, 1))  # lunes 1 de febrero
         self.assertEqual(enviar.call_count, 2)
 
     @override_settings(OWNER_REPORTS_ENABLED=False)
     @patch("apps.whatsapp.resumenes._enviar")
     def test_apagado_no_hace_nada(self, enviar):
-        resumenes.barrer(_at(2026, 11, 16, 6, 1))
+        resumenes.barrer(_at(2026, 11, 16, 8, 1))
         self.assertEqual(enviar.call_count, 0)
         self.assertFalse(OwnerReport.objects.exists())
 
@@ -225,3 +225,50 @@ class CierreDesdeElPanelTests(TestCase):
             with self.captureOnCommitCallbacks(execute=True):
                 self.client.patch(url, {"is_open": False}, content_type="application/json")
         self.assertEqual(enviar.call_count, 1)
+
+
+@override_settings(OWNER_REPORTS_ENABLED=True)
+class SemanaYMesAlCerrarTests(TestCase):
+    """La semana sale al cerrar el domingo y el mes al cerrar el último día."""
+
+    def _plantillas(self, enviar):
+        return [c.args[0] for c in enviar.call_args_list]
+
+    @patch("apps.whatsapp.resumenes._enviar")
+    def test_cierre_entre_semana_solo_manda_el_dia(self, enviar):
+        resumenes.resumenes_del_cierre(_at(2026, 11, 21, 23))  # sábado
+        self.assertEqual(self._plantillas(enviar), ["reporte_cierre_dia"])
+        self.assertFalse(OwnerReport.objects.exists())
+
+    @patch("apps.whatsapp.resumenes._enviar")
+    def test_cierre_del_domingo_manda_dia_y_semana(self, enviar):
+        resumenes.resumenes_del_cierre(_at(2026, 11, 23, 1, 30))  # jornada del domingo 22
+        self.assertEqual(self._plantillas(enviar), ["reporte_cierre_dia", "resumen_periodo"])
+        self.assertEqual(enviar.call_args_list[1].args[2][0], "la semana del 16 al 22 de noviembre")
+
+        # El respaldo de las 8 a. m. del lunes ya no la repite.
+        resumenes.barrer(_at(2026, 11, 23, 8, 1))
+        self.assertEqual(enviar.call_count, 2)
+
+    @patch("apps.whatsapp.resumenes._enviar")
+    def test_cierre_del_ultimo_dia_del_mes_manda_dia_y_mes(self, enviar):
+        resumenes.resumenes_del_cierre(_at(2026, 11, 30, 23))  # lunes 30
+        self.assertEqual(self._plantillas(enviar), ["reporte_cierre_dia", "resumen_periodo"])
+        self.assertEqual(enviar.call_args_list[1].args[2][0], "noviembre 2026")
+        resumenes.barrer(_at(2026, 12, 1, 8, 1))
+        self.assertEqual(enviar.call_count, 2)
+
+    @patch("apps.whatsapp.resumenes._enviar")
+    def test_domingo_fin_de_mes_manda_los_tres(self, enviar):
+        resumenes.resumenes_del_cierre(_at(2027, 1, 31, 23))  # domingo 31 de enero
+        self.assertEqual(
+            self._plantillas(enviar),
+            ["reporte_cierre_dia", "resumen_periodo", "resumen_periodo"],
+        )
+
+    @patch("apps.whatsapp.resumenes._enviar")
+    def test_cerrar_dos_veces_el_domingo_reenvia_con_cifras_al_dia(self, enviar):
+        resumenes.resumenes_del_cierre(_at(2026, 11, 22, 18))
+        resumenes.resumenes_del_cierre(_at(2026, 11, 22, 23))
+        self.assertEqual(enviar.call_count, 4)
+        self.assertEqual(OwnerReport.objects.count(), 1)

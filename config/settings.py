@@ -472,7 +472,8 @@ WHATSAPP_BATCH_MAX_WAIT_SECONDS = float(
     os.getenv('WHATSAPP_BATCH_MAX_WAIT_SECONDS', '40')
 )
 # Resúmenes de ventas al dueño (apps/whatsapp/resumenes.py): al cerrar el
-# local, cada lunes y cada día 1. Salen como plantillas aprobadas por Meta
+# local (la semana al cerrar el domingo, el mes al cerrar el último día; si no se
+# cierra, el vigía los manda a las 8 a. m.). Salen como plantillas de Meta
 # (con respaldo en texto libre). Apagado por defecto: en local el .env tiene
 # las credenciales buenas de Kapso y cada cierre de prueba le llegaría al dueño.
 OWNER_REPORTS_ENABLED = os.getenv('OWNER_REPORTS_ENABLED', 'False').lower() == 'true'
