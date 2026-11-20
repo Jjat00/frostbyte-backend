@@ -471,6 +471,14 @@ WHATSAPP_BATCH_WAIT_SECONDS = float(os.getenv('WHATSAPP_BATCH_WAIT_SECONDS', '10
 WHATSAPP_BATCH_MAX_WAIT_SECONDS = float(
     os.getenv('WHATSAPP_BATCH_MAX_WAIT_SECONDS', '40')
 )
+# Resúmenes de ventas al dueño (apps/whatsapp/resumenes.py): al cerrar el
+# local, cada lunes y cada día 1. Salen como plantillas aprobadas por Meta
+# (con respaldo en texto libre). Apagado por defecto: en local el .env tiene
+# las credenciales buenas de Kapso y cada cierre de prueba le llegaría al dueño.
+OWNER_REPORTS_ENABLED = os.getenv('OWNER_REPORTS_ENABLED', 'False').lower() == 'true'
+WHATSAPP_REPORT_TEMPLATE_DAY = os.getenv('WHATSAPP_REPORT_TEMPLATE_DAY', 'reporte_cierre_dia')
+WHATSAPP_REPORT_TEMPLATE_PERIOD = os.getenv('WHATSAPP_REPORT_TEMPLATE_PERIOD', 'resumen_periodo')
+WHATSAPP_REPORT_TEMPLATE_LANGUAGE = os.getenv('WHATSAPP_REPORT_TEMPLATE_LANGUAGE', 'es')
 # Vigía de clientes sin respuesta (apps/whatsapp/watchdog.py). Barre cada
 # minuto buscando a quien escribió y sigue esperando, y deja que el agente
 # retome la conversación. La espera mínima tiene que ser mayor que el
