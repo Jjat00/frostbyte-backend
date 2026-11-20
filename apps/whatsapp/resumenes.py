@@ -1,18 +1,20 @@
 """Resúmenes de ventas que le llegan al dueño por WhatsApp.
 
-Tres momentos:
+Tres resúmenes, los tres al cerrar el local desde el panel (orders.views,
+al crear el StoreStatusEvent de cierre):
 
-- **Cierre del día**: cuando el staff cierra el local desde el panel
-  (orders.views, al crear el StoreStatusEvent de cierre). Cubre la jornada
-  de 6:00 a. m. a 6:00 a. m., la misma de la gráfica de horario, así que lo
-  vendido pasada la medianoche cuenta en la noche que empezó el día anterior.
-- **Semana** (lunes a domingo) y **mes**: los manda el vigía de WhatsApp
-  (watchdog._una_vuelta) en cuanto termina la jornada del domingo o la del
-  último día del mes, a las 6:00 a. m. Cada envío deja una fila en
-  OwnerReport con restricción única: un reinicio del proceso no lo repite.
-  Si el backend estuvo caído más de un día después de ese momento, el
-  resumen se salta: un resumen de la semana pasada que llega el jueves ya
-  no sirve.
+- **Día**: siempre. Cubre la jornada de 6:00 a. m. a 6:00 a. m., la misma
+  de la gráfica de horario, así que lo vendido pasada la medianoche cuenta
+  en la noche que empezó el día anterior.
+- **Semana** (lunes a domingo): al cerrar la jornada del domingo.
+- **Mes**: al cerrar la jornada del último día del mes.
+
+Respaldo: si el domingo o el último día no se cerró desde el panel, el vigía
+de WhatsApp (watchdog._una_vuelta) manda la semana o el mes desde las 8:00
+del día siguiente. OwnerReport marca lo ya enviado (restricción única), así
+que el respaldo no repite lo que salió al cerrar ni un reinicio lo duplica.
+Pasado un día, el respaldo ya no lo manda: un resumen de la semana pasada
+que llega el jueves no sirve.
 
 El dueño no siempre tiene abierta la ventana de 24 h de WhatsApp, así que el
 mensaje sale como PLANTILLA aprobada por Meta (WHATSAPP_REPORT_TEMPLATE_DAY y
@@ -50,7 +52,8 @@ from .models import AgentSettings, OwnerReport
 logger = logging.getLogger(__name__)
 
 DAY_START_HOUR = 6  # la jornada va de 6:00 a. m. a 6:00 a. m. (analytics/schedule.py)
-LATE_LIMIT = timedelta(days=1)  # pasado esto, el resumen de semana o mes ya no sale
+BACKUP_HOUR = 8  # el respaldo de semana o mes sale desde las 8 a. m. (a las 6 el dueño duerme)
+LATE_LIMIT = timedelta(days=1)  # pasado esto, el respaldo ya no sale
 
 DIAS = ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo")
 MESES = (
@@ -306,15 +309,52 @@ def _enviar(plantilla, texto_plantilla, params):
     return algun_ok
 
 
+def _enviar_semana(lunes, domingo):
+    params = resumen_periodo(
+        lunes, domingo, etiqueta_semana(lunes, domingo),
+        lunes - timedelta(days=7), "la semana anterior",
+    )
+    _enviar(settings.WHATSAPP_REPORT_TEMPLATE_PERIOD, TEMPLATE_PERIOD_TEXT, params)
+
+
+def _enviar_mes(primero, ultimo):
+    params = resumen_periodo(
+        primero, ultimo, etiqueta_mes(primero),
+        primero - relativedelta(months=1), "el mes anterior",
+    )
+    _enviar(settings.WHATSAPP_REPORT_TEMPLATE_PERIOD, TEMPLATE_PERIOD_TEXT, params)
+
+
+def resumenes_del_cierre(cierre):
+    """Lo que toca mandar al cerrar: el día y, si toca, la semana y el mes.
+
+    Va en orden: primero el día, después la semana (si la jornada es domingo)
+    y por último el mes (si es la del último día del mes). La semana y el mes
+    dejan su fila en OwnerReport para que el respaldo de las 8 a. m. no los
+    repita; si se vuelve a cerrar esa misma noche, salen otra vez con las
+    cifras al día, igual que el resumen del día.
+    """
+    _enviar(settings.WHATSAPP_REPORT_TEMPLATE_DAY, TEMPLATE_DAY_TEXT, resumen_dia(cierre))
+
+    fecha = jornada_de(cierre)
+    if fecha.weekday() == 6:
+        lunes = fecha - timedelta(days=6)
+        OwnerReport.objects.get_or_create(kind=OwnerReport.Kind.WEEK, period_start=lunes)
+        _enviar_semana(lunes, fecha)
+    if (fecha + timedelta(days=1)).day == 1:
+        primero = fecha.replace(day=1)
+        OwnerReport.objects.get_or_create(kind=OwnerReport.Kind.MONTH, period_start=primero)
+        _enviar_mes(primero, fecha)
+
+
 def enviar_cierre(evento):
-    """Resumen del día al cerrar el local. Corre en un hilo: no frena el panel."""
+    """Resúmenes al cerrar el local. Corre en un hilo: no frena el panel."""
     if not settings.OWNER_REPORTS_ENABLED or evento.is_open:
         return
 
     def _send():
         try:
-            params = resumen_dia(evento.created_at)
-            _enviar(settings.WHATSAPP_REPORT_TEMPLATE_DAY, TEMPLATE_DAY_TEXT, params)
+            resumenes_del_cierre(evento.created_at)
         except Exception:
             logger.exception("No se pudo enviar el resumen del cierre")
         finally:
@@ -333,18 +373,22 @@ def _reclamar(tipo, desde):
 
 
 def _toca(tipo, desde, hasta, ahora):
-    """Ya cerró el periodo, no pasó más de un día y no se ha enviado."""
-    cerro = _inicio_jornada(hasta + timedelta(days=1))
-    if not (cerro <= ahora < cerro + LATE_LIMIT):
+    """Son más de las 8 a. m. del día siguiente, no pasó un día más y no se ha enviado."""
+    desde_las = timezone.make_aware(
+        datetime.combine(hasta + timedelta(days=1), time(BACKUP_HOUR))
+    )
+    if not (desde_las <= ahora < desde_las + LATE_LIMIT):
         return False
     return not OwnerReport.objects.filter(kind=tipo, period_start=desde).exists()
 
 
 def barrer(ahora=None):
-    """Manda el resumen de la semana y del mes si acaban de terminar.
+    """Respaldo: la semana o el mes que no salieron al cerrar.
 
-    La llama el vigía cada minuto; casi siempre son dos consultas que dicen
-    que no hay nada que hacer.
+    Lo normal es que salgan con el cierre del domingo o del último día del
+    mes. Si esa noche no se cerró desde el panel (o el local no abrió), el
+    vigía los manda desde las 8:00 del día siguiente. Lo llama cada minuto;
+    casi siempre son dos consultas que dicen que no hay nada que hacer.
     """
     if not settings.OWNER_REPORTS_ENABLED:
         return
@@ -352,16 +396,8 @@ def barrer(ahora=None):
 
     lunes, domingo = semana_terminada(ahora)
     if _toca(OwnerReport.Kind.WEEK, lunes, domingo, ahora) and _reclamar(OwnerReport.Kind.WEEK, lunes):
-        params = resumen_periodo(
-            lunes, domingo, etiqueta_semana(lunes, domingo),
-            lunes - timedelta(days=7), "la semana anterior",
-        )
-        _enviar(settings.WHATSAPP_REPORT_TEMPLATE_PERIOD, TEMPLATE_PERIOD_TEXT, params)
+        _enviar_semana(lunes, domingo)
 
     primero, ultimo = mes_terminado(ahora)
     if _toca(OwnerReport.Kind.MONTH, primero, ultimo, ahora) and _reclamar(OwnerReport.Kind.MONTH, primero):
-        params = resumen_periodo(
-            primero, ultimo, etiqueta_mes(primero),
-            primero - relativedelta(months=1), "el mes anterior",
-        )
-        _enviar(settings.WHATSAPP_REPORT_TEMPLATE_PERIOD, TEMPLATE_PERIOD_TEXT, params)
+        _enviar_mes(primero, ultimo)
