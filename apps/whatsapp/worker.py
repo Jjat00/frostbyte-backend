@@ -28,6 +28,7 @@ from django.utils import timezone
 from . import kapso
 from . import media as wa_media
 from . import missing
+from . import rechazos
 from . import stickers
 from .models import (
     AgentSettings,
@@ -900,6 +901,15 @@ def _handle_outbound(event, outbounds):
 
 def _process_event(event):
     allowed = settings.KAPSO_PHONE_NUMBER_IDS
+
+    # Lo que Meta rechazó después de aceptarlo Kapso: se anota y, si iba para
+    # el dueño, se reintenta por la otra vía. El evento sigue su camino normal.
+    failures = [
+        f for f in rechazos.extract_failures(_iter_entries(event.payload))
+        if not allowed or not f["phone_number_id"] or f["phone_number_id"] in allowed
+    ]
+    if failures:
+        rechazos.handle_failures(failures)
 
     outbounds = extract_outbound_messages(event.payload)
     if allowed:

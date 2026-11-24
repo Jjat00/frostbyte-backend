@@ -490,7 +490,9 @@ def _avisar_escalada(contact, motivo):
     el aviso sale por el mismo WhatsApp que el equipo ya tiene abierto.
 
     Es best-effort: si el aviso falla, la pausa ya quedó puesta y el turno del
-    cliente no se cae por eso.
+    cliente no se cae por eso. Sale como texto libre, que Meta rechaza si el
+    dueño no ha escrito en 24 h; ese rechazo lo reenvía rechazos.py como
+    plantilla.
     """
     try:
         config = AgentSettings.load()

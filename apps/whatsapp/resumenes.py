@@ -20,7 +20,8 @@ El dueño no siempre tiene abierta la ventana de 24 h de WhatsApp, así que el
 mensaje sale como PLANTILLA aprobada por Meta (WHATSAPP_REPORT_TEMPLATE_DAY y
 ..._PERIOD). Si la plantilla falla (no existe todavía, la rechazaron) se
 intenta el mismo texto como mensaje libre, que llega si la ventana está
-abierta. Las variables de una plantilla no aceptan saltos de línea: por eso
+abierta. Eso cubre el rechazo inmediato de Kapso; el que Meta manda después
+por webhook (facturación, por ejemplo) lo reintenta rechazos.py igual. Las variables de una plantilla no aceptan saltos de línea: por eso
 la estructura vive en la plantilla y aquí solo se arman las cifras.
 
 Las cifras salen de las mismas funciones del panel de analítica

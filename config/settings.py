@@ -480,6 +480,9 @@ OWNER_REPORTS_ENABLED = os.getenv('OWNER_REPORTS_ENABLED', 'False').lower() == '
 WHATSAPP_REPORT_TEMPLATE_DAY = os.getenv('WHATSAPP_REPORT_TEMPLATE_DAY', 'reporte_cierre_dia')
 WHATSAPP_REPORT_TEMPLATE_PERIOD = os.getenv('WHATSAPP_REPORT_TEMPLATE_PERIOD', 'resumen_periodo')
 WHATSAPP_REPORT_TEMPLATE_LANGUAGE = os.getenv('WHATSAPP_REPORT_TEMPLATE_LANGUAGE', 'es')
+# Plantilla de una variable con la que sale un aviso al dueño que Meta rechazó
+# por la ventana de 24 h cerrada (apps/whatsapp/rechazos.py).
+WHATSAPP_OWNER_ALERT_TEMPLATE = os.getenv('WHATSAPP_OWNER_ALERT_TEMPLATE', 'aviso_dueno')
 # Vigía de clientes sin respuesta (apps/whatsapp/watchdog.py). Barre cada
 # minuto buscando a quien escribió y sigue esperando, y deja que el agente
 # retome la conversación. La espera mínima tiene que ser mayor que el

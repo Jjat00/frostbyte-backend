@@ -240,6 +240,16 @@ class SentMessage(models.Model):
     wamid = models.CharField(max_length=128, unique=True, verbose_name="ID de mensaje")
     to_phone = models.CharField(max_length=160, blank=True, verbose_name="Destinatario")
     created_at = models.DateTimeField(auto_now_add=True, db_index=True, verbose_name="Enviado")
+    # Meta puede rechazar un mensaje después de que Kapso lo aceptó (ver
+    # rechazos.py): el rechazo llega por webhook y queda anotado aquí.
+    failed_at = models.DateTimeField(null=True, blank=True, verbose_name="Rechazado")
+    error_code = models.IntegerField(null=True, blank=True, verbose_name="Código de error")
+    error_detail = models.CharField(max_length=300, blank=True, verbose_name="Detalle del error")
+    is_fallback = models.BooleanField(
+        default=False,
+        verbose_name="Reenvío",
+        help_text="Segundo intento por otra vía de un mensaje rechazado; si falla, no hay tercero.",
+    )
 
     class Meta:
         verbose_name = "Mensaje enviado por el sistema"
@@ -781,7 +791,8 @@ class OwnerReport(models.Model):
 
     Existe para no repetirlo: el vigía revisa cada minuto si toca, y un
     reinicio del proceso justo después de enviar no puede mandarlo otra vez.
-    La fila se crea ANTES de enviar; si el envío falla no se reintenta.
+    La fila se crea ANTES de enviar; si el envío falla, el barrido no lo
+    repite: el único segundo intento es el de rechazos.py (en texto libre).
     """
 
     class Kind(models.TextChoices):

@@ -101,7 +101,8 @@ class WhatsAppContactAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
 
 @admin.register(SentMessage)
 class SentMessageAdmin(PlainSearchAdminMixin, admin.ModelAdmin):
-    list_display = ("created_at", "to_phone", "wamid")
+    list_display = ("created_at", "to_phone", "wamid", "failed_at", "error_code", "is_fallback")
+    list_filter = (("failed_at", admin.EmptyFieldListFilter), "is_fallback")
     search_fields = ("to_phone", "wamid")
     readonly_fields = [f.name for f in SentMessage._meta.fields]
 

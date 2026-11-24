@@ -46,7 +46,7 @@ def _recipient_of(payload):
     return payload.get("to") or payload.get("recipient") or ""
 
 
-def _record_sent(data, to_phone, body=""):
+def _record_sent(data, to_phone, body="", fallback=False):
     """Guarda el wamid de un mensaje enviado por el sistema.
 
     Los eventos whatsapp.message.sent cuyo id no esté registrado se tratan
@@ -59,8 +59,11 @@ def _record_sent(data, to_phone, body=""):
         if wamid:
             from .models import ChatMessage, SentMessage
 
+            # is_fallback va en la misma escritura: si se marcara después,
+            # el rechazo del reenvío podría llegar antes y provocar otro.
             SentMessage.objects.get_or_create(
-                wamid=wamid[:128], defaults={"to_phone": str(to_phone or "")[:30]}
+                wamid=wamid[:128],
+                defaults={"to_phone": str(to_phone or "")[:30], "is_fallback": fallback},
             )
             ChatMessage.remember(
                 wamid,
@@ -154,7 +157,7 @@ def recent_undelivered(phone, within_minutes=UNDELIVERED_LOOKBACK_MINUTES, limit
     return sorted(stamps, reverse=True)
 
 
-def _post_message(phone_number_id, payload):
+def _post_message(phone_number_id, payload, fallback=False):
     """Envía un payload a la API de mensajes con reintentos ante 429/5xx."""
     if getattr(settings, "TESTING", False):
         # Un test que cambia el estado de un pedido dispara la notificación de
@@ -179,7 +182,7 @@ def _post_message(phone_number_id, payload):
             if response.status_code < 300:
                 data = response.json()
                 if _recipient_of(payload):
-                    _record_sent(data, _recipient_of(payload), _archive_body(payload))
+                    _record_sent(data, _recipient_of(payload), _archive_body(payload), fallback)
                 return data
             last_error = f"HTTP {response.status_code}: {response.text[:300]}"
             # Solo reintenta errores transitorios
@@ -213,10 +216,11 @@ def _split_text(body):
     return parts
 
 
-def send_text(phone_number_id, to, body):
+def send_text(phone_number_id, to, body, fallback=False):
     """Envía un mensaje de texto (dividido si supera el límite de WhatsApp).
 
-    `to` es el teléfono del cliente o su BSUID (ver destination).
+    `to` es el teléfono del cliente o su BSUID (ver destination). `fallback`
+    marca el envío como reenvío de un mensaje rechazado (ver rechazos.py).
     """
     results = []
     for part in _split_text(body):
@@ -229,12 +233,13 @@ def send_text(phone_number_id, to, body):
                     "type": "text",
                     "text": {"body": part},
                 },
+                fallback,
             )
         )
     return results[-1] if results else None
 
 
-def send_template(phone_number_id, to, name, language, params):
+def send_template(phone_number_id, to, name, language, params, fallback=False):
     """Envía una plantilla aprobada por Meta con variables de texto en el cuerpo.
 
     Es lo único que llega fuera de la ventana de 24 h. Las variables no
@@ -259,6 +264,7 @@ def send_template(phone_number_id, to, name, language, params):
                 ],
             },
         },
+        fallback,
     )
 
 
